@@ -21,6 +21,8 @@ Core behavior:
   - Validates to-do.json (jsonschema if available; jq fallback).
   - Repairs to-do.json via Codex if schema validation fails.
   - Runs Codex exec in a loop, one task per iteration.
+  - Runs a final review pass when all tasks are done, which may add new tasks
+    or append a review-complete marker.
   - Stores a source_files list in to-do.json for ground-truth project docs.
   - Expects the final response to be JSON and logs it for hooks/automation.
   - Stores one JSONL log per invocation in ~/.looper/<project>-<hash>/ by default.
@@ -433,6 +435,14 @@ has_open_tasks() {
     jq -e '.tasks[]? | select(.status != "done")' "$TODO_FILE" >/dev/null 2>&1
 }
 
+last_task_is_review_complete() {
+    jq -e '
+        (.tasks | length) > 0
+        and (.[-1].status == "done")
+        and ((.[-1].tags // []) | index("review-complete"))
+    ' "$TODO_FILE" >/dev/null 2>&1
+}
+
 list_tasks_by_status() {
     local status="$1"
     jq --arg status "$status" '.tasks[] | select(.status == $status)' "$TODO_FILE"
@@ -776,7 +786,49 @@ apply_summary_to_todo() {
             else
               .
             end
-        )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
+       )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
+}
+
+run_review_pass() {
+    local iteration="${1:-0}"
+
+    run_codex "review-$iteration" 0 "$iteration" <<EOF
+You are running a final review pass after all tasks are complete.
+
+Goal: review the codebase file-by-file as a senior developer reviewing a junior's work,
+then update "$TODO_FILE" if new tasks are needed.
+
+Rules:
+- Read "$TODO_FILE" and follow the schema in "$SCHEMA_FILE".
+- Read every file listed in source_files.
+- Review the repo file-by-file, focusing on tracked, non-generated files.
+  Skip .git, node_modules, dist, build, .venv, __pycache__, and other generated dirs.
+- Do not modify code or other files. Only update "$TODO_FILE".
+- If you find new tasks, append them to .tasks with status "todo" and priority (1 highest).
+- Follow the existing id style and ensure ids are unique.
+- Avoid duplicates by intent/title.
+- If you add tasks, do NOT add the review-complete marker.
+- If no new tasks are needed, append a final task as the last item in .tasks:
+  - id: a unique id (use "REVIEW-COMPLETE" if available)
+  - title: "Final review: no new tasks"
+  - status: "done"
+  - priority: 5
+  - tags: ["review-complete"]
+  - details: brief note that the review found nothing to add
+- Keep JSON formatted with 2-space indentation.
+- Use jq for edits when practical.
+- Do not ask for confirmation.
+
+Return only a JSON object:
+{"status":"reviewed","summary":"...","added_tasks":0,"files":["..."]}
+EOF
+
+    local exit_status=$?
+    if [ "$exit_status" -ne 0 ]; then
+        echo "Review failed with exit code $exit_status."
+    fi
+
+    handle_last_message "review-$iteration"
 }
 
 ensure_git_repo() {
@@ -966,8 +1018,25 @@ main() {
         ensure_valid_todo
 
         if ! has_open_tasks; then
-            echo "No open tasks remain. Exiting."
-            break
+            if last_task_is_review_complete; then
+                echo "No open tasks remain and final review is complete. Exiting."
+                break
+            fi
+
+            echo "No open tasks remain. Running final review..."
+            run_review_pass "$iteration"
+            ensure_valid_todo
+
+            if ! has_open_tasks; then
+                if last_task_is_review_complete; then
+                    echo "Final review complete. Exiting."
+                else
+                    echo "No open tasks remain after review. Exiting."
+                fi
+                break
+            fi
+
+            continue
         fi
 
         echo "Iteration $iteration/$MAX_ITERATIONS"
