@@ -22,7 +22,7 @@ Core behavior:
   - Repairs to-do.json via Codex if schema validation fails.
   - Runs Codex exec in a loop, one task per iteration.
   - Runs a final review pass when all tasks are done, which may add new tasks
-    or append a review-complete marker.
+    or append a project-done marker.
   - Stores a source_files list in to-do.json for ground-truth project docs.
   - Expects the final response to be JSON and logs it for hooks/automation.
   - Stores one JSONL log per invocation in ~/.looper/<project>-<hash>/ by default.
@@ -435,11 +435,11 @@ has_open_tasks() {
     jq -e '.tasks[]? | select(.status != "done")' "$TODO_FILE" >/dev/null 2>&1
 }
 
-last_task_is_review_complete() {
+last_task_is_project_done() {
     jq -e '
         (.tasks | length) > 0
-        and (.[-1].status == "done")
-        and ((.[-1].tags // []) | index("review-complete"))
+        and (.tasks[-1].status == "done")
+        and ((.tasks[-1].tags // []) | index("project-done"))
     ' "$TODO_FILE" >/dev/null 2>&1
 }
 
@@ -789,6 +789,29 @@ apply_summary_to_todo() {
        )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
 }
 
+append_project_done_marker() {
+    local now tmp next_id
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    tmp=$(mktemp)
+    next_id="PROJECT-DONE"
+
+    if jq -e --arg id "$next_id" '.tasks[]? | select(.id == $id)' "$TODO_FILE" >/dev/null 2>&1; then
+        next_id="PROJECT-DONE-$now"
+    fi
+
+    jq --arg id "$next_id" \
+       --arg now "$now" \
+       '.tasks += [{
+            id: $id,
+            title: "Project done: no new tasks",
+            status: "done",
+            priority: 5,
+            tags: ["project-done"],
+            details: "Final review completed; no new tasks identified.",
+            updated_at: $now
+        }]' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
+}
+
 run_review_pass() {
     local iteration="${1:-0}"
 
@@ -807,13 +830,13 @@ Rules:
 - If you find new tasks, append them to .tasks with status "todo" and priority (1 highest).
 - Follow the existing id style and ensure ids are unique.
 - Avoid duplicates by intent/title.
-- If you add tasks, do NOT add the review-complete marker.
+- If you add tasks, do NOT add the project-done marker.
 - If no new tasks are needed, append a final task as the last item in .tasks:
-  - id: a unique id (use "REVIEW-COMPLETE" if available)
-  - title: "Final review: no new tasks"
+  - id: a unique id (use "PROJECT-DONE" if available)
+  - title: "Project done: no new tasks"
   - status: "done"
   - priority: 5
-  - tags: ["review-complete"]
+  - tags: ["project-done"]
   - details: brief note that the review found nothing to add
 - Keep JSON formatted with 2-space indentation.
 - Use jq for edits when practical.
@@ -1018,8 +1041,8 @@ main() {
         ensure_valid_todo
 
         if ! has_open_tasks; then
-            if last_task_is_review_complete; then
-                echo "No open tasks remain and final review is complete. Exiting."
+            if last_task_is_project_done; then
+                echo "No open tasks remain and project is marked done. Exiting."
                 break
             fi
 
@@ -1028,10 +1051,11 @@ main() {
             ensure_valid_todo
 
             if ! has_open_tasks; then
-                if last_task_is_review_complete; then
-                    echo "Final review complete. Exiting."
+                if last_task_is_project_done; then
+                    echo "Final review complete; project marked done. Exiting."
                 else
-                    echo "No open tasks remain after review. Exiting."
+                    echo "No open tasks remain after review; adding project-done marker."
+                    append_project_done_marker
                 fi
                 break
             fi
