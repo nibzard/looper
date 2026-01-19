@@ -1,11 +1,10 @@
 class Looper < Formula
   desc "Codex RALF loop runner and skills pack"
-  homepage "https://github.com/niko/looper"
-  # Update url + sha256 after publishing a release tarball.
-  url "https://github.com/niko/looper/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "REPLACE_WITH_SHA256"
+  homepage "https://github.com/nibzard/looper"
+  url "https://github.com/nibzard/looper/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "7d05bb624c7c6156f432f303878759098174db277fbbb16f84a707020e5fb58f"
 
-  head "https://github.com/niko/looper.git", branch: "main"
+  head "https://github.com/nibzard/looper.git", branch: "main"
 
   def install
     bin.install "bin/looper.sh"
