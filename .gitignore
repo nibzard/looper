@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.venv/
+.venv*/
+.env
+.env.*
+
+# Pentest toolkit outputs
+discovered_endpoints.json
+sql_injection_results.json
+xss_results.json
+port_scan_results.json
+security_report.md
+security_report.json
+
+# Looper runtime artifacts (if run inside this repo)
+to-do.json
+to-do.schema.json
+*.jsonl
+
+# OS
+.DS_Store
