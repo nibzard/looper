@@ -22,7 +22,7 @@ Core behavior:
   - Repairs to-do.json via Codex if schema validation fails.
   - Runs Codex exec in a loop, one task per iteration.
   - Runs a final review pass when all tasks are done, which may add new tasks
-    or append a project-done marker.
+    or append a project-done marker (set only by the review pass).
   - Stores a source_files list in to-do.json for ground-truth project docs.
   - Expects the final response to be JSON and logs it for hooks/automation.
   - Stores one JSONL log per invocation in ~/.looper/<project>-<hash>/ by default.
@@ -789,29 +789,6 @@ apply_summary_to_todo() {
        )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
 }
 
-append_project_done_marker() {
-    local now tmp next_id
-    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    tmp=$(mktemp)
-    next_id="PROJECT-DONE"
-
-    if jq -e --arg id "$next_id" '.tasks[]? | select(.id == $id)' "$TODO_FILE" >/dev/null 2>&1; then
-        next_id="PROJECT-DONE-$now"
-    fi
-
-    jq --arg id "$next_id" \
-       --arg now "$now" \
-       '.tasks += [{
-            id: $id,
-            title: "Project done: no new tasks",
-            status: "done",
-            priority: 5,
-            tags: ["project-done"],
-            details: "Final review completed; no new tasks identified.",
-            updated_at: $now
-        }]' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
-}
-
 run_review_pass() {
     local iteration="${1:-0}"
 
@@ -841,6 +818,8 @@ Rules:
 - Keep JSON formatted with 2-space indentation.
 - Use jq for edits when practical.
 - Do not ask for confirmation.
+- If you conclude no new tasks are needed, you MUST add the project-done marker.
+  Looper will keep running otherwise.
 
 Return only a JSON object:
 {"status":"reviewed","summary":"...","added_tasks":0,"files":["..."]}
@@ -1053,11 +1032,12 @@ main() {
             if ! has_open_tasks; then
                 if last_task_is_project_done; then
                     echo "Final review complete; project marked done. Exiting."
+                    break
                 else
-                    echo "No open tasks remain after review; adding project-done marker."
-                    append_project_done_marker
+                    echo "No open tasks remain after review and no project-done marker was added."
+                    echo "Re-running review until a project-done marker is appended or max iterations is reached."
                 fi
-                break
+                continue
             fi
 
             continue

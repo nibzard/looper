@@ -18,6 +18,8 @@ against `to-do.schema.json`, and repairs it if needed.
 - Validates `to-do.json` (jsonschema if available, jq fallback).
 - Repairs invalid task files via Codex.
 - Runs one task per iteration (doing > todo > blocked).
+- When tasks are exhausted, runs a review pass; it must append a final
+  `project-done` marker task if no new work is found.
 - Enforces JSON output from the model and logs JSONL per run.
 - Optionally applies model summaries back into `to-do.json`.
 
