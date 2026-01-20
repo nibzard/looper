@@ -52,6 +52,7 @@ looper-install --skip-bin
 looper.sh [to-do.json]
 looper.sh --ls todo [to-do.json]
 looper.sh --tail --follow
+looper.sh --doctor [to-do.json]
 looper.sh --interleave
 looper.sh --iter-schedule odd-even
 looper.sh --iter-schedule round-robin --rr-agents claude,codex
@@ -196,6 +197,7 @@ They are installed into `~/.codex/skills` by default.
 ```bash
 make install
 make uninstall
+make smoke
 ```
 
 Everything is in `bin/looper.sh`; read its docstring for the full behavior spec.
