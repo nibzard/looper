@@ -1,8 +1,8 @@
 class Looper < Formula
   desc "Codex RALF loop runner and skills pack"
   homepage "https://github.com/nibzard/looper"
-  url "https://github.com/nibzard/looper/archive/refs/tags/v0.3.0.tar.gz"
-  sha256 "7df793b5946eaf796fadcca49fcd1e1fbe8ae87117c108b7fe69611aeeb37ff5"
+  url "https://github.com/nibzard/looper/archive/refs/tags/v0.3.1.tar.gz"
+  sha256 "2a231214bf5e39f2f62975ceace0d7e045ac05bf4cec54bcf861992984cb06e3"
 
   head "https://github.com/nibzard/looper.git", branch: "main"
 
