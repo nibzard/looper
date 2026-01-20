@@ -19,8 +19,8 @@ Core behavior:
   - Creates to-do.schema.json if missing.
   - Creates to-do.json (via Codex) if missing.
   - Validates to-do.json (jsonschema if available; jq fallback).
-  - Repairs to-do.json via Codex or Cloud if schema validation fails.
-  - Runs Codex or Cloud exec in a loop, one task per iteration.
+  - Repairs to-do.json via Codex or claude if schema validation fails.
+  - Runs Codex or claude exec in a loop, one task per iteration.
   - Runs a final review pass when all tasks are done, which may add new tasks
     or append a project-done marker (set only by the review pass).
   - Stores a source_files list in to-do.json for ground-truth project docs.
@@ -42,13 +42,13 @@ Environment variables:
   CODEX_JSON_LOG           Enable JSONL logging (default: 1)
   CODEX_PROGRESS           Print compact progress (default: 1)
   CODEX_ENFORCE_OUTPUT_SCHEMA  Validate final summary via JSON Schema (default: 0)
-  CLOUD_BIN                Cloud CLI binary (default: claude)
-  CLOUD_MODEL              Cloud model (default: empty)
-  LOOPER_ITER_SCHEDULE     Iteration schedule (codex|cloud|odd-even|round-robin)
+  CLAUDE_BIN                claude CLI binary (default: claude)
+  CLAUDE_MODEL              claude model (default: empty)
+  LOOPER_ITER_SCHEDULE     Iteration schedule (codex|claude|odd-even|round-robin)
   LOOPER_ITER_ODD_AGENT    Odd-iteration agent (default: codex)
-  LOOPER_ITER_EVEN_AGENT   Even-iteration agent (default: cloud)
-  LOOPER_ITER_RR_AGENTS    Round-robin agents list (default: cloud,codex)
-  LOOPER_REPAIR_AGENT      Repair agent (codex|cloud; default: codex)
+  LOOPER_ITER_EVEN_AGENT   Even-iteration agent (default: claude)
+  LOOPER_ITER_RR_AGENTS    Round-robin agents list (default: claude,codex)
+  LOOPER_REPAIR_AGENT      Repair agent (codex|claude; default: codex)
   LOOPER_INTERLEAVE        Enable interleave defaults (default: 0)
   LOOPER_BASE_DIR          Base log dir (default: ~/.looper)
   LOOPER_APPLY_SUMMARY     Deterministically apply summary to to-do.json (default: 1)
@@ -74,8 +74,8 @@ SCHEMA_FILE="${TODO_FILE%.json}.schema.json"
 CODEX_BIN=${CODEX_BIN:-codex}
 CODEX_MODEL=${CODEX_MODEL:-gpt-5.2-codex}
 CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-xhigh}
-CLOUD_BIN=${CLOUD_BIN:-claude}
-CLOUD_MODEL=${CLOUD_MODEL:-}
+CLAUDE_BIN=${CLAUDE_BIN:-claude}
+CLAUDE_MODEL=${CLAUDE_MODEL:-}
 LOOP_DELAY_SECONDS=${LOOP_DELAY_SECONDS:-0}
 WORKDIR=$(pwd)
 LOOPER_BASE_DIR=${LOOPER_BASE_DIR:-${LOOPER_LOG_DIR:-"$HOME/.looper"}}
@@ -89,8 +89,8 @@ CODEX_YOLO=${CODEX_YOLO:-1}
 CODEX_FULL_AUTO=${CODEX_FULL_AUTO:-0}
 LOOPER_ITER_SCHEDULE=${LOOPER_ITER_SCHEDULE:-codex}
 LOOPER_ITER_ODD_AGENT=${LOOPER_ITER_ODD_AGENT:-codex}
-LOOPER_ITER_EVEN_AGENT=${LOOPER_ITER_EVEN_AGENT:-cloud}
-LOOPER_ITER_RR_AGENTS=${LOOPER_ITER_RR_AGENTS:-cloud,codex}
+LOOPER_ITER_EVEN_AGENT=${LOOPER_ITER_EVEN_AGENT:-claude}
+LOOPER_ITER_RR_AGENTS=${LOOPER_ITER_RR_AGENTS:-claude,codex}
 LOOPER_REPAIR_AGENT=${LOOPER_REPAIR_AGENT:-codex}
 LOOPER_INTERLEAVE=${LOOPER_INTERLEAVE:-0}
 ITER_SCHEDULE_SET=0
@@ -106,13 +106,13 @@ usage() {
     echo "Usage: looper.sh [--interleave] [--iter-schedule <schedule>] [to-do.json]"
     echo "       looper.sh --ls <status> [to-do.json]"
     echo "       looper.sh --tail [--follow|-f]"
-    echo "Options: --interleave, --iter-schedule <codex|cloud|odd-even|round-robin>"
-    echo "         --odd-agent <codex|cloud>, --even-agent <codex|cloud>"
-    echo "         --rr-agents <cloud,codex>, --repair-agent <codex|cloud>"
-    echo "         --cloud-bin <path>, --cloud-model <model>"
+    echo "Options: --interleave, --iter-schedule <codex|claude|odd-even|round-robin>"
+    echo "         --odd-agent <codex|claude>, --even-agent <codex|claude>"
+    echo "         --rr-agents <claude,codex>, --repair-agent <codex|claude>"
+    echo "         --claude-bin <path>, --claude-model <model>"
     echo "Env: MAX_ITERATIONS, CODEX_MODEL, CODEX_REASONING_EFFORT, CODEX_JSON_LOG, CODEX_PROGRESS"
     echo "Env: LOOPER_BASE_DIR, CODEX_PROFILE, CODEX_ENFORCE_OUTPUT_SCHEMA, CODEX_YOLO, CODEX_FULL_AUTO"
-    echo "Env: CLOUD_BIN, CLOUD_MODEL, LOOPER_ITER_SCHEDULE, LOOPER_ITER_ODD_AGENT"
+    echo "Env: CLAUDE_BIN, CLAUDE_MODEL, LOOPER_ITER_SCHEDULE, LOOPER_ITER_ODD_AGENT"
     echo "Env: LOOPER_ITER_EVEN_AGENT, LOOPER_ITER_RR_AGENTS, LOOPER_REPAIR_AGENT"
     echo "Env: LOOPER_INTERLEAVE"
     echo "Env: LOOPER_APPLY_SUMMARY, LOOPER_GIT_INIT, LOOPER_HOOK, LOOP_DELAY_SECONDS"
@@ -139,8 +139,8 @@ normalize_agent() {
     local agent
     agent=$(lowercase "$1")
     case "$agent" in
-        claude|cloud)
-            echo "cloud"
+        claude)
+            echo "claude"
             ;;
         codex)
             echo "codex"
@@ -174,11 +174,11 @@ normalize_agent_list() {
 
 validate_agent() {
     case "$1" in
-        codex|cloud)
+        codex|claude)
             return 0
             ;;
         *)
-            echo "Error: invalid agent '$1' (codex|cloud)." >&2
+            echo "Error: invalid agent '$1' (codex|claude)." >&2
             exit 1
             ;;
     esac
@@ -194,7 +194,7 @@ normalize_schedule() {
         round_robin|round-robin|roundrobin|rr)
             echo "round-robin"
             ;;
-        codex|cloud|odd-even|round-robin)
+        codex|claude|odd-even|round-robin)
             echo "$schedule"
             ;;
         *)
@@ -205,7 +205,7 @@ normalize_schedule() {
 
 validate_iter_schedule() {
     case "$LOOPER_ITER_SCHEDULE" in
-        codex|cloud)
+        codex|claude)
             ;;
         odd-even)
             validate_agent "$LOOPER_ITER_ODD_AGENT"
@@ -228,7 +228,7 @@ validate_iter_schedule() {
             LOOPER_ITER_RR_AGENTS="$agents"
             ;;
         *)
-            echo "Error: invalid iter schedule '$LOOPER_ITER_SCHEDULE' (codex|cloud|odd-even|round-robin)." >&2
+            echo "Error: invalid iter schedule '$LOOPER_ITER_SCHEDULE' (codex|claude|odd-even|round-robin)." >&2
             exit 1
             ;;
     esac
@@ -237,7 +237,7 @@ validate_iter_schedule() {
 select_iter_agent() {
     local iteration="${1:-1}"
     case "$LOOPER_ITER_SCHEDULE" in
-        codex|cloud)
+        codex|claude)
             echo "$LOOPER_ITER_SCHEDULE"
             ;;
         odd-even)
@@ -265,19 +265,19 @@ select_iter_agent() {
     esac
 }
 
-schedule_uses_cloud() {
+schedule_uses_claude() {
     case "$LOOPER_ITER_SCHEDULE" in
-        cloud)
+        claude)
             return 0
             ;;
         odd-even)
-            if [ "$LOOPER_ITER_ODD_AGENT" = "cloud" ] || [ "$LOOPER_ITER_EVEN_AGENT" = "cloud" ]; then
+            if [ "$LOOPER_ITER_ODD_AGENT" = "claude" ] || [ "$LOOPER_ITER_EVEN_AGENT" = "claude" ]; then
                 return 0
             fi
             ;;
         round-robin)
             case ",$LOOPER_ITER_RR_AGENTS," in
-                *,cloud,*)
+                *,claude,*)
                     return 0
                     ;;
             esac
@@ -286,11 +286,11 @@ schedule_uses_cloud() {
     return 1
 }
 
-should_use_cloud() {
-    if [ "$LOOPER_REPAIR_AGENT" = "cloud" ]; then
+should_use_claude() {
+    if [ "$LOOPER_REPAIR_AGENT" = "claude" ]; then
         return 0
     fi
-    schedule_uses_cloud
+    schedule_uses_claude
 }
 
 parse_args() {
@@ -348,22 +348,22 @@ parse_args() {
                 REPAIR_AGENT_SET=1
                 shift 2
                 ;;
-            --cloud-bin)
+            --claude-bin)
                 if [ -z "${2:-}" ]; then
-                    echo "Error: --cloud-bin requires a value." >&2
+                    echo "Error: --claude-bin requires a value." >&2
                     usage
                     exit 1
                 fi
-                CLOUD_BIN="$2"
+                CLAUDE_BIN="$2"
                 shift 2
                 ;;
-            --cloud-model)
+            --claude-model)
                 if [ -z "${2:-}" ]; then
-                    echo "Error: --cloud-model requires a value." >&2
+                    echo "Error: --claude-model requires a value." >&2
                     usage
                     exit 1
                 fi
-                CLOUD_MODEL="$2"
+                CLAUDE_MODEL="$2"
                 shift 2
                 ;;
             --)
@@ -394,10 +394,10 @@ parse_args() {
 apply_interleave_defaults() {
     if [ "$LOOPER_INTERLEAVE" = "1" ]; then
         if [ "$ITER_SCHEDULE_SET" -eq 0 ]; then
-            LOOPER_ITER_SCHEDULE="cloud"
+            LOOPER_ITER_SCHEDULE="claude"
         fi
         if [ "$REPAIR_AGENT_SET" -eq 0 ]; then
-            LOOPER_REPAIR_AGENT="cloud"
+            LOOPER_REPAIR_AGENT="claude"
         fi
     fi
 }
@@ -992,13 +992,13 @@ print_run_info() {
         echo "Codex mode: $mode"
     fi
     echo "Codex flags: $CODEX_BIN $flags_string -"
-    if should_use_cloud; then
-        local cloud_model="${CLOUD_MODEL:-default}"
-        local cloud_flags_string
-        cloud_flags_string=$(printf "%s " "${CLOUD_FLAGS[@]}")
-        cloud_flags_string=${cloud_flags_string% }
-        echo "Cloud model: $cloud_model"
-        echo "Cloud flags: $CLOUD_BIN -p <prompt> $cloud_flags_string"
+    if should_use_claude; then
+        local claude_model="${CLAUDE_MODEL:-default}"
+        local claude_flags_string
+        claude_flags_string=$(printf "%s " "${CLAUDE_FLAGS[@]}")
+        claude_flags_string=${claude_flags_string% }
+        echo "claude model: $claude_model"
+        echo "claude flags: $CLAUDE_BIN -p <prompt> $claude_flags_string"
     fi
     echo "Schema file: $SCHEMA_FILE"
     if [ "$CODEX_JSON_LOG" -eq 1 ]; then
@@ -1026,7 +1026,7 @@ strip_json_fence() {
     printf "%s" "$text"
 }
 
-extract_cloud_output_json() {
+extract_claude_output_json() {
     local output_file="$1"
     local json=""
 
@@ -1050,7 +1050,7 @@ extract_cloud_output_json() {
     return 1
 }
 
-extract_cloud_text() {
+extract_claude_text() {
     local json="$1"
     printf "%s" "$json" | jq -r '
         def join_text($arr):
@@ -1077,7 +1077,7 @@ extract_cloud_text() {
     '
 }
 
-write_last_message_from_cloud_output() {
+write_last_message_from_claude_output() {
     local output_file="$1"
 
     if [ "$CODEX_JSON_LOG" -ne 1 ] || [ -z "$LAST_MESSAGE_FILE" ]; then
@@ -1085,12 +1085,12 @@ write_last_message_from_cloud_output() {
     fi
 
     local output_json text normalized
-    if ! output_json=$(extract_cloud_output_json "$output_file"); then
+    if ! output_json=$(extract_claude_output_json "$output_file"); then
         jq -n --arg raw "$(cat "$output_file")" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
         return 0
     fi
 
-    text=$(extract_cloud_text "$output_json")
+    text=$(extract_claude_text "$output_json")
     if [ -z "$text" ]; then
         jq -n --arg raw "$output_json" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
         return 0
@@ -1105,7 +1105,7 @@ write_last_message_from_cloud_output() {
     jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
 }
 
-run_cloud() {
+run_claude() {
     local label="${1:-run}"
     local expect_summary="${2:-0}"
     local iteration="${3:-0}"
@@ -1113,7 +1113,7 @@ run_cloud() {
     prompt=$(cat)
 
     prepare_run_files "$label"
-    local cmd=("$CLOUD_BIN" -p "$prompt" "${CLOUD_FLAGS[@]}")
+    local cmd=("$CLAUDE_BIN" -p "$prompt" "${CLAUDE_FLAGS[@]}")
     local output_file
     output_file=$(mktemp)
     local exit_status
@@ -1121,14 +1121,14 @@ run_cloud() {
     if [ "$CODEX_JSON_LOG" -eq 1 ]; then
         "${cmd[@]}" 2>&1 | tee "$output_file" | stream_with_annotation "$label" "$iteration"
         exit_status=${PIPESTATUS[0]}
-        write_last_message_from_cloud_output "$output_file"
+        write_last_message_from_claude_output "$output_file"
         rm -f "$output_file"
         return "$exit_status"
     fi
 
     "${cmd[@]}" 2>&1 | tee "$output_file"
     exit_status=${PIPESTATUS[0]}
-    write_last_message_from_cloud_output "$output_file"
+    write_last_message_from_claude_output "$output_file"
     rm -f "$output_file"
     return "$exit_status"
 }
@@ -1138,8 +1138,8 @@ run_with_agent() {
     shift
 
     case "$agent" in
-        cloud)
-            run_cloud "$@"
+        claude)
+            run_claude "$@"
             ;;
         codex|*)
             run_codex "$@"
@@ -1315,8 +1315,8 @@ repair_todo_schema() {
 
     local repair_agent="$LOOPER_REPAIR_AGENT"
     local repair_bin="$CODEX_BIN"
-    if [ "$repair_agent" = "cloud" ]; then
-        repair_bin="$CLOUD_BIN"
+    if [ "$repair_agent" = "claude" ]; then
+        repair_bin="$CLAUDE_BIN"
     fi
 
     echo "Repairing $TODO_FILE with $repair_bin..."
@@ -1442,8 +1442,8 @@ main() {
 
     require_cmd "$CODEX_BIN"
     require_cmd jq
-    if should_use_cloud; then
-        require_cmd "$CLOUD_BIN"
+    if should_use_claude; then
+        require_cmd "$CLAUDE_BIN"
     fi
 
     CODEX_FLAGS=(
@@ -1467,14 +1467,14 @@ main() {
         CODEX_FLAGS+=(--skip-git-repo-check)
     fi
 
-    CLOUD_FLAGS=(
+    CLAUDE_FLAGS=(
         --output-format json
         --dangerously-skip-permissions
         --add-dir "$WORKDIR"
     )
 
-    if [ -n "$CLOUD_MODEL" ]; then
-        CLOUD_FLAGS+=(--model "$CLOUD_MODEL")
+    if [ -n "$CLAUDE_MODEL" ]; then
+        CLAUDE_FLAGS+=(--model "$CLAUDE_MODEL")
     fi
 
     ensure_log_dir

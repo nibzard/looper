@@ -1,6 +1,6 @@
 # Looper
 
-A deterministic, autonomous loop runner for the Codex CLI with optional Cloud
+A deterministic, autonomous loop runner for the Codex CLI with optional Claude Code CLI (`claude`)
 interleaving. It processes exactly
 one task per iteration from a JSON backlog, with fresh context each run, and
 keeps a JSONL audit log for traceability.
@@ -17,11 +17,11 @@ against `to-do.schema.json`, and repairs it if needed.
 ## What It Does
 - Bootstraps `to-do.json` and `to-do.schema.json` if missing.
 - Validates `to-do.json` (jsonschema if available, jq fallback).
-- Repairs invalid task files via Codex or Cloud.
+- Repairs invalid task files via Codex or `claude`.
 - Runs one task per iteration (doing > todo > blocked).
 - When tasks are exhausted, runs a review pass; it must append a final
   `project-done` marker task if no new work is found.
-- Supports interleaving Cloud CLI for iterations while keeping Codex for review.
+- Supports interleaving `claude` for iterations while keeping Codex for review.
 - Enforces JSON output from the model and logs JSONL per run.
 - Optionally applies model summaries back into `to-do.json`.
 
@@ -54,29 +54,29 @@ looper.sh --ls todo [to-do.json]
 looper.sh --tail --follow
 looper.sh --interleave
 looper.sh --iter-schedule odd-even
-looper.sh --iter-schedule round-robin --rr-agents cloud,codex
+looper.sh --iter-schedule round-robin --rr-agents claude,codex
 ```
 
 ## Interleaving
-`--interleave` runs iterations with the Cloud CLI (`claude`) and keeps the
+`--interleave` runs iterations with `claude` and keeps the
 final review pass on Codex. Iteration schedules are configurable:
 
 - `--iter-schedule codex` (default)
-- `--iter-schedule cloud`
-- `--iter-schedule odd-even` (odd uses Codex, even uses Cloud)
-- `--iter-schedule round-robin` (uses `--rr-agents`, default `cloud,codex`)
+- `--iter-schedule claude`
+- `--iter-schedule odd-even` (odd uses Codex, even uses `claude`)
+- `--iter-schedule round-robin` (uses `--rr-agents`, default `claude,codex`)
 
-Cloud runs with `--dangerously-skip-permissions` and `--output-format json`.
+`claude` runs with `--dangerously-skip-permissions` and `--output-format json`.
 
 Optional overrides:
 ```
---odd-agent <codex|cloud>
---even-agent <codex|cloud>
+--odd-agent <codex|claude>
+--even-agent <codex|claude>
 --rr-agents <comma-separated list>
---repair-agent <codex|cloud>
+--repair-agent <codex|claude>
 ```
 
-`--interleave` also defaults repair to Cloud; use `--repair-agent codex` to keep Codex.
+`--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
 
 ## Task File (to-do.json)
 `to-do.json` is the source of truth for the loop and must match
@@ -137,12 +137,12 @@ Environment variables (defaults in parentheses):
 - `CODEX_JSON_LOG` (1)
 - `CODEX_PROGRESS` (1)
 - `CODEX_ENFORCE_OUTPUT_SCHEMA` (0)
-- `CLOUD_BIN` (claude)
-- `CLOUD_MODEL` (empty)
+- `CLAUDE_BIN` (claude)
+- `CLAUDE_MODEL` (empty)
 - `LOOPER_ITER_SCHEDULE` (codex)
 - `LOOPER_ITER_ODD_AGENT` (codex)
-- `LOOPER_ITER_EVEN_AGENT` (cloud)
-- `LOOPER_ITER_RR_AGENTS` (cloud,codex)
+- `LOOPER_ITER_EVEN_AGENT` (claude)
+- `LOOPER_ITER_RR_AGENTS` (claude,codex)
 - `LOOPER_REPAIR_AGENT` (codex)
 - `LOOPER_INTERLEAVE` (0)
 - `LOOPER_BASE_DIR` (~/.looper)
