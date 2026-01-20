@@ -139,8 +139,8 @@ ensure_clean() {
     if [ "$ALLOW_DIRTY" -eq 1 ]; then
         return 0
     fi
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        echo "Error: working tree is dirty. Commit or stash changes." >&2
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "Error: working tree is dirty (including untracked files). Commit or stash changes." >&2
         exit 1
     fi
 }
@@ -171,6 +171,26 @@ resolve_repo_slug() {
         return 0
     fi
     echo "$origin" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'
+}
+
+sha256_stream() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+        return 0
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | awk '{print $1}'
+        return 0
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 | awk '{print $NF}'
+        return 0
+    fi
+
+    echo "Error: no sha256 tool found (sha256sum/shasum/openssl)." >&2
+    return 1
 }
 
 update_version_files() {
@@ -219,7 +239,7 @@ update_formula() {
         exit 1
     fi
 
-    sha=$(curl -L -s "https://github.com/$slug/archive/refs/tags/$TAG_VERSION.tar.gz" | sha256sum | awk '{print $1}')
+    sha=$(curl -L -s "https://github.com/$slug/archive/refs/tags/$TAG_VERSION.tar.gz" | sha256_stream)
     if [ -z "$sha" ]; then
         echo "Error: failed to compute sha256 for $TAG_VERSION" >&2
         exit 1
