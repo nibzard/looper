@@ -634,13 +634,14 @@ annotate_line() {
 stream_with_annotation() {
     local label="$1"
     local iteration="$2"
+    local progress="${3:-$CODEX_PROGRESS}"
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         local annotated
         annotated=$(annotate_line "$line" "$label" "$iteration")
         echo "$annotated" >> "$LOG_FILE"
-        if [ "$CODEX_PROGRESS" -eq 1 ]; then
+        if [ "$progress" -eq 1 ]; then
             progress_line "$annotated"
         fi
     done
@@ -828,6 +829,12 @@ extract_last_agent_message() {
             | gsub("[\r\n\t]+"; " ")
             | sub("^ +"; "")
             | sub(" +$"; "");
+        def join_text($arr):
+            if ($arr | type) == "array" then
+              ($arr | map(select(.type == "text") | .text) | join(""))
+            else
+              ""
+            end;
         def clean_cmd($s):
             clean($s)
             | sub("^/bin/bash -lc "; "")
@@ -839,6 +846,12 @@ extract_last_agent_message() {
             "agent_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.item.text)
         elif (.type == "assistant_message" or .type == "assistant_response" or .type == "assistant") then
             "assistant_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.message.content[0].text // .content[0].text // .text // .output_text)
+        elif (.type == "message" and .message and .message.content) then
+            "assistant_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(join_text(.message.content))
+        elif (.type == "content_block_delta" and (.delta.text // "") != "") then
+            "assistant_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.delta.text)
+        elif (.type == "content_block_start" and .content_block and (.content_block.text // "") != "") then
+            "assistant_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.content_block.text)
         elif (.type == "item.completed" and .item.type == "reasoning") then
             "reasoning\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.item.text)
         elif (.type == "item.started" and .item.type == "command_execution") then
@@ -1077,32 +1090,125 @@ extract_claude_text() {
     '
 }
 
+extract_claude_stream_text() {
+    local output_file="$1"
+    local text=""
+    local line
+    local saw_full=0
+
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        local message_text
+        message_text=$(printf "%s" "$line" | jq -r '
+            def join_text($arr):
+              if ($arr | type) == "array" then
+                ($arr | map(select(.type == "text") | .text) | join(""))
+              else
+                ""
+              end;
+            if .type == "message" and .message and .message.content then
+              join_text(.message.content)
+            elif .message and .message.content then
+              join_text(.message.content)
+            else
+              empty
+            end
+        ' 2>/dev/null)
+        if [ -n "$message_text" ] && [ "$message_text" != "null" ]; then
+            text="$message_text"
+            saw_full=1
+            continue
+        fi
+
+        if [ "$saw_full" -eq 1 ]; then
+            continue
+        fi
+
+        local chunk
+        chunk=$(printf "%s" "$line" | jq -r '
+            if .type == "content_block_delta" and (.delta.text // "") != "" then
+              .delta.text
+            elif .type == "content_block_start" and .content_block and (.content_block.text // "") != "" then
+              .content_block.text
+            else
+              empty
+            end
+        ' 2>/dev/null)
+        if [ -n "$chunk" ] && [ "$chunk" != "null" ]; then
+            text+="$chunk"
+        fi
+    done < "$output_file"
+
+    printf "%s" "$text"
+}
+
+append_claude_message_log() {
+    local label="$1"
+    local iteration="$2"
+    local text="$3"
+
+    if [ "$CODEX_JSON_LOG" -ne 1 ] || [ -z "${LOG_FILE:-}" ] || [ -z "$label" ]; then
+        return 0
+    fi
+
+    if [ -z "$text" ]; then
+        return 0
+    fi
+
+    if [ -z "$iteration" ]; then
+        iteration=0
+    fi
+
+    jq -c -n --arg text "$text" \
+        --arg label "$label" \
+        --arg run_id "$RUN_ID" \
+        --argjson iter "$iteration" \
+        '{type:"assistant_message", message:{content:[{type:"text", text:$text}]}, looper_run_id:$run_id, looper_label:$label, looper_iteration:$iter}' \
+        >> "$LOG_FILE"
+}
+
 write_last_message_from_claude_output() {
     local output_file="$1"
+    local label="${2:-}"
+    local iteration="${3:-0}"
 
     if [ "$CODEX_JSON_LOG" -ne 1 ] || [ -z "$LAST_MESSAGE_FILE" ]; then
         return 0
     fi
 
-    local output_json text normalized
-    if ! output_json=$(extract_claude_output_json "$output_file"); then
-        jq -n --arg raw "$(cat "$output_file")" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-        return 0
+    local output_json text normalized log_text raw_output
+    text=$(extract_claude_stream_text "$output_file")
+    if [ -n "$text" ]; then
+        normalized=$(strip_json_fence "$text")
+        if printf "%s" "$normalized" | jq -e . >/dev/null 2>&1; then
+            printf "%s\n" "$normalized" > "$LAST_MESSAGE_FILE"
+            log_text="$normalized"
+        else
+            jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+            log_text="$normalized"
+        fi
+    elif output_json=$(extract_claude_output_json "$output_file"); then
+        text=$(extract_claude_text "$output_json")
+        if [ -n "$text" ]; then
+            normalized=$(strip_json_fence "$text")
+            if printf "%s" "$normalized" | jq -e . >/dev/null 2>&1; then
+                printf "%s\n" "$normalized" > "$LAST_MESSAGE_FILE"
+                log_text="$normalized"
+            else
+                jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+                log_text="$normalized"
+            fi
+        else
+            jq -n --arg raw "$output_json" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+            log_text="$output_json"
+        fi
+    else
+        raw_output=$(cat "$output_file")
+        jq -n --arg raw "$raw_output" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+        log_text="$raw_output"
     fi
 
-    text=$(extract_claude_text "$output_json")
-    if [ -z "$text" ]; then
-        jq -n --arg raw "$output_json" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-        return 0
-    fi
-
-    normalized=$(strip_json_fence "$text")
-    if printf "%s" "$normalized" | jq -e . >/dev/null 2>&1; then
-        printf "%s\n" "$normalized" > "$LAST_MESSAGE_FILE"
-        return 0
-    fi
-
-    jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+    append_claude_message_log "$label" "$iteration" "$log_text"
 }
 
 run_claude() {
@@ -1119,16 +1225,16 @@ run_claude() {
     local exit_status
 
     if [ "$CODEX_JSON_LOG" -eq 1 ]; then
-        "${cmd[@]}" 2>&1 | tee "$output_file" | stream_with_annotation "$label" "$iteration"
+        "${cmd[@]}" 2>&1 | tee "$output_file" | stream_with_annotation "$label" "$iteration" 0
         exit_status=${PIPESTATUS[0]}
-        write_last_message_from_claude_output "$output_file"
+        write_last_message_from_claude_output "$output_file" "$label" "$iteration"
         rm -f "$output_file"
         return "$exit_status"
     fi
 
-    "${cmd[@]}" 2>&1 | tee "$output_file"
-    exit_status=${PIPESTATUS[0]}
-    write_last_message_from_claude_output "$output_file"
+    "${cmd[@]}" >"$output_file" 2>&1
+    exit_status=$?
+    write_last_message_from_claude_output "$output_file" "$label" "$iteration"
     rm -f "$output_file"
     return "$exit_status"
 }
@@ -1468,7 +1574,9 @@ main() {
     fi
 
     CLAUDE_FLAGS=(
-        --output-format json
+        --output-format stream-json
+        --include-partial-messages
+        --verbose
         --dangerously-skip-permissions
         --add-dir "$WORKDIR"
     )
