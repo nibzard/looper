@@ -78,6 +78,36 @@ Optional overrides:
 
 `--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
 
+### Examples
+
+Use Claude for all iterations, Codex for review:
+```bash
+looper.sh --interleave
+```
+
+Alternate between Codex (odd) and Claude (even):
+```bash
+looper.sh --interleave --iter-schedule odd-even
+```
+
+Flip the pattern (Claude on odd, Codex on even):
+```bash
+looper.sh --interleave --iter-schedule odd-even --odd-agent claude --even-agent codex
+```
+
+Round-robin through multiple agents:
+```bash
+looper.sh --interleave --iter-schedule round-robin --rr-agents claude,codex,claude,codex
+```
+
+Custom pattern (2x Claude, then Codex, repeating):
+```bash
+looper.sh --iter-schedule round-robin --rr-agents claude,claude,codex
+# Pattern: claude → claude → codex → claude → claude → codex → ...
+```
+
+**Note:** The final review pass always uses Codex, regardless of iteration schedule.
+
 ## Task File (to-do.json)
 `to-do.json` is the source of truth for the loop and must match
 `to-do.schema.json`. The loop chooses a single task each iteration:
