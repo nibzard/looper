@@ -925,6 +925,37 @@ set_task_status() {
        )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
 }
 
+recover_task_states() {
+    local doing_tasks doing_count tmp now
+    doing_tasks=$(jq -r '.tasks[] | select(.status == "doing") | .id' "$TODO_FILE" 2>/dev/null)
+    doing_count=$(echo "$doing_tasks" | grep -c . 2>/dev/null || echo "0")
+
+    if [ "$doing_count" -gt 0 ]; then
+        now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        tmp=$(mktemp)
+
+        jq --arg now "$now" '
+            .tasks |= map(
+                if .status == "doing" then
+                    .status = "todo"
+                    | .updated_at = $now
+                else
+                    .
+                end
+            )
+        ' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
+
+        echo "Recovered $doing_count tasks from doing to todo state"
+        if [ "$doing_count" -le 5 ]; then
+            echo "$doing_tasks" | while read -r task_id; do
+                [ -n "$task_id" ] && echo "  - $task_id"
+            done
+        fi
+    fi
+
+    return "$doing_count"
+}
+
 current_task_line() {
     jq -r '
         def first_or_null($arr):
@@ -1886,7 +1917,30 @@ main() {
         iteration=$((iteration + 1))
 
         if [ "$iteration" -gt "$MAX_ITERATIONS" ]; then
-            echo "Reached max iterations ($MAX_ITERATIONS). Exiting."
+            echo "Reached max iterations ($MAX_ITERATIONS)."
+            recover_task_states
+
+            if has_open_tasks; then
+                echo "Open tasks remain. Running final review pass..."
+                run_review_pass "$iteration"
+                ensure_valid_todo
+
+                local todo_count blocked_count done_count
+                todo_count=$(jq '[.tasks[] | select(.status == "todo")] | length' "$TODO_FILE")
+                blocked_count=$(jq '[.tasks[] | select(.status == "blocked")] | length' "$TODO_FILE")
+                done_count=$(jq '[.tasks[] | select(.status == "done")] | length' "$TODO_FILE")
+
+                echo "--- Final State Summary ---"
+                echo "Tasks remaining: $((todo_count + blocked_count)) (todo: $todo_count, blocked: $blocked_count)"
+                echo "Tasks completed: $done_count"
+                echo "Use './bin/looper.sh run' to continue working on remaining tasks."
+            else
+                if last_task_is_project_done; then
+                    echo "All tasks complete and project is marked done."
+                else
+                    echo "All tasks complete but project-done marker not found."
+                fi
+            fi
             break
         fi
 
