@@ -2053,8 +2053,9 @@ EOF
                     if [ "$status_changed" -eq 1 ]; then
                         local current_status
                         current_status=$(task_status_by_id "$selected_task_id")
-                        if [ "$current_status" = "doing" ]; then
+                        if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
                             set_task_status "$selected_task_id" "$status_before"
+                            echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before due to task_id mismatch." >&2
                         fi
                     fi
                     echo "Warning: skipping summary apply due to task_id mismatch and invalid task_id '$summary_task_id'." >&2
@@ -2064,8 +2065,9 @@ EOF
                 if [ "$status_changed" -eq 1 ]; then
                     local current_status
                     current_status=$(task_status_by_id "$selected_task_id")
-                    if [ "$current_status" = "doing" ]; then
+                    if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
                         set_task_status "$selected_task_id" "$status_before"
+                        echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before due to task_id mismatch." >&2
                     fi
                 fi
                 echo "Warning: skipping summary apply due to task_id mismatch." >&2
