@@ -1700,6 +1700,7 @@ EOF
 
     handle_last_message "review-$iteration"
     cleanup_last_message_file
+    return "$exit_status"
 }
 
 ensure_git_repo() {
