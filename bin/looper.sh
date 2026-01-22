@@ -895,6 +895,24 @@ last_task_is_project_done() {
     ' "$TODO_FILE" >/dev/null 2>&1
 }
 
+add_project_done_marker() {
+    local now tmp
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    tmp=$(mktemp)
+
+    jq --arg now "$now" '
+        .tasks += [{
+            "id": ("done-" + ($now | split("T")[0] | split("-") | join(""))),
+            "title": "Project Complete",
+            "status": "done",
+            "priority": 5,
+            "tags": ["project-done"],
+            "created_at": $now,
+            "updated_at": $now
+        }]
+    ' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
+}
+
 list_tasks_by_status() {
     local status="$1"
     jq --arg status "$status" '.tasks[] | select(.status == $status)' "$TODO_FILE"
@@ -1911,6 +1929,7 @@ main() {
     echo "Max iterations: $MAX_ITERATIONS"
 
     iteration=0
+    consecutive_review_failures=0
     trap 'echo "Interrupted. Exiting."; exit 130' INT TERM
 
     while true; do
@@ -1954,7 +1973,21 @@ main() {
 
             echo "No open tasks remain. Running final review..."
             run_review_pass "$iteration"
+            local review_exit_code=$?
             ensure_valid_todo
+
+            if [ "$review_exit_code" -ne 0 ]; then
+                consecutive_review_failures=$((consecutive_review_failures + 1))
+                echo "Warning: Review failed with exit code $review_exit_code (failure $consecutive_review_failures/3)."
+                if [ "$consecutive_review_failures" -ge 3 ]; then
+                    echo "Review failed 3 times consecutively. Adding project-done marker and exiting."
+                    add_project_done_marker
+                    break
+                fi
+                continue
+            fi
+
+            consecutive_review_failures=0
 
             if ! has_open_tasks; then
                 if last_task_is_project_done; then
