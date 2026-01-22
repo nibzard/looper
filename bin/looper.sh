@@ -774,6 +774,8 @@ stream_with_annotation() {
         [ -z "$line" ] && continue
         local annotated
         annotated=$(annotate_line "$line" "$label" "$iteration")
+        # Ensure log directory exists before writing (defensive check)
+        mkdir -p "$(dirname "$LOG_FILE")"
         echo "$annotated" >> "$LOG_FILE"
         if [ "$progress" -eq 1 ]; then
             progress_line "$annotated"
@@ -979,6 +981,16 @@ current_task_status() {
         IFS=$'\t' read -r task_id status title <<< "$line"
         echo "$status"
     fi
+}
+
+task_status_by_id() {
+    local task_id="$1"
+
+    if [ -z "$task_id" ]; then
+        return 1
+    fi
+
+    jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null | head -n 1
 }
 
 latest_log_file() {
@@ -1218,6 +1230,37 @@ strip_json_fence() {
     printf "%s" "$text"
 }
 
+extract_json_from_text() {
+    local text="$1"
+    local candidate=""
+
+    if printf "%s" "$text" | jq -e . >/dev/null 2>&1; then
+        printf "%s" "$text"
+        return 0
+    fi
+
+    candidate=$(printf "%s" "$text" | awk '
+        BEGIN { inside=0 }
+        /^```/ {
+            if (inside == 0) { inside=1; next }
+            else { exit }
+        }
+        { if (inside == 1) print }
+    ')
+    if [ -n "$candidate" ] && printf "%s" "$candidate" | jq -e . >/dev/null 2>&1; then
+        printf "%s" "$candidate"
+        return 0
+    fi
+
+    candidate=$(printf "%s" "$text" | sed -n '1h;1!H;${g;s/^[^{]*//;s/[^}]*$//;p}')
+    if [ -n "$candidate" ] && printf "%s" "$candidate" | jq -e . >/dev/null 2>&1; then
+        printf "%s" "$candidate"
+        return 0
+    fi
+
+    return 1
+}
+
 extract_claude_output_json() {
     local output_file="$1"
     local json=""
@@ -1355,28 +1398,26 @@ write_last_message_from_claude_output() {
         return 0
     fi
 
-    local output_json text normalized log_text raw_output
+    local output_json text normalized log_text raw_output summary_json
     text=$(extract_claude_stream_text "$output_file")
     if [ -n "$text" ]; then
         normalized=$(strip_json_fence "$text")
-        if printf "%s" "$normalized" | jq -e . >/dev/null 2>&1; then
-            printf "%s\n" "$normalized" > "$LAST_MESSAGE_FILE"
-            log_text="$normalized"
+        if summary_json=$(extract_json_from_text "$normalized"); then
+            printf "%s\n" "$summary_json" > "$LAST_MESSAGE_FILE"
         else
             jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-            log_text="$normalized"
         fi
+        log_text="$normalized"
     elif output_json=$(extract_claude_output_json "$output_file"); then
         text=$(extract_claude_text "$output_json")
         if [ -n "$text" ]; then
             normalized=$(strip_json_fence "$text")
-            if printf "%s" "$normalized" | jq -e . >/dev/null 2>&1; then
-                printf "%s\n" "$normalized" > "$LAST_MESSAGE_FILE"
-                log_text="$normalized"
+            if summary_json=$(extract_json_from_text "$normalized"); then
+                printf "%s\n" "$summary_json" > "$LAST_MESSAGE_FILE"
             else
                 jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-                log_text="$normalized"
             fi
+            log_text="$normalized"
         else
             jq -n --arg raw "$output_json" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
             log_text="$output_json"
@@ -1920,10 +1961,6 @@ If the task was not already "doing", it has been set to "doing" for you.
 Rules:
 - Read "$TODO_FILE" and follow the schema in "$SCHEMA_FILE".
 - Read every file listed in source_files and treat them as ground truth for task selection and implementation.
-- If any task has status "doing", continue that task. If multiple, pick the lowest id.
-- Otherwise pick the highest priority task with status "todo". If none, pick the highest priority "blocked" task and attempt to unblock it.
-- If multiple tasks share priority, pick the lowest id.
-- Set the chosen task status to "doing" before making changes.
 - Implement the task fully and keep scope tight.
 - If blocked, set status to "blocked" and add clear blocker notes. Do not commit partial work.
 - If completed, set status to "done", update updated_at, and record relevant files in files[] if helpful.
@@ -1947,10 +1984,38 @@ EOF
         local summary_ok=1
         if ! summary_matches_selected "$selected_task_id"; then
             summary_ok=0
-            if [ "$status_changed" -eq 1 ]; then
-                set_task_status "$selected_task_id" "$status_before"
+            # Best-effort: check if the returned task_id exists and apply to it
+            local summary_task_id
+            summary_task_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
+            if [ -n "$summary_task_id" ] && [ "$summary_task_id" != "null" ]; then
+                local task_exists
+                task_exists=$(jq -r --arg id "$summary_task_id" '.tasks[] | select(.id == $id) | .id' "$TODO_FILE" 2>/dev/null | head -n 1)
+                if [ -n "$task_exists" ]; then
+                    echo "Warning: summary task_id '$summary_task_id' does not match selected '$selected_task_id'. Applying summary to returned task_id '$summary_task_id'." >&2
+                    apply_summary_to_todo
+                    summary_ok=2  # Mark as applied to different task
+                else
+                    # Task doesn't exist, revert status
+                    if [ "$status_changed" -eq 1 ]; then
+                        local current_status
+                        current_status=$(task_status_by_id "$selected_task_id")
+                        if [ "$current_status" = "doing" ]; then
+                            set_task_status "$selected_task_id" "$status_before"
+                        fi
+                    fi
+                    echo "Warning: skipping summary apply due to task_id mismatch and invalid task_id '$summary_task_id'." >&2
+                fi
+            else
+                # No valid task_id in summary, revert status
+                if [ "$status_changed" -eq 1 ]; then
+                    local current_status
+                    current_status=$(task_status_by_id "$selected_task_id")
+                    if [ "$current_status" = "doing" ]; then
+                        set_task_status "$selected_task_id" "$status_before"
+                    fi
+                fi
+                echo "Warning: skipping summary apply due to task_id mismatch." >&2
             fi
-            echo "Warning: skipping summary apply due to task_id mismatch." >&2
         fi
         if [ "$summary_ok" -eq 1 ]; then
             apply_summary_to_todo
