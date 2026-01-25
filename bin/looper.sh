@@ -49,6 +49,7 @@ Environment variables:
   LOOPER_ITER_EVEN_AGENT   Even-iteration agent (default: claude)
   LOOPER_ITER_RR_AGENTS    Round-robin agents list (default: claude,codex)
   LOOPER_REPAIR_AGENT      Repair agent (codex|claude; default: codex)
+  LOOPER_REVIEW_AGENT      Review agent (codex|claude; default: codex)
   LOOPER_INTERLEAVE        Enable interleave defaults (default: 0)
   LOOPER_BASE_DIR          Base log dir (default: ~/.looper)
   LOOPER_APPLY_SUMMARY     Deterministically apply summary to to-do.json (default: 1)
@@ -101,9 +102,11 @@ LOOPER_ITER_ODD_AGENT=${LOOPER_ITER_ODD_AGENT:-codex}
 LOOPER_ITER_EVEN_AGENT=${LOOPER_ITER_EVEN_AGENT:-claude}
 LOOPER_ITER_RR_AGENTS=${LOOPER_ITER_RR_AGENTS:-claude,codex}
 LOOPER_REPAIR_AGENT=${LOOPER_REPAIR_AGENT:-codex}
+LOOPER_REVIEW_AGENT=${LOOPER_REVIEW_AGENT:-codex}
 LOOPER_INTERLEAVE=${LOOPER_INTERLEAVE:-0}
 ITER_SCHEDULE_SET=0
 REPAIR_AGENT_SET=0
+REVIEW_AGENT_SET=0
 LOOPER_APPLY_SUMMARY=${LOOPER_APPLY_SUMMARY:-1}
 LOOPER_GIT_INIT=${LOOPER_GIT_INIT:-1}
 LOOPER_HOOK=${LOOPER_HOOK:-}
@@ -114,19 +117,21 @@ LAST_MESSAGE_TEMP=0
 CAPTURE_LAST_MESSAGE=0
 
 usage() {
-    echo "Usage: looper.sh [--interleave] [--iter-schedule <schedule>] [to-do.json]"
+    echo "Usage: looper.sh [--interleave] [--all <agent>] [to-do.json]"
     echo "       looper.sh --ls <status> [to-do.json]"
     echo "       looper.sh --tail [--follow|-f]"
     echo "       looper.sh --doctor [to-do.json]"
     echo "       looper.sh --check [to-do.json]"
-    echo "Options: --interleave, --iter-schedule <codex|claude|odd-even|round-robin>"
+    echo "Options: --all <claude|codex>, --interleave"
+    echo "         --iter-schedule <codex|claude|odd-even|round-robin>"
     echo "         --odd-agent <codex|claude>, --even-agent <codex|claude>"
     echo "         --rr-agents <claude,codex>, --repair-agent <codex|claude>"
+    echo "         --review-agent <codex|claude>"
     echo "         --claude-bin <path>, --claude-model <model>"
     echo "Env: MAX_ITERATIONS, CODEX_MODEL, CODEX_REASONING_EFFORT, CODEX_JSON_LOG, CODEX_PROGRESS"
     echo "Env: LOOPER_BASE_DIR, CODEX_PROFILE, CODEX_ENFORCE_OUTPUT_SCHEMA, CODEX_YOLO, CODEX_FULL_AUTO"
     echo "Env: CLAUDE_BIN, CLAUDE_MODEL, LOOPER_ITER_SCHEDULE, LOOPER_ITER_ODD_AGENT"
-    echo "Env: LOOPER_ITER_EVEN_AGENT, LOOPER_ITER_RR_AGENTS, LOOPER_REPAIR_AGENT"
+    echo "Env: LOOPER_ITER_EVEN_AGENT, LOOPER_ITER_RR_AGENTS, LOOPER_REPAIR_AGENT, LOOPER_REVIEW_AGENT"
     echo "Env: LOOPER_INTERLEAVE"
     echo "Env: LOOPER_APPLY_SUMMARY, LOOPER_GIT_INIT, LOOPER_HOOK, LOOP_DELAY_SECONDS"
 }
@@ -454,6 +459,25 @@ parse_args() {
                 REPAIR_AGENT_SET=1
                 shift 2
                 ;;
+            --review-agent)
+                if [ -z "${2:-}" ]; then
+                    echo "Error: --review-agent requires a value." >&2
+                    usage
+                    exit 1
+                fi
+                LOOPER_REVIEW_AGENT="$2"
+                REVIEW_AGENT_SET=1
+                shift 2
+                ;;
+            --all)
+                if [ -z "${2:-}" ]; then
+                    echo "Error: --all requires a value (claude|codex)." >&2
+                    usage
+                    exit 1
+                fi
+                LOOPER_ALL_AGENT="$2"
+                shift 2
+                ;;
             --claude-bin)
                 if [ -z "${2:-}" ]; then
                     echo "Error: --claude-bin requires a value." >&2
@@ -505,6 +529,26 @@ apply_interleave_defaults() {
         if [ "$REPAIR_AGENT_SET" -eq 0 ]; then
             LOOPER_REPAIR_AGENT="claude"
         fi
+        if [ "$REVIEW_AGENT_SET" -eq 0 ]; then
+            LOOPER_REVIEW_AGENT="claude"
+        fi
+    fi
+}
+
+apply_all_agent() {
+    if [ -n "${LOOPER_ALL_AGENT:-}" ]; then
+        LOOPER_ALL_AGENT=$(normalize_agent "$LOOPER_ALL_AGENT")
+        case "$LOOPER_ALL_AGENT" in
+            claude|codex)
+                LOOPER_ITER_SCHEDULE="$LOOPER_ALL_AGENT"
+                LOOPER_REPAIR_AGENT="$LOOPER_ALL_AGENT"
+                LOOPER_REVIEW_AGENT="$LOOPER_ALL_AGENT"
+                ;;
+            *)
+                echo "Error: --all must be either 'claude' or 'codex'." >&2
+                exit 1
+                ;;
+        esac
     fi
 }
 
@@ -1236,7 +1280,7 @@ print_run_info() {
             echo "Iter agents: $LOOPER_ITER_RR_AGENTS"
             ;;
     esac
-    echo "Review agent: codex"
+    echo "Review agent: $LOOPER_REVIEW_AGENT"
     echo "Repair agent: $LOOPER_REPAIR_AGENT"
     echo "Codex model: $CODEX_MODEL (reasoning: $CODEX_REASONING_EFFORT)"
     if [ -n "$CODEX_PROFILE" ]; then
@@ -1659,8 +1703,9 @@ apply_summary_to_todo() {
 
 run_review_pass() {
     local iteration="${1:-0}"
+    local review_agent="$LOOPER_REVIEW_AGENT"
 
-    run_codex "review-$iteration" 0 "$iteration" "$CAPTURE_LAST_MESSAGE" <<EOF
+    run_with_agent "$review_agent" "review-$iteration" 0 "$iteration" "$CAPTURE_LAST_MESSAGE" <<EOF
 You are running a final review pass after all tasks are complete.
 
 Goal: review the codebase file-by-file as a senior developer reviewing a junior's work,
@@ -1827,12 +1872,15 @@ main() {
         shift
         parse_args "$@"
         apply_interleave_defaults
+        apply_all_agent
 
         LOOPER_ITER_SCHEDULE=$(normalize_schedule "$LOOPER_ITER_SCHEDULE")
         LOOPER_ITER_ODD_AGENT=$(normalize_agent "$LOOPER_ITER_ODD_AGENT")
         LOOPER_ITER_EVEN_AGENT=$(normalize_agent "$LOOPER_ITER_EVEN_AGENT")
         LOOPER_REPAIR_AGENT=$(normalize_agent "$LOOPER_REPAIR_AGENT")
+        LOOPER_REVIEW_AGENT=$(normalize_agent "$LOOPER_REVIEW_AGENT")
         validate_agent "$LOOPER_REPAIR_AGENT"
+        validate_agent "$LOOPER_REVIEW_AGENT"
         validate_iter_schedule
 
         run_doctor
@@ -1864,12 +1912,15 @@ main() {
 
     parse_args "$@"
     apply_interleave_defaults
+    apply_all_agent
 
     LOOPER_ITER_SCHEDULE=$(normalize_schedule "$LOOPER_ITER_SCHEDULE")
     LOOPER_ITER_ODD_AGENT=$(normalize_agent "$LOOPER_ITER_ODD_AGENT")
     LOOPER_ITER_EVEN_AGENT=$(normalize_agent "$LOOPER_ITER_EVEN_AGENT")
     LOOPER_REPAIR_AGENT=$(normalize_agent "$LOOPER_REPAIR_AGENT")
+    LOOPER_REVIEW_AGENT=$(normalize_agent "$LOOPER_REVIEW_AGENT")
     validate_agent "$LOOPER_REPAIR_AGENT"
+    validate_agent "$LOOPER_REVIEW_AGENT"
     validate_iter_schedule
 
     require_cmd "$CODEX_BIN"
