@@ -11,7 +11,7 @@ Purpose:
   updates based on the model's final JSON summary.
 
 Usage:
-  looper.sh [--interleave] [--iter-schedule <schedule>] [to-do.json]
+  looper.sh [--interleave] [--smart|-s] [--iter-schedule <schedule>] [to-do.json]
   looper.sh --ls <status> [to-do.json]
   looper.sh --tail [--follow]
 
@@ -34,7 +34,8 @@ Core behavior:
 
 Environment variables:
   MAX_ITERATIONS           Max iterations (default: 50)
-  CODEX_MODEL              Model (default: gpt-5.2-codex)
+  CODEX_MODEL              Model (default: gpt-5.3-codex-spark)
+  CODEX_SMART_MODEL        Smart mode model (default: gpt-5.3-codex)
   CODEX_REASONING_EFFORT   Model reasoning effort (default: xhigh)
   CODEX_YOLO               Use --yolo (default: 1)
   CODEX_FULL_AUTO          Use --full-auto if not using --yolo (default: 0)
@@ -82,7 +83,8 @@ TODO_FILE=${TODO_FILE:-to-do.json}
 SCHEMA_FILE="${TODO_FILE%.json}.schema.json"
 
 CODEX_BIN=${CODEX_BIN:-codex}
-CODEX_MODEL=${CODEX_MODEL:-gpt-5.2-codex}
+CODEX_MODEL=${CODEX_MODEL:-gpt-5.3-codex-spark}
+CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-5.3-codex}
 CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-xhigh}
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}
@@ -117,12 +119,12 @@ LAST_MESSAGE_TEMP=0
 CAPTURE_LAST_MESSAGE=0
 
 usage() {
-    echo "Usage: looper.sh [--interleave] [--all <agent>] [to-do.json]"
+    echo "Usage: looper.sh [--interleave] [--smart|-s] [--all <agent>] [to-do.json]"
     echo "       looper.sh --ls <status> [to-do.json]"
     echo "       looper.sh --tail [--follow|-f]"
     echo "       looper.sh --doctor [to-do.json]"
     echo "       looper.sh --check [to-do.json]"
-    echo "Options: --all <claude|codex>, --interleave"
+    echo "Options: --all <claude|codex>, --interleave, --smart|-s"
     echo "         --iter-schedule <codex|claude|odd-even|round-robin>"
     echo "         --odd-agent <codex|claude>, --even-agent <codex|claude>"
     echo "         --rr-agents <claude,codex>, --repair-agent <codex|claude>"
@@ -448,6 +450,10 @@ parse_args() {
                 fi
                 LOOPER_ITER_RR_AGENTS="$2"
                 shift 2
+                ;;
+            -s|--smart)
+                CODEX_MODEL="$CODEX_SMART_MODEL"
+                shift
                 ;;
             --repair-agent)
                 if [ -z "${2:-}" ]; then
