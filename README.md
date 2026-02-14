@@ -54,6 +54,7 @@ looper.sh --ls todo [to-do.json]
 looper.sh --tail --follow
 looper.sh --doctor [to-do.json]
 looper.sh --interleave
+looper.sh --smart
 looper.sh --iter-schedule odd-even
 looper.sh --iter-schedule round-robin --rr-agents claude,codex
 ```
@@ -76,6 +77,8 @@ Optional overrides:
 --rr-agents <comma-separated list>
 --repair-agent <codex|claude>
 ```
+
+Use `--smart` (or `-s`) to run Codex with `gpt-5.3-codex` instead of the default `gpt-5.3-codex-spark`.
 
 `--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
 
@@ -160,7 +163,8 @@ The hook receives:
 Environment variables (defaults in parentheses):
 
 - `MAX_ITERATIONS` (50)
-- `CODEX_MODEL` (gpt-5.2-codex)
+- `CODEX_MODEL` (gpt-5.3-codex-spark)
+- `CODEX_SMART_MODEL` (gpt-5.3-codex)
 - `CODEX_REASONING_EFFORT` (xhigh)
 - `CODEX_YOLO` (1)
 - `CODEX_FULL_AUTO` (0)
