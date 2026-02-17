@@ -204,8 +204,12 @@ run_doctor() {
     echo "Task file: $TODO_FILE"
     echo "Schema file: $SCHEMA_FILE"
 
-    if ! doctor_check_cmd "$CODEX_BIN" "codex" 1; then
-        ok=0
+    if should_use_codex; then
+        if ! doctor_check_cmd "$CODEX_BIN" "codex" 1; then
+            ok=0
+        fi
+    else
+        doctor_check_cmd "$CODEX_BIN" "codex (optional)" 0 || true
     fi
     if ! doctor_check_cmd jq "jq" 1; then
         ok=0
@@ -216,7 +220,7 @@ run_doctor() {
             ok=0
         fi
     else
-        doctor_check_cmd "$CLAUDE_BIN" "claude" 0 || true
+        doctor_check_cmd "$CLAUDE_BIN" "claude (optional)" 0 || true
     fi
 
     doctor_check_cmd jsonschema "jsonschema (optional)" 0 || true
@@ -399,11 +403,42 @@ schedule_uses_claude() {
     return 1
 }
 
+schedule_uses_codex() {
+    case "$LOOPER_ITER_SCHEDULE" in
+        codex)
+            return 0
+            ;;
+        odd-even)
+            if [ "$LOOPER_ITER_ODD_AGENT" = "codex" ] || [ "$LOOPER_ITER_EVEN_AGENT" = "codex" ]; then
+                return 0
+            fi
+            ;;
+        round-robin)
+            case ",$LOOPER_ITER_RR_AGENTS," in
+                *,codex,*)
+                    return 0
+                    ;;
+            esac
+            ;;
+    esac
+    return 1
+}
+
 should_use_claude() {
     if [ "$LOOPER_REPAIR_AGENT" = "claude" ]; then
         return 0
     fi
     schedule_uses_claude
+}
+
+should_use_codex() {
+    if [ "$LOOPER_REPAIR_AGENT" = "codex" ]; then
+        return 0
+    fi
+    if [ "$LOOPER_REVIEW_AGENT" = "codex" ]; then
+        return 0
+    fi
+    schedule_uses_codex
 }
 
 parse_args() {
@@ -1963,10 +1998,16 @@ main() {
     validate_agent "$LOOPER_REVIEW_AGENT"
     validate_iter_schedule
 
-    require_cmd "$CODEX_BIN"
+    if should_use_codex; then
+        require_cmd "$CODEX_BIN"
+    else
+        echo "Warning: codex not found and not needed for current configuration." >&2
+    fi
     require_cmd jq
     if should_use_claude; then
         require_cmd "$CLAUDE_BIN"
+    else
+        echo "Warning: claude not found and not needed for current configuration." >&2
     fi
 
     CODEX_FLAGS=(
