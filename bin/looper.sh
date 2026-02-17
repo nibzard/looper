@@ -787,6 +787,15 @@ progress_line() {
         result|final|done)
             echo "Result: done"
             ;;
+        error|turn.failed)
+            local err_msg
+            err_msg=$(echo "$line" | jq -r '.message // .error.message // .error // empty' 2>/dev/null)
+            if [ -n "$err_msg" ]; then
+                echo "Error: $(shorten "$err_msg" 160)"
+            else
+                echo "Error: agent run failed"
+            fi
+            ;;
     esac
 }
 
@@ -1618,6 +1627,11 @@ handle_last_message() {
         return 0
     fi
 
+    if [ ! -s "$LAST_MESSAGE_FILE" ]; then
+        echo "Warning: last message file is empty (agent produced no summary): $LAST_MESSAGE_FILE"
+        return 0
+    fi
+
     if ! jq -e . "$LAST_MESSAGE_FILE" >/dev/null 2>&1; then
         echo "Warning: last message is not valid JSON: $LAST_MESSAGE_FILE"
         return 0
@@ -1659,6 +1673,26 @@ summary_matches_selected() {
 
     if [ "$summary_id" != "$expected_id" ]; then
         echo "Warning: summary task_id '$summary_id' does not match selected '$expected_id'." >&2
+        return 1
+    fi
+
+    return 0
+}
+
+summary_has_actionable_task_result() {
+    if [ -z "$LAST_MESSAGE_FILE" ] || [ ! -f "$LAST_MESSAGE_FILE" ] || [ ! -s "$LAST_MESSAGE_FILE" ]; then
+        return 1
+    fi
+
+    if ! jq -e . "$LAST_MESSAGE_FILE" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    local summary_id summary_status
+    summary_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
+    summary_status=$(jq -r '.status // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
+
+    if [ -z "$summary_id" ] || [ "$summary_id" = "null" ] || [ -z "$summary_status" ] || [ "$summary_status" = "skipped" ]; then
         return 1
     fi
 
@@ -2129,10 +2163,10 @@ EOF
         local summary_ok=1
         if ! summary_matches_selected "$selected_task_id"; then
             summary_ok=0
-            # Best-effort: check if the returned task_id exists and apply to it
-            local summary_task_id
-            summary_task_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-            if [ -n "$summary_task_id" ] && [ "$summary_task_id" != "null" ]; then
+            if summary_has_actionable_task_result; then
+                # Best-effort: check if the returned task_id exists and apply to it
+                local summary_task_id
+                summary_task_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
                 local task_exists
                 task_exists=$(jq -r --arg id "$summary_task_id" '.tasks[] | select(.id == $id) | .id' "$TODO_FILE" 2>/dev/null | head -n 1)
                 if [ -n "$task_exists" ]; then
@@ -2152,16 +2186,16 @@ EOF
                     echo "Warning: skipping summary apply due to task_id mismatch and invalid task_id '$summary_task_id'." >&2
                 fi
             else
-                # No valid task_id in summary, revert status
+                # No valid actionable summary returned, revert status.
                 if [ "$status_changed" -eq 1 ]; then
                     local current_status
                     current_status=$(task_status_by_id "$selected_task_id")
                     if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
                         set_task_status "$selected_task_id" "$status_before"
-                        echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before due to task_id mismatch." >&2
+                        echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before because no actionable summary was returned." >&2
                     fi
                 fi
-                echo "Warning: skipping summary apply due to task_id mismatch." >&2
+                echo "Warning: skipping summary apply because no actionable summary was returned." >&2
             fi
         fi
         if [ "$summary_ok" -eq 1 ]; then
