@@ -35,7 +35,7 @@ Core behavior:
 Environment variables:
   MAX_ITERATIONS           Max iterations (default: 50)
   CODEX_MODEL              Model (default: gpt-5.3-codex-spark)
-  CODEX_SMART_MODEL        Smart mode model (default: gpt-5.3-codex)
+  CODEX_SMART_MODEL        Smart mode model (default: gpt-5.4)
   CODEX_REASONING_EFFORT   Model reasoning effort (default: xhigh)
   CODEX_YOLO               Use --yolo (default: 1)
   CODEX_FULL_AUTO          Use --full-auto if not using --yolo (default: 0)
@@ -84,7 +84,7 @@ SCHEMA_FILE="${TODO_FILE%.json}.schema.json"
 
 CODEX_BIN=${CODEX_BIN:-codex}
 CODEX_MODEL=${CODEX_MODEL:-gpt-5.3-codex-spark}
-CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-5.3-codex}
+CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-5.4}
 CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-xhigh}
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}

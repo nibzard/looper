@@ -78,7 +78,7 @@ Optional overrides:
 --repair-agent <codex|claude>
 ```
 
-Use `--smart` (or `-s`) to run Codex with `gpt-5.3-codex` instead of the default `gpt-5.3-codex-spark`.
+Use `--smart` (or `-s`) to run Codex with `CODEX_SMART_MODEL` instead of `CODEX_MODEL`. By default, normal mode uses `gpt-5.3-codex-spark` and smart mode uses `gpt-5.4`.
 
 `--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
 
@@ -164,7 +164,7 @@ Environment variables (defaults in parentheses):
 
 - `MAX_ITERATIONS` (50)
 - `CODEX_MODEL` (gpt-5.3-codex-spark)
-- `CODEX_SMART_MODEL` (gpt-5.3-codex)
+- `CODEX_SMART_MODEL` (gpt-5.4)
 - `CODEX_REASONING_EFFORT` (xhigh)
 - `CODEX_YOLO` (1)
 - `CODEX_FULL_AUTO` (0)
