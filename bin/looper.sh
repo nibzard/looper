@@ -83,9 +83,10 @@ TODO_FILE=${TODO_FILE:-to-do.json}
 SCHEMA_FILE="${TODO_FILE%.json}.schema.json"
 
 CODEX_BIN=${CODEX_BIN:-codex}
-CODEX_MODEL=${CODEX_MODEL:-gpt-5.3-codex-spark}
+CODEX_MODEL=${CODEX_MODEL:-gpt-5.4}
 CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-5.4}
-CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-xhigh}
+CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-medium}
+CODEX_SMART_REASONING_EFFORT=${CODEX_SMART_REASONING_EFFORT:-xhigh}
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}
 LOOP_DELAY_SECONDS=${LOOP_DELAY_SECONDS:-0}
@@ -488,6 +489,7 @@ parse_args() {
                 ;;
             -s|--smart)
                 CODEX_MODEL="$CODEX_SMART_MODEL"
+                CODEX_REASONING_EFFORT="$CODEX_SMART_REASONING_EFFORT"
                 shift
                 ;;
             --repair-agent)
