@@ -34,9 +34,10 @@ Core behavior:
 
 Environment variables:
   MAX_ITERATIONS           Max iterations (default: 50)
-  CODEX_MODEL              Model (default: gpt-5.3-codex-spark)
+  CODEX_MODEL              Model (default: gpt-5.4)
   CODEX_SMART_MODEL        Smart mode model (default: gpt-5.4)
-  CODEX_REASONING_EFFORT   Model reasoning effort (default: xhigh)
+  CODEX_REASONING_EFFORT   Model reasoning effort (default: medium)
+  CODEX_SMART_REASONING_EFFORT  Smart mode reasoning effort (default: xhigh)
   CODEX_YOLO               Use --yolo (default: 1)
   CODEX_FULL_AUTO          Use --full-auto if not using --yolo (default: 0)
   CODEX_PROFILE            Optional codex --profile value
@@ -1895,8 +1896,10 @@ bootstrap_todo() {
 
     write_schema_if_missing
 
-    echo "Bootstrapping $TODO_FILE with $CODEX_BIN..."
-    run_codex "bootstrap" 0 0 0 <<EOF
+    local bootstrap_agent
+    bootstrap_agent=$(select_iter_agent 1)
+    echo "Bootstrapping $TODO_FILE with $bootstrap_agent..."
+    run_with_agent "$bootstrap_agent" "bootstrap" 0 0 0 <<EOF
 Initialize a task backlog for this project.
 
 Rules:
