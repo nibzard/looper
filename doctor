@@ -1,0 +1,247 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "Looper",
+    "root": "."
+  },
+  "source_files": [
+    "AUTONOMOUS-AGENTS.md",
+    "MIGRATION.md",
+    "README.md"
+  ],
+  "tasks": [
+    {
+      "id": "T001",
+      "title": "Create the Go module and command layout",
+      "priority": 1,
+      "status": "doing",
+      "details": "Replace the shell implementation with a Go module. Add the cmd/looper entrypoint and the internal package layout from MIGRATION.md.",
+      "files": [
+        "go.mod",
+        "cmd/looper",
+        "internal"
+      ],
+      "updated_at": "2026-09-11T21:38:08Z"
+    },
+    {
+      "id": "T002",
+      "title": "Implement task file parsing and validation",
+      "priority": 1,
+      "status": "todo",
+      "details": "Implement the internal todo package. Validate the task file with JSON Schema when available and with the required minimal checks as a fallback. Preserve two-space JSON formatting.",
+      "depends_on": [
+        "T001"
+      ],
+      "files": [
+        "internal/todo"
+      ]
+    },
+    {
+      "id": "T003",
+      "title": "Implement deterministic task selection and updates",
+      "priority": 1,
+      "status": "todo",
+      "details": "Select doing tasks first, then todo tasks, then blocked tasks. Sort each group by priority and task ID as specified. Mark the selected task as doing and safely apply summaries.",
+      "depends_on": [
+        "T002"
+      ],
+      "files": [
+        "internal/todo"
+      ]
+    },
+    {
+      "id": "T004",
+      "title": "Implement configuration loading",
+      "priority": 1,
+      "status": "todo",
+      "details": "Load defaults, TOML configuration, environment overrides, and command flags. Support paths, agent settings, loop settings, and output settings.",
+      "depends_on": [
+        "T001"
+      ],
+      "files": [
+        "internal/config"
+      ]
+    },
+    {
+      "id": "T005",
+      "title": "Add internal prompt assets and rendering",
+      "priority": 1,
+      "status": "todo",
+      "details": "Store bootstrap, repair, iteration, and review prompts as internal assets. Render them with strict Go templates and the defined runtime variables. Keep prompts hidden from normal users.",
+      "depends_on": [
+        "T001",
+        "T003",
+        "T004"
+      ],
+      "files": [
+        "internal/prompts",
+        "prompts"
+      ]
+    },
+    {
+      "id": "T006",
+      "title": "Implement Codex and Claude agent runners",
+      "priority": 1,
+      "status": "todo",
+      "details": "Run Codex and Claude as fresh external processes. Build argument arrays safely, apply timeouts, stream output, and expose exit errors clearly.",
+      "depends_on": [
+        "T004"
+      ],
+      "files": [
+        "internal/agents"
+      ]
+    },
+    {
+      "id": "T007",
+      "title": "Parse and validate agent summaries",
+      "priority": 1,
+      "status": "todo",
+      "details": "Parse each agent output format into one summary contract. Validate task ID and status before task-file updates. Skip application when the selected task ID does not match.",
+      "depends_on": [
+        "T003",
+        "T006"
+      ],
+      "files": [
+        "internal/agents",
+        "internal/loop"
+      ]
+    },
+    {
+      "id": "T008",
+      "title": "Implement structured JSONL logging",
+      "priority": 2,
+      "status": "todo",
+      "details": "Write structured JSONL events and a canonical last-message file in the configured per-project log directory. Include progress, tool output, errors, and summaries.",
+      "depends_on": [
+        "T004",
+        "T006"
+      ],
+      "files": [
+        "internal/logging"
+      ]
+    },
+    {
+      "id": "T009",
+      "title": "Implement the loop orchestration state machine",
+      "priority": 1,
+      "status": "todo",
+      "details": "Coordinate validation, selection, prompting, agent execution, summary application, scheduling, retries, and iteration limits. Run a Codex review pass when no tasks remain.",
+      "depends_on": [
+        "T003",
+        "T005",
+        "T007",
+        "T008"
+      ],
+      "files": [
+        "internal/loop"
+      ]
+    },
+    {
+      "id": "T010",
+      "title": "Implement task bootstrap and repair flows",
+      "priority": 2,
+      "status": "todo",
+      "details": "Create a task file from project documents when it is missing. Repair invalid task files through the configured repair agent. Append project-done after an empty review pass.",
+      "depends_on": [
+        "T005",
+        "T009"
+      ],
+      "files": [
+        "internal/loop",
+        "internal/todo"
+      ]
+    },
+    {
+      "id": "T011",
+      "title": "Add CLI commands and user output",
+      "priority": 2,
+      "status": "todo",
+      "details": "Provide run, doctor, tail, ls, and version commands. Add the documented flags, concise progress output, and clear dependency errors.",
+      "depends_on": [
+        "T008",
+        "T009",
+        "T010"
+      ],
+      "files": [
+        "cmd/looper"
+      ]
+    },
+    {
+      "id": "T012",
+      "title": "Implement post-iteration hooks",
+      "priority": 3,
+      "status": "todo",
+      "details": "Invoke an explicitly configured hook after each iteration with the task ID, status, last summary path, and agent label.",
+      "depends_on": [
+        "T009"
+      ],
+      "files": [
+        "internal/hooks"
+      ]
+    },
+    {
+      "id": "T013",
+      "title": "Add unit and golden tests",
+      "priority": 1,
+      "status": "todo",
+      "details": "Test task validation, deterministic selection, summary application, configuration precedence, and prompt rendering. Include malformed input and task ID mismatch cases.",
+      "depends_on": [
+        "T003",
+        "T005",
+        "T007"
+      ],
+      "files": [
+        "internal"
+      ]
+    },
+    {
+      "id": "T014",
+      "title": "Add integration and smoke tests",
+      "priority": 1,
+      "status": "todo",
+      "details": "Use stub agent binaries to test a complete iteration, bootstrap, repair, logging, and review completion. Update the smoke command for the Go executable.",
+      "depends_on": [
+        "T010",
+        "T011",
+        "T013"
+      ],
+      "files": [
+        "scripts",
+        "internal"
+      ]
+    },
+    {
+      "id": "T015",
+      "title": "Update installation, packaging, and documentation",
+      "priority": 2,
+      "status": "todo",
+      "details": "Build and install the Go binary. Update the Makefile, installer scripts, Homebrew formula, and README for the breaking CLI change. Remove obsolete shell-runner packaging only after replacement coverage passes.",
+      "depends_on": [
+        "T011",
+        "T014"
+      ],
+      "files": [
+        "Makefile",
+        "Formula/looper.rb",
+        "README.md",
+        "install.sh",
+        "uninstall.sh"
+      ]
+    },
+    {
+      "id": "T016",
+      "title": "Add the optional observability TUI",
+      "priority": 4,
+      "status": "todo",
+      "details": "Add an optional Bubble Tea interface that reads the existing task state and log stream. Show task statuses, current agent state, log output, and summaries without separate loop logic.",
+      "depends_on": [
+        "T008",
+        "T011"
+      ],
+      "files": [
+        "internal/ui",
+        "cmd/looper"
+      ]
+    }
+  ]
+}
