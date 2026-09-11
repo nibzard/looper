@@ -34,10 +34,10 @@ Core behavior:
 
 Environment variables:
   MAX_ITERATIONS           Max iterations (default: 50)
-  CODEX_MODEL              Model (default: gpt-5.4)
-  CODEX_SMART_MODEL        Smart mode model (default: gpt-5.4)
+  CODEX_MODEL              Model (default: gpt-5.6-terra)
+  CODEX_SMART_MODEL        Smart mode model (default: gpt-6-astra)
   CODEX_REASONING_EFFORT   Model reasoning effort (default: medium)
-  CODEX_SMART_REASONING_EFFORT  Smart mode reasoning effort (default: xhigh)
+  CODEX_SMART_REASONING_EFFORT  Smart mode reasoning effort (default: high)
   CODEX_YOLO               Use --yolo (default: 1)
   CODEX_FULL_AUTO          Use --full-auto if not using --yolo (default: 0)
   CODEX_PROFILE            Optional codex --profile value
@@ -58,7 +58,12 @@ Environment variables:
   LOOPER_GIT_INIT          Run git init if missing (default: 1)
   LOOPER_HOOK              Optional hook called after each iteration:
                            <hook> <task_id> <status> <last_message_json> <label>
-  LOOP_DELAY_SECONDS       Sleep between iterations (default: 0)
+  LOOP_DELAY_SECONDS       Sleep between iterations (default: 90)
+  LOOPER_RATE_LIMIT_RETRY  Retry on 429 rate limit errors (default: 1)
+  LOOPER_RATE_LIMIT_MAX    Max retries per iteration on 429 (default: 12)
+  LOOPER_RATE_LIMIT_DELAY  Initial backoff delay in seconds (default: 60)
+  LOOPER_RATE_LIMIT_CAP    Max backoff delay cap in seconds (default: 600)
+  LOOPER_SUMMARY_RETRY_MAX Max retries when agent omits required JSON summary (default: 1)
 
 Notes:
   - If CODEX_YOLO=1, --full-auto is ignored.
@@ -84,13 +89,18 @@ TODO_FILE=${TODO_FILE:-to-do.json}
 SCHEMA_FILE="${TODO_FILE%.json}.schema.json"
 
 CODEX_BIN=${CODEX_BIN:-codex}
-CODEX_MODEL=${CODEX_MODEL:-gpt-5.4}
-CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-5.4}
+CODEX_MODEL=${CODEX_MODEL:-gpt-5.6-terra}
+CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-6-astra}
 CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-medium}
-CODEX_SMART_REASONING_EFFORT=${CODEX_SMART_REASONING_EFFORT:-xhigh}
+CODEX_SMART_REASONING_EFFORT=${CODEX_SMART_REASONING_EFFORT:-high}
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}
-LOOP_DELAY_SECONDS=${LOOP_DELAY_SECONDS:-0}
+LOOP_DELAY_SECONDS=${LOOP_DELAY_SECONDS:-90}
+LOOPER_RATE_LIMIT_RETRY=${LOOPER_RATE_LIMIT_RETRY:-1}
+LOOPER_RATE_LIMIT_MAX=${LOOPER_RATE_LIMIT_MAX:-12}
+LOOPER_RATE_LIMIT_DELAY=${LOOPER_RATE_LIMIT_DELAY:-60}
+LOOPER_RATE_LIMIT_CAP=${LOOPER_RATE_LIMIT_CAP:-600}
+LOOPER_SUMMARY_RETRY_MAX=${LOOPER_SUMMARY_RETRY_MAX:-1}
 WORKDIR=$(pwd)
 LOOPER_BASE_DIR=${LOOPER_BASE_DIR:-${LOOPER_LOG_DIR:-"$HOME/.looper"}}
 LOOPER_LOG_DIR=""
@@ -138,6 +148,7 @@ usage() {
     echo "Env: LOOPER_ITER_EVEN_AGENT, LOOPER_ITER_RR_AGENTS, LOOPER_REPAIR_AGENT, LOOPER_REVIEW_AGENT"
     echo "Env: LOOPER_INTERLEAVE"
     echo "Env: LOOPER_APPLY_SUMMARY, LOOPER_GIT_INIT, LOOPER_HOOK, LOOP_DELAY_SECONDS"
+    echo "Env: LOOPER_RATE_LIMIT_RETRY, LOOPER_RATE_LIMIT_MAX, LOOPER_RATE_LIMIT_DELAY, LOOPER_RATE_LIMIT_CAP"
 }
 
 require_cmd() {
@@ -195,7 +206,10 @@ doctor_check_files() {
         fi
     fi
 
-    return "$ok"
+    if [ "$ok" -eq 1 ]; then
+        return 0
+    fi
+    return 1
 }
 
 run_doctor() {
@@ -862,6 +876,16 @@ annotate_line() {
         '{type:"looper.raw", looper_run_id:$run_id, looper_label:$label, looper_iteration:$iter, raw:$raw}'
 }
 
+# Rate-limit detection: checks the last result in the JSONL log for 429 patterns.
+is_rate_limited() {
+    [ "$LOOPER_RATE_LIMIT_RETRY" -eq 1 ] || return 1
+    [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ] || return 1
+    local last_result
+    last_result=$(grep '"type":"result"' "$LOG_FILE" | tail -1)
+    [ -n "$last_result" ] || return 1
+    echo "$last_result" | grep -qiE '(429|"rate.?limit"|too.?many.?requests|API Error: 429)'
+}
+
 stream_with_annotation() {
     local label="$1"
     local iteration="$2"
@@ -1043,7 +1067,7 @@ set_task_status() {
 recover_task_states() {
     local doing_tasks doing_count tmp now
     doing_tasks=$(jq -r '.tasks[] | select(.status == "doing") | .id' "$TODO_FILE" 2>/dev/null)
-    doing_count=$(echo "$doing_tasks" | grep -c . 2>/dev/null || echo "0")
+    doing_count=$(jq '[.tasks[] | select(.status == "doing")] | length' "$TODO_FILE" 2>/dev/null)
 
     if [ "$doing_count" -gt 0 ]; then
         now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -1068,7 +1092,7 @@ recover_task_states() {
         fi
     fi
 
-    return "$doing_count"
+    return 0
 }
 
 current_task_line() {
@@ -1474,7 +1498,9 @@ extract_claude_stream_text() {
               else
                 ""
               end;
-            if .type == "message" and .message and .message.content then
+            if .type == "result" and (.result // "") != "" then
+              .result
+            elif .type == "message" and .message and .message.content then
               join_text(.message.content)
             elif .message and .message.content then
               join_text(.message.content)
@@ -1498,6 +1524,14 @@ extract_claude_stream_text() {
               .delta.text
             elif .type == "content_block_start" and .content_block and (.content_block.text // "") != "" then
               .content_block.text
+            elif .type == "stream_event" and .event then
+              if .event.type == "content_block_delta" and (.event.delta.text // "") != "" then
+                .event.delta.text
+              elif .event.type == "content_block_start" and .event.content_block and (.event.content_block.text // "") != "" then
+                .event.content_block.text
+              else
+                empty
+              end
             else
               empty
             end
@@ -1533,6 +1567,54 @@ append_claude_message_log() {
         --argjson iter "$iteration" \
         '{type:"assistant_message", message:{content:[{type:"text", text:$text}]}, looper_run_id:$run_id, looper_label:$label, looper_iteration:$iter}' \
         >> "$LOG_FILE"
+}
+
+# Parse --output-format json (single JSON object) output from claude.
+# Extracts the final text result and looks for the task summary JSON inside it.
+write_last_message_from_claude_json_output() {
+    local output_file="$1"
+    local label="${2:-}"
+    local iteration="${3:-0}"
+
+    if [ -z "$LAST_MESSAGE_FILE" ]; then
+        return 0
+    fi
+
+    # The output may contain stderr lines before the JSON object.
+    # Find the first line that is valid JSON and looks like a claude response.
+    local text=""
+    local line
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        if printf "%s" "$line" | jq -e '.result // .message // .output_text' >/dev/null 2>&1; then
+            text=$(printf "%s" "$line" | jq -r '
+                if .result then .result
+                elif .message and .message.content then
+                    (.message.content | map(select(.type == "text") | .text) | join(""))
+                elif .output_text then .output_text
+                elif .text then .text
+                else ""
+                end
+            ' 2>/dev/null)
+            break
+        fi
+    done < "$output_file"
+
+    if [ -n "$text" ]; then
+        local normalized summary_json
+        normalized=$(strip_json_fence "$text")
+        if summary_json=$(extract_json_from_text "$normalized"); then
+            printf "%s\n" "$summary_json" > "$LAST_MESSAGE_FILE"
+        else
+            jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+        fi
+        append_claude_message_log "$label" "$iteration" "$normalized"
+    else
+        local raw_output
+        raw_output=$(cat "$output_file")
+        jq -n --arg raw "$raw_output" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
+        append_claude_message_log "$label" "$iteration" "$raw_output"
+    fi
 }
 
 write_last_message_from_claude_output() {
@@ -1586,22 +1668,41 @@ run_claude() {
     prompt=$(cat)
 
     prepare_run_files "$label" "$capture_last"
-    local cmd=("$CLAUDE_BIN" -p "$prompt" "${CLAUDE_FLAGS[@]}")
+
+    # Use --output-format json (single object) instead of stream-json for
+    # reliable extraction. Build a local flags array without the streaming flags.
+    local claude_run_flags=()
+    for f in "${CLAUDE_FLAGS[@]}"; do
+        case "$f" in
+            --output-format|--include-partial-messages|--verbose) ;;
+            *) claude_run_flags+=("$f") ;;
+        esac
+    done
+    claude_run_flags+=(--output-format json)
+
+    local cmd=(env -u CLAUDECODE "$CLAUDE_BIN" -p "$prompt" "${claude_run_flags[@]}")
     local output_file
     output_file=$(mktemp)
     local exit_status
 
-    if [ "$CODEX_JSON_LOG" -eq 1 ]; then
-        "${cmd[@]}" 2>&1 | tee "$output_file" | stream_with_annotation "$label" "$iteration" 0
-        exit_status=${PIPESTATUS[0]}
-        write_last_message_from_claude_output "$output_file" "$label" "$iteration"
-        rm -f "$output_file"
-        return "$exit_status"
-    fi
-
+    # Capture output directly to file (no tee/stream pipeline) to avoid
+    # intermittent data loss with large JSON responses.
     "${cmd[@]}" >"$output_file" 2>&1
     exit_status=$?
-    write_last_message_from_claude_output "$output_file" "$label" "$iteration"
+
+    # Annotate output to JSONL log if enabled
+    if [ "$CODEX_JSON_LOG" -eq 1 ] && [ -n "${LOG_FILE:-}" ]; then
+        local line
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local annotated
+            annotated=$(annotate_line "$line" "$label" "$iteration")
+            mkdir -p "$(dirname "$LOG_FILE")"
+            echo "$annotated" >> "$LOG_FILE"
+        done < "$output_file"
+    fi
+
+    write_last_message_from_claude_json_output "$output_file" "$label" "$iteration"
     rm -f "$output_file"
     return "$exit_status"
 }
@@ -2006,13 +2107,13 @@ main() {
     if should_use_codex; then
         require_cmd "$CODEX_BIN"
     else
-        echo "Warning: codex not found and not needed for current configuration." >&2
+        echo "Warning: codex not used in current configuration." >&2
     fi
     require_cmd jq
     if should_use_claude; then
         require_cmd "$CLAUDE_BIN"
     else
-        echo "Warning: claude not found and not needed for current configuration." >&2
+        echo "Warning: claude not used in current configuration." >&2
     fi
 
     CODEX_FLAGS=(
@@ -2171,7 +2272,9 @@ main() {
         iter_agent=$(select_iter_agent "$iteration")
         echo "Iteration agent: $iter_agent"
 
-        run_with_agent "$iter_agent" "iter-$iteration" 1 "$iteration" "$CAPTURE_LAST_MESSAGE" <<EOF
+        local rate_limit_attempt=0
+        local rate_limit_prompt
+        rate_limit_prompt=$(cat <<EOF
 You are running in a deterministic RALF loop with fresh context each run.
 Just for fun we are naming you Ralf (in honour of Ralph Wiggum German cousin Ralf).
 
@@ -2199,11 +2302,37 @@ Return only a JSON object:
 {"task_id":"T123","status":"done","summary":"...","files":["..."],"blockers":[]}
 If no task was executed, use status "skipped" and task_id null.
 EOF
+)
+        while true; do
+            run_with_agent "$iter_agent" "iter-$iteration" 1 "$iteration" "$CAPTURE_LAST_MESSAGE" <<< "$rate_limit_prompt"
 
-        exit_status=$?
-        if [ "$exit_status" -ne 0 ]; then
+            exit_status=$?
+            if [ "$exit_status" -eq 0 ]; then
+                break
+            fi
+
+            if is_rate_limited; then
+                rate_limit_attempt=$((rate_limit_attempt + 1))
+                if [ "$rate_limit_attempt" -ge "$LOOPER_RATE_LIMIT_MAX" ]; then
+                    echo "Rate limit: max retries ($LOOPER_RATE_LIMIT_MAX) reached. Moving to next iteration." >&2
+                    break
+                fi
+                local delay=$((LOOPER_RATE_LIMIT_DELAY * (2 ** (rate_limit_attempt - 1))))
+                if [ "$delay" -gt "$LOOPER_RATE_LIMIT_CAP" ]; then
+                    delay=$LOOPER_RATE_LIMIT_CAP
+                fi
+                # Add ±15% jitter to avoid synchronized retries
+                local jitter=$(( delay * 15 / 100 ))
+                delay=$(( delay + RANDOM % (jitter + 1) - jitter / 2 ))
+                [ "$delay" -lt 1 ] && delay=1
+                echo "Rate limit: 429 detected (attempt $rate_limit_attempt/$LOOPER_RATE_LIMIT_MAX). Retrying in ${delay}s..." >&2
+                sleep "$delay"
+                continue
+            fi
+
             echo "Iteration failed with exit code $exit_status."
-        fi
+            break
+        done
 
         handle_last_message "iter-$iteration"
         local summary_ok=1
@@ -2232,16 +2361,53 @@ EOF
                     echo "Warning: skipping summary apply due to task_id mismatch and invalid task_id '$summary_task_id'." >&2
                 fi
             else
-                # No valid actionable summary returned, revert status.
-                if [ "$status_changed" -eq 1 ]; then
-                    local current_status
-                    current_status=$(task_status_by_id "$selected_task_id")
-                    if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
-                        set_task_status "$selected_task_id" "$status_before"
-                        echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before because no actionable summary was returned." >&2
+                # No valid actionable summary returned. Retry with a focused prompt before reverting.
+                local summary_retry=0
+                while [ "$summary_retry" -lt "$LOOPER_SUMMARY_RETRY_MAX" ]; do
+                    summary_retry=$((summary_retry + 1))
+                    echo "Summary retry: asking agent for JSON (attempt $summary_retry/$LOOPER_SUMMARY_RETRY_MAX)..." >&2
+                    local retry_prompt
+                    retry_prompt=$(cat <<RETRYEOF
+Your previous response for task $selected_task_id did not include the required JSON summary.
+You MUST respond with ONLY a single JSON object — no prose, no markdown, no explanation:
+{"task_id":"$selected_task_id","status":"done","summary":"<brief description>","files":[],"blockers":[]}
+Valid status values: "done", "blocked", or "skipped".
+Output ONLY the JSON.
+RETRYEOF
+)
+                    run_with_agent "$iter_agent" "retry-$iteration-$summary_retry" 1 "$iteration" "$CAPTURE_LAST_MESSAGE" <<< "$retry_prompt"
+
+                    handle_last_message "retry-$iteration-$summary_retry"
+
+                    if summary_matches_selected "$selected_task_id"; then
+                        summary_ok=1
+                        echo "Summary retry succeeded on attempt $summary_retry." >&2
+                        break
+                    elif summary_has_actionable_task_result; then
+                        local rtask_id
+                        rtask_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
+                        local rexists
+                        rexists=$(jq -r --arg id "$rtask_id" '.tasks[] | select(.id == $id) | .id' "$TODO_FILE" 2>/dev/null | head -n 1)
+                        if [ -n "$rexists" ]; then
+                            summary_ok=2
+                            echo "Summary retry produced valid task '$rtask_id' on attempt $summary_retry." >&2
+                            break
+                        fi
                     fi
+                done
+
+                if [ "$summary_ok" -eq 0 ]; then
+                    # Still no valid summary after retries, revert status.
+                    if [ "$status_changed" -eq 1 ]; then
+                        local current_status
+                        current_status=$(task_status_by_id "$selected_task_id")
+                        if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
+                            set_task_status "$selected_task_id" "$status_before"
+                            echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before because no actionable summary was returned." >&2
+                        fi
+                    fi
+                    echo "Warning: skipping summary apply because no actionable summary was returned after $LOOPER_SUMMARY_RETRY_MAX retry/retries." >&2
                 fi
-                echo "Warning: skipping summary apply because no actionable summary was returned." >&2
             fi
         fi
         if [ "$summary_ok" -eq 1 ]; then
@@ -2251,7 +2417,12 @@ EOF
         ensure_valid_todo
 
         if [ "$LOOP_DELAY_SECONDS" -gt 0 ]; then
-            sleep "$LOOP_DELAY_SECONDS"
+            # Add ±20% jitter so multiple instances don't synchronize
+            local jitter=$(( LOOP_DELAY_SECONDS / 5 ))
+            local jittered=$(( LOOP_DELAY_SECONDS + RANDOM % (jitter + 1) - jitter / 2 ))
+            [ "$jittered" -lt 1 ] && jittered=1
+            echo "Sleeping ${jittered}s (base ${LOOP_DELAY_SECONDS}s ± jitter)..." >&2
+            sleep "$jittered"
         fi
     done
 }

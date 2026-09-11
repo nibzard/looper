@@ -6,6 +6,10 @@ TMP_DIR=$(mktemp -d)
 PROJECT_DIR="$TMP_DIR/project"
 STUB_BIN="$TMP_DIR/bin"
 RUN_LOG="$TMP_DIR/run.log"
+SMART_PROJECT_DIR="$TMP_DIR/smart-project"
+SMART_RUN_LOG="$TMP_DIR/smart-run.log"
+NORMAL_ARGS_LOG="$TMP_DIR/normal-args.log"
+SMART_ARGS_LOG="$TMP_DIR/smart-args.log"
 
 cleanup() {
     rm -rf "$TMP_DIR"
@@ -31,6 +35,11 @@ set -euo pipefail
 last_message=""
 workdir=""
 json_output=0
+
+if [ -n "${ARGS_LOG:-}" ]; then
+    printf '%q ' "$@" >> "$ARGS_LOG"
+    printf '\n' >> "$ARGS_LOG"
+fi
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -104,19 +113,52 @@ cat > "$PROJECT_DIR/to-do.json" <<'EOF'
 }
 EOF
 
+cp -R "$PROJECT_DIR" "$SMART_PROJECT_DIR"
+
+(
+    cd "$PROJECT_DIR"
+    PATH="$STUB_BIN:$PATH" \
+        ARGS_LOG="$NORMAL_ARGS_LOG" \
+        CODEX_BIN=codex \
+        CODEX_JSON_LOG=0 \
+        LOOPER_GIT_INIT=0 \
+        LOOP_DELAY_SECONDS=0 \
+        MAX_ITERATIONS=1 \
+        "$ROOT_DIR/bin/looper.sh" to-do.json 2>&1 | tee "$RUN_LOG"
+)
+
+log_contains "Task: T2" "$RUN_LOG"
+log_contains "exec -m gpt-5.6-terra -c model_reasoning_effort=medium" "$NORMAL_ARGS_LOG"
+test -f "$PROJECT_DIR/README.md"
+test -f "$PROJECT_DIR/to-do.schema.json"
+jq -e '.tasks[] | select(.id == "T2" and .status == "done")' "$PROJECT_DIR/to-do.json" >/dev/null
+if log_contains "integer expression expected" "$RUN_LOG"; then
+    exit 1
+fi
+if log_contains "numeric argument required" "$RUN_LOG"; then
+    exit 1
+fi
+
+(
+    cd "$SMART_PROJECT_DIR"
+    PATH="$STUB_BIN:$PATH" \
+        ARGS_LOG="$SMART_ARGS_LOG" \
+        CODEX_BIN=codex \
+        CODEX_JSON_LOG=0 \
+        LOOPER_GIT_INIT=0 \
+        LOOP_DELAY_SECONDS=0 \
+        MAX_ITERATIONS=1 \
+        "$ROOT_DIR/bin/looper.sh" --smart to-do.json 2>&1 | tee "$SMART_RUN_LOG"
+)
+
+log_contains "exec -m gpt-6-astra -c model_reasoning_effort=high" "$SMART_ARGS_LOG"
+
 (
     cd "$PROJECT_DIR"
     PATH="$STUB_BIN:$PATH" \
         CODEX_BIN=codex \
-        CODEX_JSON_LOG=0 \
         LOOPER_GIT_INIT=0 \
-        MAX_ITERATIONS=1 \
-        "$ROOT_DIR/bin/looper.sh" to-do.json | tee "$RUN_LOG"
+        "$ROOT_DIR/bin/looper.sh" --doctor to-do.json
 )
-
-log_contains "Task: T2" "$RUN_LOG"
-test -f "$PROJECT_DIR/README.md"
-test -f "$PROJECT_DIR/to-do.schema.json"
-jq -e '.tasks[] | select(.id == "T2" and .status == "done")' "$PROJECT_DIR/to-do.json" >/dev/null
 
 echo "Smoke test passed."

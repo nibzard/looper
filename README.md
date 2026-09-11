@@ -78,7 +78,9 @@ Optional overrides:
 --repair-agent <codex|claude>
 ```
 
-Use `--smart` (or `-s`) to run Codex with `CODEX_SMART_MODEL` instead of `CODEX_MODEL`. By default, normal mode uses `gpt-5.3-codex-spark` and smart mode uses `gpt-5.4`.
+Use `--smart` (or `-s`) to select the smart Codex configuration.
+Normal mode uses `gpt-5.6-terra` with `medium` reasoning effort.
+Smart mode uses `gpt-6-astra` with `high` reasoning effort.
 
 `--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
 
@@ -163,9 +165,10 @@ The hook receives:
 Environment variables (defaults in parentheses):
 
 - `MAX_ITERATIONS` (50)
-- `CODEX_MODEL` (gpt-5.3-codex-spark)
-- `CODEX_SMART_MODEL` (gpt-5.4)
-- `CODEX_REASONING_EFFORT` (xhigh)
+- `CODEX_MODEL` (gpt-5.6-terra)
+- `CODEX_SMART_MODEL` (gpt-6-astra)
+- `CODEX_REASONING_EFFORT` (medium)
+- `CODEX_SMART_REASONING_EFFORT` (high)
 - `CODEX_YOLO` (1)
 - `CODEX_FULL_AUTO` (0)
 - `CODEX_PROFILE` (empty)
