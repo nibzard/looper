@@ -18,12 +18,12 @@ against `to-do.schema.json`, and repairs it if needed.
 - Bootstraps `to-do.json` and `to-do.schema.json` if missing.
 - Validates `to-do.json` (jsonschema if available, jq fallback).
 - Repairs invalid task files via Codex or `claude`.
-- Runs one task per iteration (doing > todo > blocked).
+- Runs one task per iteration (doing > runnable todo).
 - When tasks are exhausted, runs a review pass; it must append a final
   `project-done` marker task if no new work is found.
-- Supports interleaving `claude` for iterations while keeping Codex for review.
-- Enforces JSON output from the model and logs JSONL per run.
-- Optionally applies model summaries back into `to-do.json`.
+- Supports interleaving `claude` for iterations and a configurable review agent.
+- Enforces structured summaries and logs JSONL per run.
+- Applies validated model summaries back into `to-do.json`.
 
 ## Install
 ```bash
@@ -50,6 +50,7 @@ looper-install --skip-bin
 ## Usage
 ```bash
 looper.sh [to-do.json]
+looper.sh run [to-do.json]
 looper.sh --ls todo [to-do.json]
 looper.sh --tail --follow
 looper.sh --doctor [to-do.json]
@@ -76,11 +77,12 @@ Optional overrides:
 --even-agent <codex|claude>
 --rr-agents <comma-separated list>
 --repair-agent <codex|claude>
+--review-agent <codex|claude>
 ```
 
 Use `--smart` (or `-s`) to select the smart Codex configuration.
-Normal mode uses `gpt-5.6-terra` with `medium` reasoning effort.
-Smart mode uses `gpt-6-astra` with `high` reasoning effort.
+Normal mode uses `gpt-6-sol` with `max` reasoning effort.
+Smart mode uses `gpt-6-astra` with `max` reasoning effort.
 
 `--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
 
@@ -112,15 +114,19 @@ looper.sh --iter-schedule round-robin --rr-agents claude,claude,codex
 # Pattern: claude → claude → codex → claude → claude → codex → ...
 ```
 
-**Note:** The final review pass always uses Codex, regardless of iteration schedule.
+The final review pass uses Codex by default. Set `--review-agent claude` to use Claude.
 
 ## Task File (to-do.json)
 `to-do.json` is the source of truth for the loop and must match
 `to-do.schema.json`. The loop chooses a single task each iteration:
 
-1) Any task in `doing` (lowest id wins)
-2) Otherwise, highest priority `todo` (priority 1 is highest)
-3) Otherwise, highest priority `blocked`
+1. Any task in `doing` (lowest id wins).
+2. Otherwise, the highest priority `todo` task whose `depends_on` tasks are done.
+
+Looper does not retry blocked tasks automatically. If no task can run, it exits
+with code 2. Resolve a blocker and change its status to `todo` to retry it.
+Task IDs must be unique. Each dependency must name another task in the file.
+Put a clear acceptance criterion in each task's `details` field.
 
 Minimal example:
 ```json
@@ -165,16 +171,17 @@ The hook receives:
 Environment variables (defaults in parentheses):
 
 - `MAX_ITERATIONS` (50)
-- `CODEX_MODEL` (gpt-5.6-terra)
+- `CODEX_MODEL` (gpt-6-sol)
 - `CODEX_SMART_MODEL` (gpt-6-astra)
-- `CODEX_REASONING_EFFORT` (medium)
-- `CODEX_SMART_REASONING_EFFORT` (high)
+- `CODEX_REASONING_EFFORT` (max)
+- `CODEX_SMART_REASONING_EFFORT` (max)
 - `CODEX_YOLO` (1)
 - `CODEX_FULL_AUTO` (0)
 - `CODEX_PROFILE` (empty)
 - `CODEX_JSON_LOG` (1)
 - `CODEX_PROGRESS` (1)
-- `CODEX_ENFORCE_OUTPUT_SCHEMA` (0)
+- `CODEX_ENFORCE_OUTPUT_SCHEMA` (1)
+- `LOOPER_VERIFY_COMMAND` (empty)
 - `CLAUDE_BIN` (claude)
 - `CLAUDE_MODEL` (empty)
 - `LOOPER_ITER_SCHEDULE` (codex)
@@ -182,12 +189,22 @@ Environment variables (defaults in parentheses):
 - `LOOPER_ITER_EVEN_AGENT` (claude)
 - `LOOPER_ITER_RR_AGENTS` (claude,codex)
 - `LOOPER_REPAIR_AGENT` (codex)
+- `LOOPER_REVIEW_AGENT` (codex)
 - `LOOPER_INTERLEAVE` (0)
 - `LOOPER_BASE_DIR` (~/.looper)
-- `LOOPER_APPLY_SUMMARY` (1)
+- `LOOPER_APPLY_SUMMARY` (1; other values are not supported)
 - `LOOPER_GIT_INIT` (1)
 - `LOOPER_HOOK` (empty)
-- `LOOP_DELAY_SECONDS` (0)
+- `LOOP_DELAY_SECONDS` (90)
+
+Set `LOOPER_VERIFY_COMMAND='make test'` to check a completed task before Looper
+marks it done. Use a command that works in the target project. Looper runs it
+from the project directory.
+
+An iteration stops with an error if the agent fails, returns an invalid summary,
+or fails verification. Looper restores the task file to its prior state. Code
+edits and commits remain for inspection. A failed review never marks the
+project done. Reaching the iteration limit with open tasks returns exit code 2.
 
 ## Git Behavior
 If the project is not a git repo and `LOOPER_GIT_INIT=1`, Looper runs `git init`.

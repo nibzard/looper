@@ -13,3 +13,4 @@ smoke:
 	./scripts/smoke.sh
 
 test: smoke
+	./scripts/regression.sh

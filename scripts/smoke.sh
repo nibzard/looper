@@ -115,6 +115,7 @@ EOF
 
 cp -R "$PROJECT_DIR" "$SMART_PROJECT_DIR"
 
+set +e
 (
     cd "$PROJECT_DIR"
     PATH="$STUB_BIN:$PATH" \
@@ -126,9 +127,12 @@ cp -R "$PROJECT_DIR" "$SMART_PROJECT_DIR"
         MAX_ITERATIONS=1 \
         "$ROOT_DIR/bin/looper.sh" to-do.json 2>&1 | tee "$RUN_LOG"
 )
+normal_status=$?
+set -e
+test "$normal_status" -eq 2
 
 log_contains "Task: T2" "$RUN_LOG"
-log_contains "exec -m gpt-5.6-terra -c model_reasoning_effort=medium" "$NORMAL_ARGS_LOG"
+log_contains "exec -m gpt-6-sol -c model_reasoning_effort=max" "$NORMAL_ARGS_LOG"
 test -f "$PROJECT_DIR/README.md"
 test -f "$PROJECT_DIR/to-do.schema.json"
 jq -e '.tasks[] | select(.id == "T2" and .status == "done")' "$PROJECT_DIR/to-do.json" >/dev/null
@@ -138,7 +142,11 @@ fi
 if log_contains "numeric argument required" "$RUN_LOG"; then
     exit 1
 fi
+if log_contains "claude not used in current configuration" "$RUN_LOG"; then
+    exit 1
+fi
 
+set +e
 (
     cd "$SMART_PROJECT_DIR"
     PATH="$STUB_BIN:$PATH" \
@@ -150,8 +158,11 @@ fi
         MAX_ITERATIONS=1 \
         "$ROOT_DIR/bin/looper.sh" --smart to-do.json 2>&1 | tee "$SMART_RUN_LOG"
 )
+smart_status=$?
+set -e
+test "$smart_status" -eq 2
 
-log_contains "exec -m gpt-6-astra -c model_reasoning_effort=high" "$SMART_ARGS_LOG"
+log_contains "exec -m gpt-6-astra -c model_reasoning_effort=max" "$SMART_ARGS_LOG"
 
 (
     cd "$PROJECT_DIR"
