@@ -1,0 +1,1 @@
+Research favored a smaller deterministic controller over a Go rewrite. This commit keeps the Bash runner while fixing blocked-task selection and adding structured summaries, a verification gate, and regression coverage. A failed iteration restores the task file but leaves code edits and commits for inspection. The paid comparison pilot remains unrun.
