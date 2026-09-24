@@ -7,7 +7,7 @@ Purpose:
   Run Codex CLI in a deterministic, autonomous loop that processes one task
   per iteration from a JSON backlog (to-do.json), with fresh context each run.
   The loop bootstraps tasks when missing, validates schema, repairs invalid
-  task files, logs JSONL output, and optionally applies deterministic status
+  task files, logs JSONL output, and applies deterministic status
   updates based on the model's final JSON summary.
 
 Usage:
@@ -34,16 +34,17 @@ Core behavior:
 
 Environment variables:
   MAX_ITERATIONS           Max iterations (default: 50)
-  CODEX_MODEL              Model (default: gpt-5.6-terra)
+  CODEX_MODEL              Model (default: gpt-6-sol)
   CODEX_SMART_MODEL        Smart mode model (default: gpt-6-astra)
-  CODEX_REASONING_EFFORT   Model reasoning effort (default: medium)
-  CODEX_SMART_REASONING_EFFORT  Smart mode reasoning effort (default: high)
+  CODEX_REASONING_EFFORT   Model reasoning effort (default: max)
+  CODEX_SMART_REASONING_EFFORT  Smart mode reasoning effort (default: max)
   CODEX_YOLO               Use --yolo (default: 1)
   CODEX_FULL_AUTO          Use --full-auto if not using --yolo (default: 0)
   CODEX_PROFILE            Optional codex --profile value
   CODEX_JSON_LOG           Enable JSONL logging (default: 1)
   CODEX_PROGRESS           Print compact progress (default: 1)
-  CODEX_ENFORCE_OUTPUT_SCHEMA  Validate final summary via JSON Schema (default: 0)
+  CODEX_ENFORCE_OUTPUT_SCHEMA  Validate final summary via JSON Schema (default: 1)
+  LOOPER_VERIFY_COMMAND    Optional command that gates a done status
   CLAUDE_BIN                claude CLI binary (default: claude)
   CLAUDE_MODEL              claude model (default: empty)
   LOOPER_ITER_SCHEDULE     Iteration schedule (codex|claude|odd-even|round-robin)
@@ -54,7 +55,7 @@ Environment variables:
   LOOPER_REVIEW_AGENT      Review agent (codex|claude; default: codex)
   LOOPER_INTERLEAVE        Enable interleave defaults (default: 0)
   LOOPER_BASE_DIR          Base log dir (default: ~/.looper)
-  LOOPER_APPLY_SUMMARY     Deterministically apply summary to to-do.json (default: 1)
+  LOOPER_APPLY_SUMMARY     Must be 1; Looper owns task status
   LOOPER_GIT_INIT          Run git init if missing (default: 1)
   LOOPER_HOOK              Optional hook called after each iteration:
                            <hook> <task_id> <status> <last_message_json> <label>
@@ -63,7 +64,6 @@ Environment variables:
   LOOPER_RATE_LIMIT_MAX    Max retries per iteration on 429 (default: 12)
   LOOPER_RATE_LIMIT_DELAY  Initial backoff delay in seconds (default: 60)
   LOOPER_RATE_LIMIT_CAP    Max backoff delay cap in seconds (default: 600)
-  LOOPER_SUMMARY_RETRY_MAX Max retries when agent omits required JSON summary (default: 1)
 
 Notes:
   - If CODEX_YOLO=1, --full-auto is ignored.
@@ -89,10 +89,10 @@ TODO_FILE=${TODO_FILE:-to-do.json}
 SCHEMA_FILE="${TODO_FILE%.json}.schema.json"
 
 CODEX_BIN=${CODEX_BIN:-codex}
-CODEX_MODEL=${CODEX_MODEL:-gpt-5.6-terra}
+CODEX_MODEL=${CODEX_MODEL:-gpt-6-sol}
 CODEX_SMART_MODEL=${CODEX_SMART_MODEL:-gpt-6-astra}
-CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-medium}
-CODEX_SMART_REASONING_EFFORT=${CODEX_SMART_REASONING_EFFORT:-high}
+CODEX_REASONING_EFFORT=${CODEX_REASONING_EFFORT:-max}
+CODEX_SMART_REASONING_EFFORT=${CODEX_SMART_REASONING_EFFORT:-max}
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}
 LOOP_DELAY_SECONDS=${LOOP_DELAY_SECONDS:-90}
@@ -100,7 +100,6 @@ LOOPER_RATE_LIMIT_RETRY=${LOOPER_RATE_LIMIT_RETRY:-1}
 LOOPER_RATE_LIMIT_MAX=${LOOPER_RATE_LIMIT_MAX:-12}
 LOOPER_RATE_LIMIT_DELAY=${LOOPER_RATE_LIMIT_DELAY:-60}
 LOOPER_RATE_LIMIT_CAP=${LOOPER_RATE_LIMIT_CAP:-600}
-LOOPER_SUMMARY_RETRY_MAX=${LOOPER_SUMMARY_RETRY_MAX:-1}
 WORKDIR=$(pwd)
 LOOPER_BASE_DIR=${LOOPER_BASE_DIR:-${LOOPER_LOG_DIR:-"$HOME/.looper"}}
 LOOPER_LOG_DIR=""
@@ -108,7 +107,8 @@ SUMMARY_SCHEMA_FILE=""
 CODEX_JSON_LOG=${CODEX_JSON_LOG:-1}
 CODEX_PROGRESS=${CODEX_PROGRESS:-1}
 CODEX_PROFILE=${CODEX_PROFILE:-}
-CODEX_ENFORCE_OUTPUT_SCHEMA=${CODEX_ENFORCE_OUTPUT_SCHEMA:-0}
+CODEX_ENFORCE_OUTPUT_SCHEMA=${CODEX_ENFORCE_OUTPUT_SCHEMA:-1}
+LOOPER_VERIFY_COMMAND=${LOOPER_VERIFY_COMMAND:-}
 CODEX_YOLO=${CODEX_YOLO:-1}
 CODEX_FULL_AUTO=${CODEX_FULL_AUTO:-0}
 LOOPER_ITER_SCHEDULE=${LOOPER_ITER_SCHEDULE:-codex}
@@ -120,7 +120,6 @@ LOOPER_REVIEW_AGENT=${LOOPER_REVIEW_AGENT:-codex}
 LOOPER_INTERLEAVE=${LOOPER_INTERLEAVE:-0}
 ITER_SCHEDULE_SET=0
 REPAIR_AGENT_SET=0
-REVIEW_AGENT_SET=0
 LOOPER_APPLY_SUMMARY=${LOOPER_APPLY_SUMMARY:-1}
 LOOPER_GIT_INIT=${LOOPER_GIT_INIT:-1}
 LOOPER_HOOK=${LOOPER_HOOK:-}
@@ -131,7 +130,7 @@ LAST_MESSAGE_TEMP=0
 CAPTURE_LAST_MESSAGE=0
 
 usage() {
-    echo "Usage: looper.sh [--interleave] [--smart|-s] [--all <agent>] [to-do.json]"
+    echo "Usage: looper.sh [run] [--interleave] [--smart|-s] [--all <agent>] [to-do.json]"
     echo "       looper.sh --ls <status> [to-do.json]"
     echo "       looper.sh --tail [--follow|-f]"
     echo "       looper.sh --doctor [to-do.json]"
@@ -148,6 +147,7 @@ usage() {
     echo "Env: LOOPER_ITER_EVEN_AGENT, LOOPER_ITER_RR_AGENTS, LOOPER_REPAIR_AGENT, LOOPER_REVIEW_AGENT"
     echo "Env: LOOPER_INTERLEAVE"
     echo "Env: LOOPER_APPLY_SUMMARY, LOOPER_GIT_INIT, LOOPER_HOOK, LOOP_DELAY_SECONDS"
+    echo "Env: LOOPER_VERIFY_COMMAND"
     echo "Env: LOOPER_RATE_LIMIT_RETRY, LOOPER_RATE_LIMIT_MAX, LOOPER_RATE_LIMIT_DELAY, LOOPER_RATE_LIMIT_CAP"
 }
 
@@ -444,6 +444,9 @@ should_use_claude() {
     if [ "$LOOPER_REPAIR_AGENT" = "claude" ]; then
         return 0
     fi
+    if [ "$LOOPER_REVIEW_AGENT" = "claude" ]; then
+        return 0
+    fi
     schedule_uses_claude
 }
 
@@ -524,7 +527,6 @@ parse_args() {
                     exit 1
                 fi
                 LOOPER_REVIEW_AGENT="$2"
-                REVIEW_AGENT_SET=1
                 shift 2
                 ;;
             --all)
@@ -586,9 +588,6 @@ apply_interleave_defaults() {
         fi
         if [ "$REPAIR_AGENT_SET" -eq 0 ]; then
             LOOPER_REPAIR_AGENT="claude"
-        fi
-        if [ "$REVIEW_AGENT_SET" -eq 0 ]; then
-            LOOPER_REVIEW_AGENT="claude"
         fi
     fi
 }
@@ -735,44 +734,26 @@ ensure_log_dir() {
 }
 
 write_summary_schema_if_missing() {
-    if [ "$CODEX_JSON_LOG" -ne 1 ]; then
-        return 0
+    if [ -z "$SUMMARY_SCHEMA_FILE" ]; then
+        resolve_log_dir
     fi
-
-    ensure_log_dir
-    if [ -f "$SUMMARY_SCHEMA_FILE" ]; then
-        return 0
-    fi
-
+    mkdir -p "$(dirname "$SUMMARY_SCHEMA_FILE")"
     cat > "$SUMMARY_SCHEMA_FILE" <<'EOF'
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Codex RALF Iteration Summary",
   "type": "object",
   "additionalProperties": false,
-  "required": ["task_id", "status"],
+  "required": ["task_id", "status", "summary", "files", "blockers"],
   "properties": {
-    "task_id": { "type": ["string", "null"] },
-    "status": { "type": "string", "enum": ["done", "blocked", "skipped"] },
+    "task_id": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["done", "blocked"] },
     "summary": { "type": "string" },
     "files": { "type": "array", "items": { "type": "string" } },
     "blockers": { "type": "array", "items": { "type": "string" } }
   }
 }
 EOF
-}
-
-should_capture_last_message() {
-    if [ "$CODEX_JSON_LOG" -eq 1 ]; then
-        return 0
-    fi
-    if [ "$LOOPER_APPLY_SUMMARY" -eq 1 ]; then
-        return 0
-    fi
-    if [ -n "$LOOPER_HOOK" ]; then
-        return 0
-    fi
-    return 1
 }
 
 prepare_run_files() {
@@ -795,6 +776,9 @@ prepare_run_files() {
     init_run_log
     local safe_label="${label//[^a-zA-Z0-9_-]/_}"
     LAST_MESSAGE_FILE="$LOOPER_LOG_DIR/${RUN_ID}-${safe_label}.last.json"
+    if [ "$capture_last" -eq 1 ]; then
+        : > "$LAST_MESSAGE_FILE"
+    fi
 }
 
 cleanup_last_message_file() {
@@ -859,6 +843,16 @@ stream_progress() {
 
 stream_discard() {
     cat >/dev/null
+}
+
+log_verification() {
+    local task_id="$1"
+    local exit_code="$2"
+    [ -n "$LOG_FILE" ] || return 0
+    jq -cn --arg task_id "$task_id" --arg run_id "$RUN_ID" \
+        --argjson exit_code "$exit_code" \
+        '{type:"looper.verification", task_id:$task_id,
+          looper_run_id:$run_id, exit_code:$exit_code}' >> "$LOG_FILE"
 }
 
 annotate_line() {
@@ -984,23 +978,29 @@ validate_todo() {
     fi
 
     if command -v jsonschema >/dev/null 2>&1; then
-        jsonschema -i "$TODO_FILE" "$SCHEMA_FILE" >/dev/null 2>&1
-        return $?
-    fi
-
-    jq -e '
+        jsonschema -i "$TODO_FILE" "$SCHEMA_FILE" >/dev/null 2>&1 || return 1
+    else
+        jq -e '
         .schema_version == 1
         and (.source_files | type == "array")
         and (.tasks | type == "array")
-        and (
-            [.tasks[] | select(
+        and all(.tasks[];
                 (type == "object")
                 and (.id | type == "string" and length > 0)
                 and (.title | type == "string" and length > 0)
-                and (.priority | type == "number" and . >= 1 and . <= 5)
-                and (.status | type == "string" and (["todo","doing","blocked","done"] | index(.)))
-            )] | length == (.tasks | length)
+                and (.priority | type == "number" and . == floor and . >= 1 and . <= 5)
+                and (.status as $status | ["todo","doing","blocked","done"] | index($status) != null)
         )
+        ' "$TODO_FILE" >/dev/null 2>&1 || return 1
+    fi
+
+    jq -e '
+        [.tasks[].id] as $ids
+        | ($ids | length) == ($ids | unique | length)
+          and all(.tasks[]; . as $task |
+            ((.depends_on // []) | type == "array")
+            and all(.depends_on[]?; . as $dependency | type == "string" and . != "" and . != $task.id and ($ids | index($dependency) != null))
+          )
     ' "$TODO_FILE" >/dev/null 2>&1
 }
 
@@ -1014,24 +1014,6 @@ last_task_is_project_done() {
         and (.tasks[-1].status == "done")
         and ((.tasks[-1].tags // []) | index("project-done"))
     ' "$TODO_FILE" >/dev/null 2>&1
-}
-
-add_project_done_marker() {
-    local now tmp
-    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    tmp=$(mktemp)
-
-    jq --arg now "$now" '
-        .tasks += [{
-            "id": ("done-" + ($now | split("T")[0] | split("-") | join(""))),
-            "title": "Project Complete",
-            "status": "done",
-            "priority": 5,
-            "tags": ["project-done"],
-            "created_at": $now,
-            "updated_at": $now
-        }]
-    ' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
 }
 
 list_tasks_by_status() {
@@ -1110,12 +1092,12 @@ current_task_line() {
         | ([$t[] | select(.status == "doing")] | sort_by(id_sort_key(.id)) | first_or_null(.)) as $doing
         | if $doing then $doing
           else
-            ([$t[] | select(.status == "todo")] | sort_by(.priority, id_sort_key(.id)) | first_or_null(.)) as $todo
-            | if $todo then $todo
-              else
-                ([$t[] | select(.status == "blocked")] | sort_by(.priority, id_sort_key(.id)) | first_or_null(.)) as $blocked
-                | if $blocked then $blocked else empty end
-              end
+            ([$t[] | select(.status == "todo")
+              | select(all(.depends_on[]?;
+                  . as $dependency
+                  | any($t[]; .id == $dependency and .status == "done")))]
+             | sort_by(.priority, id_sort_key(.id)) | first_or_null(.)) as $todo
+            | if $todo then $todo else empty end
           end
         | "\(.id)\t\(.status)\t\(.title)"
     ' "$TODO_FILE" 2>/dev/null
@@ -1359,13 +1341,15 @@ print_run_info() {
     esac
     echo "Review agent: $LOOPER_REVIEW_AGENT"
     echo "Repair agent: $LOOPER_REPAIR_AGENT"
-    echo "Codex model: $CODEX_MODEL (reasoning: $CODEX_REASONING_EFFORT)"
-    if [ -n "$CODEX_PROFILE" ]; then
-        echo "Codex mode: $mode | profile: $CODEX_PROFILE"
-    else
-        echo "Codex mode: $mode"
+    if should_use_codex; then
+        echo "Codex model: $CODEX_MODEL (reasoning: $CODEX_REASONING_EFFORT)"
+        if [ -n "$CODEX_PROFILE" ]; then
+            echo "Codex mode: $mode | profile: $CODEX_PROFILE"
+        else
+            echo "Codex mode: $mode"
+        fi
+        echo "Codex flags: $CODEX_BIN $flags_string -"
     fi
-    echo "Codex flags: $CODEX_BIN $flags_string -"
     if should_use_claude; then
         local claude_model="${CLAUDE_MODEL:-default}"
         local claude_flags_string
@@ -1383,7 +1367,7 @@ print_run_info() {
     else
         echo "Log dir: disabled"
     fi
-    echo "Summary apply: $([ "$LOOPER_APPLY_SUMMARY" -eq 1 ] && echo on || echo off)"
+    echo "Summary apply: on"
     echo "Git init: $([ "$LOOPER_GIT_INIT" -eq 1 ] && echo on || echo off)"
     echo "Output schema: $([ "$CODEX_ENFORCE_OUTPUT_SCHEMA" -eq 1 ] && echo on || echo off)"
 }
@@ -1393,8 +1377,7 @@ strip_json_fence() {
     local first_line last_line
     first_line=$(printf "%s" "$text" | sed -n '1p')
     last_line=$(printf "%s" "$text" | sed -n '$p')
-    if printf "%s" "$first_line" | sed -n '/^```/p' >/dev/null 2>&1 && \
-       printf "%s" "$last_line" | sed -n '/^```/p' >/dev/null 2>&1; then
+    if [[ "$first_line" == '```'* && "$last_line" == '```'* && "$text" == *$'\n'* ]]; then
         text=$(printf "%s" "$text" | sed '1d;$d')
     fi
     printf "%s" "$text"
@@ -1669,18 +1652,11 @@ run_claude() {
 
     prepare_run_files "$label" "$capture_last"
 
-    # Use --output-format json (single object) instead of stream-json for
-    # reliable extraction. Build a local flags array without the streaming flags.
-    local claude_run_flags=()
-    for f in "${CLAUDE_FLAGS[@]}"; do
-        case "$f" in
-            --output-format|--include-partial-messages|--verbose) ;;
-            *) claude_run_flags+=("$f") ;;
-        esac
-    done
-    claude_run_flags+=(--output-format json)
-
-    local cmd=(env -u CLAUDECODE "$CLAUDE_BIN" -p "$prompt" "${claude_run_flags[@]}")
+    local cmd=(env -u CLAUDECODE "$CLAUDE_BIN" -p "$prompt" "${CLAUDE_FLAGS[@]}")
+    if [ "$expect_summary" -eq 1 ]; then
+        write_summary_schema_if_missing
+        cmd+=(--json-schema "$(cat "$SUMMARY_SCHEMA_FILE")")
+    fi
     local output_file
     output_file=$(mktemp)
     local exit_status
@@ -1702,7 +1678,11 @@ run_claude() {
         done < "$output_file"
     fi
 
-    write_last_message_from_claude_json_output "$output_file" "$label" "$iteration"
+    if [ "$expect_summary" -eq 1 ]; then
+        jq -Rc 'fromjson? | .structured_output // empty' "$output_file" > "$LAST_MESSAGE_FILE" 2>/dev/null || true
+    else
+        write_last_message_from_claude_json_output "$output_file" "$label" "$iteration"
+    fi
     rm -f "$output_file"
     return "$exit_status"
 }
@@ -1732,12 +1712,12 @@ run_codex() {
 
     if [ "$CODEX_JSON_LOG" -eq 1 ]; then
         cmd+=(--json --output-last-message "$LAST_MESSAGE_FILE")
-        if [ "$expect_summary" -eq 1 ] && [ "$CODEX_ENFORCE_OUTPUT_SCHEMA" -eq 1 ]; then
-            write_summary_schema_if_missing
-            cmd+=(--output-schema "$SUMMARY_SCHEMA_FILE")
-        fi
     elif [ "$capture_last" -eq 1 ]; then
         cmd+=(--json --output-last-message "$LAST_MESSAGE_FILE")
+    fi
+    if [ "$expect_summary" -eq 1 ] && [ "$CODEX_ENFORCE_OUTPUT_SCHEMA" -eq 1 ]; then
+        write_summary_schema_if_missing
+        cmd+=(--output-schema "$SUMMARY_SCHEMA_FILE")
     fi
 
     cmd+=(-)
@@ -1786,10 +1766,6 @@ handle_last_message() {
     elif [ -n "$summary" ]; then
         echo "Summary: $(shorten "$summary" 120)"
     fi
-
-    if [ -n "$LOOPER_HOOK" ]; then
-        "$LOOPER_HOOK" "$task_id" "$status" "$LAST_MESSAGE_FILE" "$label" || true
-    fi
 }
 
 summary_matches_selected() {
@@ -1799,50 +1775,29 @@ summary_matches_selected() {
         return 1
     fi
     if [ -z "$LAST_MESSAGE_FILE" ] || [ ! -f "$LAST_MESSAGE_FILE" ]; then
+        echo "Error: the agent did not write a summary for task '$expected_id'." >&2
         return 1
     fi
 
-    local summary_id summary_status
-    summary_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-    summary_status=$(jq -r '.status // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-
-    if [ -z "$summary_id" ] || [ -z "$summary_status" ] || [ "$summary_status" = "skipped" ]; then
-        return 1
-    fi
-
-    if [ "$summary_id" != "$expected_id" ]; then
-        echo "Warning: summary task_id '$summary_id' does not match selected '$expected_id'." >&2
-        return 1
-    fi
-
-    return 0
-}
-
-summary_has_actionable_task_result() {
-    if [ -z "$LAST_MESSAGE_FILE" ] || [ ! -f "$LAST_MESSAGE_FILE" ] || [ ! -s "$LAST_MESSAGE_FILE" ]; then
-        return 1
-    fi
-
-    if ! jq -e . "$LAST_MESSAGE_FILE" >/dev/null 2>&1; then
-        return 1
-    fi
-
-    local summary_id summary_status
-    summary_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-    summary_status=$(jq -r '.status // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-
-    if [ -z "$summary_id" ] || [ "$summary_id" = "null" ] || [ -z "$summary_status" ] || [ "$summary_status" = "skipped" ]; then
-        return 1
-    fi
-
-    return 0
-}
-
-apply_summary_to_todo() {
-    if [ "$LOOPER_APPLY_SUMMARY" -ne 1 ]; then
+    if jq -e --arg id "$expected_id" '
+        type == "object"
+        and .task_id == $id
+        and (.status == "done" or .status == "blocked")
+        and (.summary | type == "string")
+        and (.files | type == "array")
+        and all(.files[]?; type == "string")
+        and (.blockers | type == "array")
+        and all(.blockers[]?; type == "string")
+        and (.status != "blocked" or (.blockers | length > 0))
+    ' "$LAST_MESSAGE_FILE" >/dev/null 2>&1; then
         return 0
     fi
 
+    echo "Error: the agent did not return a valid summary for task '$expected_id'." >&2
+    return 1
+}
+
+apply_summary_to_todo() {
     if [ -z "$LAST_MESSAGE_FILE" ] || [ ! -f "$LAST_MESSAGE_FILE" ]; then
         return 0
     fi
@@ -1851,7 +1806,7 @@ apply_summary_to_todo() {
     task_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE")
     status=$(jq -r '.status // empty' "$LAST_MESSAGE_FILE")
 
-    if [ -z "$task_id" ] || [ "$status" = "skipped" ] || [ -z "$status" ]; then
+    if [ -z "$task_id" ] || { [ "$status" != "done" ] && [ "$status" != "blocked" ]; }; then
         return 0
     fi
 
@@ -1863,7 +1818,7 @@ apply_summary_to_todo() {
     files_json=$(jq -c '.files // []' "$LAST_MESSAGE_FILE")
     blockers_json=$(jq -c '.blockers // []' "$LAST_MESSAGE_FILE")
 
-    jq --arg id "$task_id" \
+    if jq --arg id "$task_id" \
        --arg status "$status" \
        --arg now "$now" \
        --argjson files "$files_json" \
@@ -1877,24 +1832,34 @@ apply_summary_to_todo() {
             else
               .
             end
-       )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
+       )' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"; then
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
 }
 
 run_review_pass() {
     local iteration="${1:-0}"
     local review_agent="$LOOPER_REVIEW_AGENT"
+    local todo_backup
+    todo_backup=$(mktemp)
+    if ! cp "$TODO_FILE" "$todo_backup"; then
+        rm -f "$todo_backup"
+        return 1
+    fi
 
     run_with_agent "$review_agent" "review-$iteration" 0 "$iteration" "$CAPTURE_LAST_MESSAGE" <<EOF
 You are running a final review pass after all tasks are complete.
 
-Goal: review the codebase file-by-file as a senior developer reviewing a junior's work,
-then update "$TODO_FILE" if new tasks are needed.
+Review completed tasks against their acceptance criteria and affected files.
+Add a task to "$TODO_FILE" for each verified gap.
 
 Rules:
 - Read "$TODO_FILE" and follow the schema in "$SCHEMA_FILE".
 - Read every file listed in source_files.
-- Review the repo file-by-file, focusing on tracked, non-generated files.
-  Skip .git, node_modules, dist, build, .venv, __pycache__, and other generated dirs.
+- Inspect each completed task's details and files. Check related changes when needed.
+- Include the file and observed evidence in each new task's details.
 - Do not modify code or other files. Only update "$TODO_FILE".
 - If you find new tasks, append them to .tasks with status "todo" and priority (1 highest).
 - Follow the existing id style and ensure ids are unique.
@@ -1920,7 +1885,9 @@ EOF
     local exit_status=$?
     if [ "$exit_status" -ne 0 ]; then
         echo "Review failed with exit code $exit_status."
+        cp "$todo_backup" "$TODO_FILE"
     fi
+    rm -f "$todo_backup"
 
     handle_last_message "review-$iteration"
     cleanup_last_message_file
@@ -2000,7 +1967,7 @@ bootstrap_todo() {
     local bootstrap_agent
     bootstrap_agent=$(select_iter_agent 1)
     echo "Bootstrapping $TODO_FILE with $bootstrap_agent..."
-    run_with_agent "$bootstrap_agent" "bootstrap" 0 0 0 <<EOF
+    if ! run_with_agent "$bootstrap_agent" "bootstrap" 0 0 0 <<EOF
 Initialize a task backlog for this project.
 
 Rules:
@@ -2008,7 +1975,7 @@ Rules:
 - Search for markdown source docs like PROJECT.md, PROJECT_SPEC.md, SPECS.md, SPECIFICATION.md, README.md, DESIGN.md, IDEA.md, etc.
 - Create "$TODO_FILE" using the schema in "$SCHEMA_FILE".
 - Populate source_files with the relative paths (from project root) of the source docs you found. If none, set source_files to [].
-- Add as many actionable tasks that are needed to fully implement the project.
+- Add actionable tasks with a clear acceptance criterion in each task's details.
 - Assign each task priority (1 is highest).
 - Set all task statuses to "todo".
 - Do not modify code or other files.
@@ -2017,6 +1984,10 @@ Rules:
 
 Return a brief summary of what you created.
 EOF
+    then
+        echo "Error: bootstrap agent failed." >&2
+        return 1
+    fi
 
     if [ ! -f "$TODO_FILE" ]; then
         echo "Error: $TODO_FILE was not created." >&2
@@ -2035,6 +2006,10 @@ main() {
     if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
         usage
         exit 0
+    fi
+
+    if [ "${1:-}" = "run" ]; then
+        shift
     fi
 
     if [ "${1:-}" = "--tail" ]; then
@@ -2095,6 +2070,11 @@ main() {
     apply_interleave_defaults
     apply_all_agent
 
+    if [ "$LOOPER_APPLY_SUMMARY" -ne 1 ]; then
+        echo "Error: LOOPER_APPLY_SUMMARY=0 is no longer supported; Looper owns task status." >&2
+        exit 1
+    fi
+
     LOOPER_ITER_SCHEDULE=$(normalize_schedule "$LOOPER_ITER_SCHEDULE")
     LOOPER_ITER_ODD_AGENT=$(normalize_agent "$LOOPER_ITER_ODD_AGENT")
     LOOPER_ITER_EVEN_AGENT=$(normalize_agent "$LOOPER_ITER_EVEN_AGENT")
@@ -2106,14 +2086,10 @@ main() {
 
     if should_use_codex; then
         require_cmd "$CODEX_BIN"
-    else
-        echo "Warning: codex not used in current configuration." >&2
     fi
     require_cmd jq
     if should_use_claude; then
         require_cmd "$CLAUDE_BIN"
-    else
-        echo "Warning: claude not used in current configuration." >&2
     fi
 
     CODEX_FLAGS=(
@@ -2133,14 +2109,12 @@ main() {
         CODEX_FLAGS+=(--profile "$CODEX_PROFILE")
     fi
 
-    if ! ensure_git_repo; then
+    if should_use_codex && ! ensure_git_repo; then
         CODEX_FLAGS+=(--skip-git-repo-check)
     fi
 
     CLAUDE_FLAGS=(
-        --output-format stream-json
-        --include-partial-messages
-        --verbose
+        --output-format json
         --dangerously-skip-permissions
         --add-dir "$WORKDIR"
     )
@@ -2149,11 +2123,7 @@ main() {
         CLAUDE_FLAGS+=(--model "$CLAUDE_MODEL")
     fi
 
-    if should_capture_last_message; then
-        CAPTURE_LAST_MESSAGE=1
-    else
-        CAPTURE_LAST_MESSAGE=0
-    fi
+    CAPTURE_LAST_MESSAGE=1
 
     ensure_log_dir
     init_run_log
@@ -2179,10 +2149,6 @@ main() {
             recover_task_states
 
             if has_open_tasks; then
-                echo "Open tasks remain. Running final review pass..."
-                run_review_pass "$iteration"
-                ensure_valid_todo
-
                 local todo_count blocked_count done_count
                 todo_count=$(jq '[.tasks[] | select(.status == "todo")] | length' "$TODO_FILE")
                 blocked_count=$(jq '[.tasks[] | select(.status == "blocked")] | length' "$TODO_FILE")
@@ -2191,13 +2157,26 @@ main() {
                 echo "--- Final State Summary ---"
                 echo "Tasks remaining: $((todo_count + blocked_count)) (todo: $todo_count, blocked: $blocked_count)"
                 echo "Tasks completed: $done_count"
-                echo "Use './bin/looper.sh run' to continue working on remaining tasks."
+                echo "Run 'looper.sh' to continue working on remaining tasks."
+                return 2
             else
-                if last_task_is_project_done; then
-                    echo "All tasks complete and project is marked done."
-                else
-                    echo "All tasks complete but project-done marker not found."
+                if ! last_task_is_project_done; then
+                    echo "All tasks complete. Running final review pass..."
+                    if ! run_review_pass "$iteration"; then
+                        echo "Error: final review failed; the project is not marked done." >&2
+                        return 1
+                    fi
+                    ensure_valid_todo
                 fi
+                if has_open_tasks; then
+                    echo "Review added open tasks. Run 'looper.sh' to continue." >&2
+                    return 2
+                fi
+                if ! last_task_is_project_done; then
+                    echo "Error: all tasks are complete, but the project-done marker is missing." >&2
+                    return 1
+                fi
+                echo "All tasks complete and project is marked done."
             fi
             break
         fi
@@ -2219,9 +2198,8 @@ main() {
                 consecutive_review_failures=$((consecutive_review_failures + 1))
                 echo "Warning: Review failed with exit code $review_exit_code (failure $consecutive_review_failures/3)."
                 if [ "$consecutive_review_failures" -ge 3 ]; then
-                    echo "Review failed 3 times consecutively. Adding project-done marker and exiting."
-                    add_project_done_marker
-                    break
+                    echo "Error: review failed 3 times. The project is not marked done." >&2
+                    return 1
                 fi
                 continue
             fi
@@ -2250,8 +2228,8 @@ main() {
             IFS=$'\t' read -r task_id task_status task_title <<< "$task_line"
             echo "Task: $task_id ($task_status) - $task_title"
         else
-            echo "Task: none"
-            continue
+            echo "No runnable tasks remain. Resolve blocked tasks or dependencies, then run Looper again." >&2
+            return 2
         fi
 
         local selected_task_id selected_task_status selected_task_title
@@ -2259,13 +2237,15 @@ main() {
         selected_task_status="$task_status"
         selected_task_title="$task_title"
 
-        local status_before
-        local status_changed=0
-        status_before="$selected_task_status"
+        local todo_backup
+        todo_backup=$(mktemp)
+        if ! cp "$TODO_FILE" "$todo_backup"; then
+            rm -f "$todo_backup"
+            return 1
+        fi
         if [ "$selected_task_status" != "doing" ]; then
             set_task_status "$selected_task_id" "doing"
             selected_task_status="doing"
-            status_changed=1
         fi
 
         local iter_agent
@@ -2275,32 +2255,12 @@ main() {
         local rate_limit_attempt=0
         local rate_limit_prompt
         rate_limit_prompt=$(cat <<EOF
-You are running in a deterministic RALF loop with fresh context each run.
-Just for fun we are naming you Ralf (in honour of Ralph Wiggum German cousin Ralf).
-
-Goal: complete exactly one task from "$TODO_FILE" per iteration.
-Selected task for this iteration:
-- id: $selected_task_id
-- title: $selected_task_title
-- status: $selected_task_status
-You must work on this exact task id. Do not switch tasks.
-If the task was not already "doing", it has been set to "doing" for you.
-
-Rules:
-- Read "$TODO_FILE" and follow the schema in "$SCHEMA_FILE".
-- Read every file listed in source_files and treat them as ground truth for task selection and implementation.
-- Implement the task fully and keep scope tight.
-- If blocked, set status to "blocked" and add clear blocker notes. Do not commit partial work.
-- If completed, set status to "done", update updated_at, and record relevant files in files[] if helpful.
-- Use jq for task file edits when practical.
-- Commit completed work with Conventional Commits (type(scope): summary). One commit per task.
-- Do not amend or rewrite history.
-- If no code changes are needed, skip commit and note the reason in the task details.
-- Do not ask for confirmation.
-
-Return only a JSON object:
-{"task_id":"T123","status":"done","summary":"...","files":["..."],"blockers":[]}
-If no task was executed, use status "skipped" and task_id null.
+Complete task $selected_task_id: $selected_task_title.
+Read its details and acceptance criterion in "$TODO_FILE". Read the listed source_files.
+Keep changes within this task. Do not edit "$TODO_FILE"; Looper owns task status.
+Do not amend or rewrite Git history. If the task needs input, report it as blocked.
+Return JSON with task_id, status (done or blocked), summary, files, and blockers.
+Use task_id "$selected_task_id". Include a blocker reason when status is blocked.
 EOF
 )
         while true; do
@@ -2314,7 +2274,7 @@ EOF
             if is_rate_limited; then
                 rate_limit_attempt=$((rate_limit_attempt + 1))
                 if [ "$rate_limit_attempt" -ge "$LOOPER_RATE_LIMIT_MAX" ]; then
-                    echo "Rate limit: max retries ($LOOPER_RATE_LIMIT_MAX) reached. Moving to next iteration." >&2
+                    echo "Rate limit: max retries ($LOOPER_RATE_LIMIT_MAX) reached." >&2
                     break
                 fi
                 local delay=$((LOOPER_RATE_LIMIT_DELAY * (2 ** (rate_limit_attempt - 1))))
@@ -2330,88 +2290,51 @@ EOF
                 continue
             fi
 
-            echo "Iteration failed with exit code $exit_status."
+            echo "Iteration failed with exit code $exit_status." >&2
             break
         done
 
-        handle_last_message "iter-$iteration"
-        local summary_ok=1
+        if [ "$exit_status" -ne 0 ]; then
+            cp "$todo_backup" "$TODO_FILE"
+            rm -f "$todo_backup"
+            echo "Restored $TODO_FILE after the failed iteration." >&2
+            cleanup_last_message_file
+            return "$exit_status"
+        fi
+
         if ! summary_matches_selected "$selected_task_id"; then
-            summary_ok=0
-            if summary_has_actionable_task_result; then
-                # Best-effort: check if the returned task_id exists and apply to it
-                local summary_task_id
-                summary_task_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-                local task_exists
-                task_exists=$(jq -r --arg id "$summary_task_id" '.tasks[] | select(.id == $id) | .id' "$TODO_FILE" 2>/dev/null | head -n 1)
-                if [ -n "$task_exists" ]; then
-                    echo "Warning: summary task_id '$summary_task_id' does not match selected '$selected_task_id'. Applying summary to returned task_id '$summary_task_id'." >&2
-                    apply_summary_to_todo
-                    summary_ok=2  # Mark as applied to different task
-                else
-                    # Task doesn't exist, revert status
-                    if [ "$status_changed" -eq 1 ]; then
-                        local current_status
-                        current_status=$(task_status_by_id "$selected_task_id")
-                        if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
-                            set_task_status "$selected_task_id" "$status_before"
-                            echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before due to task_id mismatch." >&2
-                        fi
-                    fi
-                    echo "Warning: skipping summary apply due to task_id mismatch and invalid task_id '$summary_task_id'." >&2
-                fi
-            else
-                # No valid actionable summary returned. Retry with a focused prompt before reverting.
-                local summary_retry=0
-                while [ "$summary_retry" -lt "$LOOPER_SUMMARY_RETRY_MAX" ]; do
-                    summary_retry=$((summary_retry + 1))
-                    echo "Summary retry: asking agent for JSON (attempt $summary_retry/$LOOPER_SUMMARY_RETRY_MAX)..." >&2
-                    local retry_prompt
-                    retry_prompt=$(cat <<RETRYEOF
-Your previous response for task $selected_task_id did not include the required JSON summary.
-You MUST respond with ONLY a single JSON object — no prose, no markdown, no explanation:
-{"task_id":"$selected_task_id","status":"done","summary":"<brief description>","files":[],"blockers":[]}
-Valid status values: "done", "blocked", or "skipped".
-Output ONLY the JSON.
-RETRYEOF
-)
-                    run_with_agent "$iter_agent" "retry-$iteration-$summary_retry" 1 "$iteration" "$CAPTURE_LAST_MESSAGE" <<< "$retry_prompt"
-
-                    handle_last_message "retry-$iteration-$summary_retry"
-
-                    if summary_matches_selected "$selected_task_id"; then
-                        summary_ok=1
-                        echo "Summary retry succeeded on attempt $summary_retry." >&2
-                        break
-                    elif summary_has_actionable_task_result; then
-                        local rtask_id
-                        rtask_id=$(jq -r '.task_id // empty' "$LAST_MESSAGE_FILE" 2>/dev/null)
-                        local rexists
-                        rexists=$(jq -r --arg id "$rtask_id" '.tasks[] | select(.id == $id) | .id' "$TODO_FILE" 2>/dev/null | head -n 1)
-                        if [ -n "$rexists" ]; then
-                            summary_ok=2
-                            echo "Summary retry produced valid task '$rtask_id' on attempt $summary_retry." >&2
-                            break
-                        fi
-                    fi
-                done
-
-                if [ "$summary_ok" -eq 0 ]; then
-                    # Still no valid summary after retries, revert status.
-                    if [ "$status_changed" -eq 1 ]; then
-                        local current_status
-                        current_status=$(task_status_by_id "$selected_task_id")
-                        if [ "$current_status" = "doing" ] || [ "$current_status" = "done" ]; then
-                            set_task_status "$selected_task_id" "$status_before"
-                            echo "Warning: reverted task '$selected_task_id' from $current_status to $status_before because no actionable summary was returned." >&2
-                        fi
-                    fi
-                    echo "Warning: skipping summary apply because no actionable summary was returned after $LOOPER_SUMMARY_RETRY_MAX retry/retries." >&2
-                fi
+            cp "$todo_backup" "$TODO_FILE"
+            rm -f "$todo_backup"
+            echo "Restored $TODO_FILE after the invalid summary." >&2
+            cleanup_last_message_file
+            return 1
+        fi
+        if [ "$(jq -r '.status' "$LAST_MESSAGE_FILE")" = "done" ] && [ -n "$LOOPER_VERIFY_COMMAND" ]; then
+            echo "Verifying task $selected_task_id..."
+            local verification_status=0
+            bash -lc "$LOOPER_VERIFY_COMMAND" || verification_status=$?
+            log_verification "$selected_task_id" "$verification_status"
+            if [ "$verification_status" -ne 0 ]; then
+                cp "$todo_backup" "$TODO_FILE"
+                rm -f "$todo_backup"
+                echo "Verification failed. Restored $TODO_FILE; code changes and commits remain for inspection." >&2
+                cleanup_last_message_file
+                return 1
             fi
         fi
-        if [ "$summary_ok" -eq 1 ]; then
-            apply_summary_to_todo
+        handle_last_message "iter-$iteration"
+        if ! apply_summary_to_todo; then
+            echo "Error: failed to apply the summary for task '$selected_task_id'." >&2
+            cp "$todo_backup" "$TODO_FILE"
+            rm -f "$todo_backup"
+            cleanup_last_message_file
+            return 1
+        fi
+        rm -f "$todo_backup"
+        if [ -n "$LOOPER_HOOK" ]; then
+            local summary_status
+            summary_status=$(jq -r '.status' "$LAST_MESSAGE_FILE")
+            "$LOOPER_HOOK" "$selected_task_id" "$summary_status" "$LAST_MESSAGE_FILE" "iter-$iteration" || true
         fi
         cleanup_last_message_file
         ensure_valid_todo
