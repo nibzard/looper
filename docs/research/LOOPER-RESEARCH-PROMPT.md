@@ -1,5 +1,8 @@
 # Research prompt: Is Looper still useful?
 
+Historical prompt used for the 2026-09-23 report. Some paths below were
+archived or removed after the research.
+
 You are an independent researcher of coding agents and developer tools.
 Assess whether Looper still solves a real problem. Give a recommendation that a
 maintainer can act on. Use current evidence as of the day you conduct the

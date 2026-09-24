@@ -1,5 +1,9 @@
 # Looper research report: should it continue as a separate tool?
 
+Historical snapshot from 2026-09-23. The Go proposal and scaffold described
+below were later archived or removed. Current behavior is documented in
+`README.md` and `bin/looper.sh`.
+
 Research date: 2026-09-23. All web sources accessed on this date.
 Machine state observed on this date: `codex-cli 0.155.1`, `claude 2.1.280`,
 `jq` and `jsonschema` installed. Repository at commit `f2516f7` plus uncommitted

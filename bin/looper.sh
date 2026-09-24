@@ -841,10 +841,6 @@ stream_progress() {
     done
 }
 
-stream_discard() {
-    cat >/dev/null
-}
-
 log_verification() {
     local task_id="$1"
     local exit_code="$2"
@@ -1103,18 +1099,6 @@ current_task_line() {
     ' "$TODO_FILE" 2>/dev/null
 }
 
-print_iteration_task() {
-    local line
-    line=$(current_task_line)
-    if [ -n "$line" ]; then
-        local task_id status title
-        IFS=$'\t' read -r task_id status title <<< "$line"
-        echo "Task: $task_id ($status) - $title"
-    else
-        echo "Task: none"
-    fi
-}
-
 current_task_id() {
     local line
     line=$(current_task_line)
@@ -1133,16 +1117,6 @@ current_task_status() {
         IFS=$'\t' read -r task_id status title <<< "$line"
         echo "$status"
     fi
-}
-
-task_status_by_id() {
-    local task_id="$1"
-
-    if [ -z "$task_id" ]; then
-        return 1
-    fi
-
-    jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null | head -n 1
 }
 
 latest_log_file() {
@@ -1414,119 +1388,6 @@ extract_json_from_text() {
     return 1
 }
 
-extract_claude_output_json() {
-    local output_file="$1"
-    local json=""
-
-    if json=$(jq -c . "$output_file" 2>/dev/null); then
-        printf "%s" "$json"
-        return 0
-    fi
-
-    local line
-    while IFS= read -r line; do
-        if printf "%s" "$line" | jq -e . >/dev/null 2>&1; then
-            json="$line"
-        fi
-    done < "$output_file"
-
-    if [ -n "$json" ]; then
-        printf "%s" "$json"
-        return 0
-    fi
-
-    return 1
-}
-
-extract_claude_text() {
-    local json="$1"
-    printf "%s" "$json" | jq -r '
-        def join_text($arr):
-          if ($arr | type) == "array" then
-            ($arr | map(select(.type == "text") | .text) | join("\n"))
-          else
-            ""
-          end;
-        if .content then
-          join_text(.content)
-        elif .message and .message.content then
-          join_text(.message.content)
-        elif .completion then
-          .completion
-        elif .output_text then
-          .output_text
-        elif .text then
-          .text
-        elif .result then
-          .result
-        else
-          ""
-        end
-    '
-}
-
-extract_claude_stream_text() {
-    local output_file="$1"
-    local text=""
-    local line
-    local saw_full=0
-
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        local message_text
-        message_text=$(printf "%s" "$line" | jq -r '
-            def join_text($arr):
-              if ($arr | type) == "array" then
-                ($arr | map(select(.type == "text") | .text) | join(""))
-              else
-                ""
-              end;
-            if .type == "result" and (.result // "") != "" then
-              .result
-            elif .type == "message" and .message and .message.content then
-              join_text(.message.content)
-            elif .message and .message.content then
-              join_text(.message.content)
-            else
-              empty
-            end
-        ' 2>/dev/null)
-        if [ -n "$message_text" ] && [ "$message_text" != "null" ]; then
-            text="$message_text"
-            saw_full=1
-            continue
-        fi
-
-        if [ "$saw_full" -eq 1 ]; then
-            continue
-        fi
-
-        local chunk
-        chunk=$(printf "%s" "$line" | jq -r '
-            if .type == "content_block_delta" and (.delta.text // "") != "" then
-              .delta.text
-            elif .type == "content_block_start" and .content_block and (.content_block.text // "") != "" then
-              .content_block.text
-            elif .type == "stream_event" and .event then
-              if .event.type == "content_block_delta" and (.event.delta.text // "") != "" then
-                .event.delta.text
-              elif .event.type == "content_block_start" and .event.content_block and (.event.content_block.text // "") != "" then
-                .event.content_block.text
-              else
-                empty
-              end
-            else
-              empty
-            end
-        ' 2>/dev/null)
-        if [ -n "$chunk" ] && [ "$chunk" != "null" ]; then
-            text+="$chunk"
-        fi
-    done < "$output_file"
-
-    printf "%s" "$text"
-}
-
 append_claude_message_log() {
     local label="$1"
     local iteration="$2"
@@ -1598,48 +1459,6 @@ write_last_message_from_claude_json_output() {
         jq -n --arg raw "$raw_output" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
         append_claude_message_log "$label" "$iteration" "$raw_output"
     fi
-}
-
-write_last_message_from_claude_output() {
-    local output_file="$1"
-    local label="${2:-}"
-    local iteration="${3:-0}"
-
-    if [ -z "$LAST_MESSAGE_FILE" ]; then
-        return 0
-    fi
-
-    local output_json text normalized log_text raw_output summary_json
-    text=$(extract_claude_stream_text "$output_file")
-    if [ -n "$text" ]; then
-        normalized=$(strip_json_fence "$text")
-        if summary_json=$(extract_json_from_text "$normalized"); then
-            printf "%s\n" "$summary_json" > "$LAST_MESSAGE_FILE"
-        else
-            jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-        fi
-        log_text="$normalized"
-    elif output_json=$(extract_claude_output_json "$output_file"); then
-        text=$(extract_claude_text "$output_json")
-        if [ -n "$text" ]; then
-            normalized=$(strip_json_fence "$text")
-            if summary_json=$(extract_json_from_text "$normalized"); then
-                printf "%s\n" "$summary_json" > "$LAST_MESSAGE_FILE"
-            else
-                jq -n --arg raw "$normalized" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-            fi
-            log_text="$normalized"
-        else
-            jq -n --arg raw "$output_json" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-            log_text="$output_json"
-        fi
-    else
-        raw_output=$(cat "$output_file")
-        jq -n --arg raw "$raw_output" '{raw:$raw}' > "$LAST_MESSAGE_FILE"
-        log_text="$raw_output"
-    fi
-
-    append_claude_message_log "$label" "$iteration" "$log_text"
 }
 
 run_claude() {

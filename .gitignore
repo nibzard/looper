@@ -8,14 +8,6 @@ __pycache__/
 .env
 .env.*
 
-# Pentest toolkit outputs
-discovered_endpoints.json
-sql_injection_results.json
-xss_results.json
-port_scan_results.json
-security_report.md
-security_report.json
-
 # Looper runtime artifacts (if run inside this repo)
 to-do.json
 to-do.schema.json

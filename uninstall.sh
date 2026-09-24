@@ -107,6 +107,9 @@ fi
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR="$SCRIPT_DIR"
 SRC_SKILLS="$ROOT_DIR/skills"
+if [ ! -d "$SRC_SKILLS" ] && [ -d "$SCRIPT_DIR/../share/looper/skills" ]; then
+    SRC_SKILLS="$SCRIPT_DIR/../share/looper/skills"
+fi
 
 run() {
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -123,6 +126,10 @@ if [ "$REMOVE_BIN" -eq 1 ]; then
 fi
 
 if [ "$REMOVE_SKILLS" -eq 1 ]; then
+    if [ ! -d "$SRC_SKILLS" ]; then
+        echo "Error: missing skill list: $SRC_SKILLS" >&2
+        exit 1
+    fi
     if [ -d "$SRC_SKILLS" ] && [ -d "$SKILLS_DIR" ]; then
         shopt -s dotglob nullglob
         for skill in "$SRC_SKILLS"/*; do

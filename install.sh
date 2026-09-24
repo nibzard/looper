@@ -109,12 +109,20 @@ ROOT_DIR="$SCRIPT_DIR"
 SRC_BIN="$ROOT_DIR/bin/looper.sh"
 SRC_SKILLS="$ROOT_DIR/skills"
 
-if [ ! -f "$SRC_BIN" ]; then
+# Homebrew installs the commands in bin and the skills in share/looper.
+if [ ! -f "$SRC_BIN" ] && [ -f "$SCRIPT_DIR/looper.sh" ]; then
+    SRC_BIN="$SCRIPT_DIR/looper.sh"
+fi
+if [ ! -d "$SRC_SKILLS" ] && [ -d "$SCRIPT_DIR/../share/looper/skills" ]; then
+    SRC_SKILLS="$SCRIPT_DIR/../share/looper/skills"
+fi
+
+if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_BIN" ]; then
     echo "Error: missing $SRC_BIN" >&2
     exit 1
 fi
 
-if [ ! -d "$SRC_SKILLS" ]; then
+if [ "$INSTALL_SKILLS" -eq 1 ] && [ ! -d "$SRC_SKILLS" ]; then
     echo "Error: missing $SRC_SKILLS" >&2
     exit 1
 fi
@@ -157,7 +165,9 @@ warn_missing jq
 warn_missing codex
 
 echo "Install complete."
-echo "  looper.sh -> $BIN_DIR/looper.sh"
+if [ "$INSTALL_BIN" -eq 1 ]; then
+    echo "  looper.sh -> $BIN_DIR/looper.sh"
+fi
 if [ "$INSTALL_SKILLS" -eq 1 ]; then
     echo "  skills -> $SKILLS_DIR"
 fi

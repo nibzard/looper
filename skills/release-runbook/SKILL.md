@@ -57,15 +57,16 @@ Execute a clean release workflow: verify repo state, run tests, bump versions, t
 - Keep release notes short and factual (highlights + testing performed).
 
 ## Helper Script
-Use `scripts/release.sh` to automate the end-to-end release flow.
+From this repository's root, use
+`skills/release-runbook/scripts/release.sh` to automate the release flow.
 
 Examples:
 ```bash
 # Tag, push, release, and update Formula/*.rb
-scripts/release.sh --version 0.2.0 --test-cmd "make test"
+skills/release-runbook/scripts/release.sh --version 0.2.0 --test-cmd "make test"
 
 # Use a custom bump command and a VERSION file
-scripts/release.sh --version 1.4.0 --bump-cmd "npm version minor --no-git-tag-version" --version-file VERSION
+skills/release-runbook/scripts/release.sh --version 1.4.0 --bump-cmd "npm version minor --no-git-tag-version" --version-file VERSION
 ```
 
 Notes:

@@ -5,6 +5,12 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 mkdir -p "$TMP_DIR/bin"
+sed '$d' "$ROOT_DIR/bin/looper.sh" > "$TMP_DIR/functions.sh"
+
+write_test_schema() {
+    /bin/bash -c 'source "$1"; SCHEMA_FILE="$2"; write_schema_if_missing' \
+        _ "$TMP_DIR/functions.sh" "$1"
+}
 
 cat > "$TMP_DIR/bin/codex" <<'EOF'
 #!/usr/bin/env bash
@@ -169,13 +175,13 @@ jq -e '.tasks[] | select(.id == "T3" and .status == "done")' "$TMP_DIR/dependenc
 unset STUB_SUMMARY
 
 make_project duplicate
-cp "$ROOT_DIR/to-do.schema.json" "$TMP_DIR/duplicate/to-do.schema.json"
+write_test_schema "$TMP_DIR/duplicate/to-do.schema.json"
 jq '.tasks[1].id = "T1"' "$TMP_DIR/duplicate/to-do.json" > "$TMP_DIR/duplicate/next.json"
 mv "$TMP_DIR/duplicate/next.json" "$TMP_DIR/duplicate/to-do.json"
 expect_status 1 duplicate --doctor to-do.json
 
 make_project unknown_dependency
-cp "$ROOT_DIR/to-do.schema.json" "$TMP_DIR/unknown_dependency/to-do.schema.json"
+write_test_schema "$TMP_DIR/unknown_dependency/to-do.schema.json"
 jq '.tasks[0].depends_on = ["missing"]' "$TMP_DIR/unknown_dependency/to-do.json" > "$TMP_DIR/unknown_dependency/next.json"
 mv "$TMP_DIR/unknown_dependency/next.json" "$TMP_DIR/unknown_dependency/to-do.json"
 expect_status 1 unknown_dependency --doctor to-do.json
@@ -212,7 +218,6 @@ expect_status 0 run_alias run to-do.json
 test ! -e "$TMP_DIR/run_alias/run"
 unset STUB_REVIEW_MARKER
 
-sed '$d' "$ROOT_DIR/bin/looper.sh" > "$TMP_DIR/functions.sh"
 mkdir -p "$TMP_DIR/fallback-bin"
 ln -s "$(command -v jq)" "$TMP_DIR/fallback-bin/jq"
 fallback_check() {

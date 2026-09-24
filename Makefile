@@ -14,3 +14,4 @@ smoke:
 
 test: smoke
 	./scripts/regression.sh
+	./scripts/package-smoke.sh
