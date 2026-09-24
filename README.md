@@ -5,6 +5,8 @@ interleaving. It processes exactly
 one task per iteration from a JSON backlog, with fresh context each run, and
 keeps a JSONL audit log for traceability.
 
+The active implementation is `bin/looper.sh`.
+
 ## Quick Start
 ```bash
 ./install.sh
@@ -214,6 +216,7 @@ If git is unavailable or init fails, Codex runs with `--skip-git-repo-check`.
 This repo ships a small, focused skills bundle:
 - `git-conventional-commit`
 - `todo-json-manager`
+- `release-runbook`
 
 They are installed into `~/.codex/skills` by default.
 
@@ -222,6 +225,11 @@ They are installed into `~/.codex/skills` by default.
 make install
 make uninstall
 make smoke
+make test
 ```
 
-Everything is in `bin/looper.sh`; read its docstring for the full behavior spec.
+The runner is in `bin/looper.sh`; read its docstring for its behavior.
+See [the comparison pilot](EXPERIMENT-PLAN.md) for the remaining product test.
+The dated [research report](docs/research/LOOPER-RESEARCH-REPORT.md) records the
+decision to keep a smaller Bash controller. The [Go proposal](docs/archive/MIGRATION.md)
+is archived.

@@ -1,5 +1,8 @@
 # Go Rewrite Migration Spec
 
+Archived on 2026-09-24. This is a historical proposal. The active Looper
+implementation is `bin/looper.sh`.
+
 This document specifies a full rewrite of Looper in Go. It is deliberately
 opinionated: the loop is the product, prompts are the value, and everything
 else (UX, devex, observability) is support.

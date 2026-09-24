@@ -21,18 +21,23 @@ Required: id, title, priority (1-5), status (todo|doing|blocked|done).
 
 Optional: details, steps, blockers, tags, files, depends_on, created_at, updated_at.
 
-## Workflow
+## Looper iterations
+
+Looper selects the task and owns task status. During a Looper iteration, read
+the selected task and its `source_files`. Do not edit `to-do.json`. Report a
+structured summary with the task ID, `done` or `blocked` status, changed files,
+and blocker reasons. Looper applies the status after validation and optional
+verification. It does not retry blocked tasks automatically.
+
+## Manual task file maintenance
 
 1. Read `to-do.schema.json` if present and follow it strictly.
-2. Read all files listed in `source_files` and treat them as ground truth.
-3. Use `jq` to inspect tasks and identify the next task.
-   - Choose the lowest priority number among tasks with status "todo".
-   - Break ties by lexicographic `id`.
-   - If no "todo" tasks exist, select the highest priority "blocked" task to attempt unblocking.
-4. Set the chosen task status to "doing" before starting work.
-5. On completion, set status to "done", update `updated_at`, and add relevant `files` or `details`.
-6. If blocked, set status to "blocked" and add clear `blockers` entries.
-7. Keep `to-do.json` formatted with 2-space indentation.
+2. Keep task IDs unique. Each `depends_on` ID must name another task.
+3. Select an existing `doing` task first. Otherwise, select the highest
+   priority `todo` task whose dependencies are done.
+4. Leave `blocked` tasks blocked until their cause is resolved. Then set them
+   to `todo` for a new attempt.
+5. Use `jq` for edits. Keep `to-do.json` formatted with 2-space indentation.
 
 ## jq Tips
 

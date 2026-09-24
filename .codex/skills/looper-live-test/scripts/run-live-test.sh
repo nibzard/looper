@@ -7,7 +7,10 @@ RUN_LOG="$TMP_DIR/run.log"
 
 resolve_looper_bin() {
     if [ -n "${LOOPER_BIN:-}" ]; then
-        printf "%s" "$LOOPER_BIN"
+        case "$LOOPER_BIN" in
+            /*) printf "%s" "$LOOPER_BIN" ;;
+            *) printf "%s/%s" "$(pwd -P)" "$LOOPER_BIN" ;;
+        esac
         return 0
     fi
 
@@ -17,12 +20,12 @@ resolve_looper_bin() {
     fi
 
     if [ -x "./bin/looper.sh" ]; then
-        printf "%s" "./bin/looper.sh"
+        printf "%s" "$(pwd -P)/bin/looper.sh"
         return 0
     fi
 
     if [ -n "${LOOPER_REPO:-}" ] && [ -x "$LOOPER_REPO/bin/looper.sh" ]; then
-        printf "%s" "$LOOPER_REPO/bin/looper.sh"
+        printf "%s" "$(cd "$LOOPER_REPO" && pwd -P)/bin/looper.sh"
         return 0
     fi
 
@@ -71,13 +74,19 @@ cat > "$PROJECT_DIR/to-do.json" <<'EOF'
 }
 EOF
 
+run_status=0
 (
     cd "$PROJECT_DIR"
     CODEX_JSON_LOG=0 \
         LOOPER_GIT_INIT=0 \
         MAX_ITERATIONS=1 \
         "$LOOPER_BIN" to-do.json | tee "$RUN_LOG"
-)
+) || run_status=$?
+
+if [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
+    echo "Looper failed with exit code $run_status." >&2
+    exit "$run_status"
+fi
 
 echo "Temp project: $PROJECT_DIR"
 echo "Run log: $RUN_LOG"

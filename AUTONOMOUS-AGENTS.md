@@ -1,5 +1,9 @@
 # Autonomous Agent Wrappers
 
+This document explains general wrapper patterns. For Looper's current behavior,
+use `README.md` and `bin/looper.sh`. Looper owns task status, uses structured
+output, and leaves blocked tasks for manual resolution.
+
 This guide explains how to run Codex CLI and Claude CLI as non-interactive autonomous agents from Bash.
 
 The central idea is simple:
@@ -157,9 +161,7 @@ if [ "$CODEX_YOLO" -eq 1 ]; then
 fi
 
 CLAUDE_FLAGS=(
-  --output-format stream-json
-  --include-partial-messages
-  --verbose
+  --output-format json
   --dangerously-skip-permissions
   --add-dir "$WORKDIR"
 )
@@ -172,7 +174,9 @@ fi
 Then invoke them safely:
 
 ```bash
-cmd=("$CODEX_BIN" "${CODEX_FLAGS[@]}" --json --output-last-message "$LAST_MESSAGE_FILE" -)
+cmd=("$CODEX_BIN" "${CODEX_FLAGS[@]}" --json
+  --output-schema "$SUMMARY_SCHEMA_FILE"
+  --output-last-message "$LAST_MESSAGE_FILE" -)
 "${cmd[@]}"
 ```
 
@@ -204,7 +208,6 @@ Recommended `status` values:
 
 - `done`
 - `blocked`
-- `skipped`
 
 ### 6. Put the contract directly in the prompt
 
@@ -227,13 +230,13 @@ Rules:
 - If the workflow is not file-based, use the structured context provided with the task.
 - Work only on the selected task id.
 - Keep scope tight.
-- If blocked, set status to "blocked" and include blocker notes.
-- If completed, set status to "done".
+- Do not edit the task file. The wrapper owns task status.
+- If blocked, report status "blocked" with blocker notes.
+- If completed, report status "done".
 - Do not ask for confirmation.
 
 Return only a JSON object:
 {"task_id":"T123","status":"done","summary":"...","files":["..."],"blockers":[]}
-If no task was executed, use status "skipped" and task_id null.
 ```
 
 This contract is what keeps end-of-run behavior unambiguous. Good autonomous wrappers do not leave completion semantics up to interpretation.
@@ -255,6 +258,7 @@ codex exec \
   -m "$CODEX_MODEL" \
   --cd "$WORKDIR" \
   --json \
+  --output-schema "$SUMMARY_SCHEMA_FILE" \
   --output-last-message "$LAST_MESSAGE_FILE" \
   -
 ```
@@ -263,14 +267,14 @@ For Claude, a practical non-interactive pattern is:
 
 ```bash
 claude -p "$prompt" \
-  --output-format stream-json \
-  --include-partial-messages \
-  --verbose \
+  --output-format json \
+  --json-schema "$(cat "$SUMMARY_SCHEMA_FILE")" \
   --dangerously-skip-permissions \
   --add-dir "$WORKDIR"
 ```
 
-Claude usually requires post-processing of the JSON stream to reconstruct the final answer.
+Read the `structured_output` field from Claude's JSON result. Validate the
+selected task ID and status before applying it.
 
 ### 8. Keep a JSONL event log
 
@@ -322,7 +326,7 @@ summary_matches_selected() {
 
   [ -n "$summary_id" ] || return 1
   [ -n "$summary_status" ] || return 1
-  [ "$summary_status" != "skipped" ] || return 1
+  [ "$summary_status" = "done" ] || [ "$summary_status" = "blocked" ] || return 1
   [ "$summary_id" = "$expected_id" ]
 }
 ```
@@ -368,8 +372,9 @@ Autonomous scripts will eventually fail. Design for it up front.
 
 Important recovery patterns:
 
-1. Reset interrupted work
-If the script dies with tasks marked `doing`, move them back to `todo`.
+1. Preserve interrupted work
+If the script dies with a task marked `doing`, select it again on the next run.
+Inspect code edits before retrying if the prior run failed.
 
 2. Repair invalid task files
 If `to-do.json` drifts out of schema, run a dedicated repair pass.
@@ -381,28 +386,12 @@ If the task file does not exist, create it with a bootstrap prompt.
 Always cap iterations with something like `MAX_ITERATIONS`.
 
 5. Degrade safely
-If summary parsing fails, revert temporary state and skip apply.
+If the summary is invalid, restore the task file and stop. Code edits may
+remain and need inspection.
 
-Minimal interrupted-work recovery:
-
-```bash
-recover_task_states() {
-  local tmp now
-  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  tmp=$(mktemp)
-
-  jq --arg now "$now" '
-    .tasks |= map(
-      if .status == "doing" then
-        .status = "todo"
-        | .updated_at = $now
-      else
-        .
-      end
-    )
-  ' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
-}
-```
+Looper reselects `doing` tasks after an interruption. It resets `doing` to
+`todo` only when the iteration cap is reached. The task file does not record
+whether code edits from an interrupted run are complete.
 
 ### 12. Add a final review phase and a real done condition
 
@@ -499,7 +488,7 @@ strip_json_fence() {
 }
 ```
 
-### Extract JSON from mixed output
+### Extract JSON from mixed output when schema output is unavailable
 
 ```bash
 extract_json_from_text() {
@@ -535,7 +524,9 @@ extract_json_from_text() {
 run_codex() {
   local label="$1"
   local prompt="$2"
-  local cmd=("$CODEX_BIN" "${CODEX_FLAGS[@]}" --json --output-last-message "$LAST_MESSAGE_FILE" -)
+  local cmd=("$CODEX_BIN" "${CODEX_FLAGS[@]}" --json
+    --output-schema "$SUMMARY_SCHEMA_FILE"
+    --output-last-message "$LAST_MESSAGE_FILE" -)
 
   printf "%s" "$prompt" | "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"
 }
@@ -550,12 +541,11 @@ run_claude() {
   local output_file
   output_file=$(mktemp)
 
-  "$CLAUDE_BIN" -p "$prompt" "${CLAUDE_FLAGS[@]}" 2>&1 | tee "$output_file" | tee -a "$LOG_FILE"
+  "$CLAUDE_BIN" -p "$prompt" \
+    --json-schema "$(cat "$SUMMARY_SCHEMA_FILE")" \
+    "${CLAUDE_FLAGS[@]}" > "$output_file"
 
-  local text normalized
-  text=$(cat "$output_file")
-  normalized=$(strip_json_fence "$text")
-  extract_json_from_text "$normalized" > "$LAST_MESSAGE_FILE" || true
+  jq -c '.structured_output' "$output_file" > "$LAST_MESSAGE_FILE"
   rm -f "$output_file"
 }
 ```
@@ -601,6 +591,10 @@ while true; do
   fi
 
   selected_task_id=$(current_task_id)
+  if [ -z "$selected_task_id" ]; then
+    echo "No runnable tasks remain."
+    return 2
+  fi
   set_task_status "$selected_task_id" "doing"
 
   prompt=$(build_iteration_prompt "$selected_task_id")
@@ -609,8 +603,8 @@ while true; do
   if summary_matches_selected "$selected_task_id"; then
     apply_summary_to_todo
   else
-    echo "Warning: summary did not validate; reverting task state." >&2
-    set_task_status "$selected_task_id" "todo"
+    echo "Error: summary did not validate; stop and inspect code edits." >&2
+    return 1
   fi
 done
 ```
@@ -631,15 +625,15 @@ For non-interactive wrappers, Codex is strongest when the final structured messa
 
 ### Claude
 
-Claude is workable in autonomous mode, but the wrapper usually has to do more output normalization. In practice:
+For Claude iteration summaries:
 
 - use `-p` with a fully composed prompt
-- use a machine-readable output format if available
-- capture the stream
-- reconstruct the final text or JSON result
+- pass `--output-format json` and `--json-schema`
+- read `structured_output` from the JSON result
 - validate aggressively before applying state
 
-The wrapper around Claude should assume that partial messages and stream events may need interpretation. That applies whether the work item is code, content, research notes, or message handling.
+Other Claude output modes can require stream parsing. Use the structured result
+for the iteration status contract.
 
 ### For both
 
@@ -665,17 +659,16 @@ Mitigation:
 
 Mitigation:
 
-- say "Return only a JSON object"
-- strip code fences
-- extract JSON from mixed text
-- fail closed if no valid JSON is found
+- use a CLI output schema for iteration summaries
+- validate the selected task ID and status in the wrapper
+- stop if no valid summary is returned
 
 ### The wrapper was interrupted mid-run
 
 Mitigation:
 
 - mark active work as `doing`
-- recover `doing` back to `todo` on startup
+- select the existing `doing` task on the next run
 
 ### The state file became invalid
 
