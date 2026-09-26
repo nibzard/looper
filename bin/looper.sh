@@ -42,7 +42,9 @@ Environment variables:
   CODEX_FULL_AUTO          Use --full-auto if not using --yolo (default: 0)
   CODEX_PROFILE            Optional codex --profile value
   CODEX_JSON_LOG           Enable JSONL logging (default: 1)
-  CODEX_PROGRESS           Print compact progress (default: 1)
+  CODEX_PROGRESS           Show live activity (default: 1)
+  LOOPER_VERBOSE           Show configuration and agent events (default: 0)
+  NO_COLOR                 Disable terminal colors when nonempty
   CODEX_ENFORCE_OUTPUT_SCHEMA  Validate final summary via JSON Schema (default: 1)
   LOOPER_VERIFY_COMMAND    Optional command that gates a done status
   CLAUDE_BIN                claude CLI binary (default: claude)
@@ -106,6 +108,7 @@ LOOPER_LOG_DIR=""
 SUMMARY_SCHEMA_FILE=""
 CODEX_JSON_LOG=${CODEX_JSON_LOG:-1}
 CODEX_PROGRESS=${CODEX_PROGRESS:-1}
+LOOPER_VERBOSE=${LOOPER_VERBOSE:-0}
 CODEX_PROFILE=${CODEX_PROFILE:-}
 CODEX_ENFORCE_OUTPUT_SCHEMA=${CODEX_ENFORCE_OUTPUT_SCHEMA:-1}
 LOOPER_VERIFY_COMMAND=${LOOPER_VERIFY_COMMAND:-}
@@ -128,6 +131,21 @@ LOG_FILE=""
 LAST_MESSAGE_FILE=""
 LAST_MESSAGE_TEMP=0
 CAPTURE_LAST_MESSAGE=0
+OUTPUT_TTY=0
+OUTPUT_WIDTH=80
+OUTPUT_BOLD=""
+OUTPUT_GREEN=""
+OUTPUT_YELLOW=""
+OUTPUT_RED=""
+OUTPUT_RESET=""
+LIVE_STATUS_PID=""
+RUN_ACTIVE=0
+RUN_STARTED=0
+RUN_COMPLETED=0
+RUN_BLOCKED=0
+RUN_ATTEMPTED=0
+RUN_STOP_REASON=""
+TASK_STARTED=0
 
 usage() {
     echo "Usage: looper.sh [run] [--interleave] [--smart|-s] [--all <agent>] [to-do.json]"
@@ -135,7 +153,7 @@ usage() {
     echo "       looper.sh --tail [--follow|-f]"
     echo "       looper.sh --doctor [to-do.json]"
     echo "       looper.sh --check [to-do.json]"
-    echo "Options: --all <claude|codex>, --interleave, --smart|-s"
+    echo "Options: --all <claude|codex>, --interleave, --smart|-s, --verbose|-v"
     echo "         --iter-schedule <codex|claude|odd-even|round-robin>"
     echo "         --odd-agent <codex|claude>, --even-agent <codex|claude>"
     echo "         --rr-agents <claude,codex>, --repair-agent <codex|claude>"
@@ -148,6 +166,7 @@ usage() {
     echo "Env: LOOPER_INTERLEAVE"
     echo "Env: LOOPER_APPLY_SUMMARY, LOOPER_GIT_INIT, LOOPER_HOOK, LOOP_DELAY_SECONDS"
     echo "Env: LOOPER_VERIFY_COMMAND"
+    echo "Env: LOOPER_VERBOSE, NO_COLOR"
     echo "Env: LOOPER_RATE_LIMIT_RETRY, LOOPER_RATE_LIMIT_MAX, LOOPER_RATE_LIMIT_DELAY, LOOPER_RATE_LIMIT_CAP"
 }
 
@@ -464,6 +483,10 @@ parse_args() {
     local positional=()
     while [ $# -gt 0 ]; do
         case "$1" in
+            --verbose|-v)
+                LOOPER_VERBOSE=1
+                shift
+                ;;
             --interleave)
                 LOOPER_INTERLEAVE=1
                 shift
@@ -740,7 +763,6 @@ write_summary_schema_if_missing() {
     mkdir -p "$(dirname "$SUMMARY_SCHEMA_FILE")"
     cat > "$SUMMARY_SCHEMA_FILE" <<'EOF'
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Codex RALF Iteration Summary",
   "type": "object",
   "additionalProperties": false,
@@ -788,6 +810,189 @@ cleanup_last_message_file() {
     LAST_MESSAGE_TEMP=0
 }
 
+init_output() {
+    if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+        OUTPUT_TTY=1
+        local columns="${COLUMNS:-}"
+        if [ -z "$columns" ] && command -v tput >/dev/null 2>&1; then
+            columns=$(tput cols 2>/dev/null)
+        fi
+        case "$columns" in
+            ''|*[!0-9]*) columns=80 ;;
+        esac
+        columns=$((10#$columns))
+        [ "$columns" -gt 120 ] && columns=120
+        [ "$columns" -lt 20 ] && columns=20
+        OUTPUT_WIDTH="$columns"
+        if [ -z "${NO_COLOR:-}" ]; then
+            OUTPUT_BOLD=$'\033[1m'
+            OUTPUT_GREEN=$'\033[32m'
+            OUTPUT_YELLOW=$'\033[33m'
+            OUTPUT_RED=$'\033[31m'
+            OUTPUT_RESET=$'\033[0m'
+        fi
+    fi
+}
+
+format_duration() {
+    local seconds="$1"
+    if [ "$seconds" -ge 3600 ]; then
+        printf '%dh %02dm %02ds' "$((seconds / 3600))" "$((seconds / 60 % 60))" "$((seconds % 60))"
+    elif [ "$seconds" -ge 60 ]; then
+        printf '%dm %02ds' "$((seconds / 60))" "$((seconds % 60))"
+    else
+        printf '%ds' "$seconds"
+    fi
+}
+
+# Keep agent text on ordinary lines, including in narrow terminals.
+output_text() {
+    local indent="$1" text width part
+    text=$(printf '%s' "$2" | tr '\t\r\n' '   ' | LC_ALL=C tr -d '[:cntrl:]')
+    width=$((OUTPUT_WIDTH - ${#indent}))
+    while [ "${#text}" -gt "$width" ]; do
+        part="${text:0:width}"
+        if [[ "$part" == *' '* ]] && [ -n "${part% *}" ]; then
+            part="${part% *}"
+        fi
+        printf '%s%s\n' "$indent" "$part"
+        text="${text:${#part}}"
+        text="${text# }"
+    done
+    [ -z "$text" ] || printf '%s%s\n' "$indent" "$text"
+    return 0
+}
+
+read_backlog_counts() {
+    local counts
+    counts=$(jq -r '
+        .tasks as $all
+        | [.tasks[] | select(((.tags // []) | index("project-done")) == null)] as $tasks
+        | ([$tasks[] | select(.status == "todo")] | length) as $todo
+        | ([$tasks[] | select(.status == "todo")
+            | select(all(.depends_on[]?; . as $id |
+                any($all[]; .id == $id and .status == "done")))] | length) as $ready
+        | [$tasks | length,
+           ([$tasks[] | select(.status == "done")] | length),
+           $ready, ($todo - $ready),
+           ([$tasks[] | select(.status == "blocked")] | length),
+           ([$tasks[] | select(.status == "doing")] | length)] | @tsv
+    ' "$TODO_FILE" 2>/dev/null) || return 1
+    IFS=$'\t' read -r BACKLOG_TOTAL BACKLOG_DONE BACKLOG_READY BACKLOG_WAITING BACKLOG_BLOCKED BACKLOG_DOING <<< "$counts"
+}
+
+print_backlog() {
+    read_backlog_counts || return 0
+    local counts="$BACKLOG_DONE/$BACKLOG_TOTAL done | $BACKLOG_READY ready | $BACKLOG_WAITING waiting | $BACKLOG_BLOCKED blocked"
+    [ "$BACKLOG_DOING" -eq 0 ] || counts="$counts | $BACKLOG_DOING doing"
+    output_text '  ' "Backlog   $counts"
+}
+
+start_live_status() {
+    local label="$1" countdown="${2:-0}" started=$SECONDS parent=$$
+    if [ "$OUTPUT_TTY" -ne 1 ] || [ "$CODEX_PROGRESS" -ne 1 ] || [ "$LOOPER_VERBOSE" -eq 1 ]; then
+        return 0
+    fi
+    (
+        ticker_pid=""
+        trap 'if [ -n "$ticker_pid" ]; then kill "$ticker_pid" 2>/dev/null || true; fi; exit 0' INT TERM
+        while kill -0 "$parent" 2>/dev/null; do
+            elapsed=$((SECONDS - started))
+            if [ "$countdown" -gt 0 ]; then
+                remaining=$((countdown - elapsed))
+                [ "$remaining" -ge 0 ] || remaining=0
+                activity="$label $(format_duration "$remaining")"
+            else
+                activity="$label | $(format_duration "$elapsed") elapsed"
+            fi
+            printf '\r\033[2K  %s' "${activity:0:OUTPUT_WIDTH-3}"
+            sleep 1 &
+            ticker_pid=$!
+            wait "$ticker_pid" || break
+        done
+    ) &
+    LIVE_STATUS_PID=$!
+}
+
+stop_live_status() {
+    if [ -n "$LIVE_STATUS_PID" ]; then
+        kill "$LIVE_STATUS_PID" 2>/dev/null || true
+        wait "$LIVE_STATUS_PID" 2>/dev/null || true
+        LIVE_STATUS_PID=""
+        printf '\r\033[2K'
+    fi
+}
+
+pause_between_tasks() {
+    local seconds="$1"
+    if [ "$OUTPUT_TTY" -eq 1 ] && [ "$CODEX_PROGRESS" -eq 1 ] && [ "$LOOPER_VERBOSE" -ne 1 ]; then
+        start_live_status 'Next task in' "$seconds"
+    else
+        output_text '  ' "Next task in $(format_duration "$seconds")."
+    fi
+    sleep "$seconds"
+    stop_live_status
+}
+
+print_blocked_tasks() {
+    local entry task_id title reason
+    while IFS= read -r entry; do
+        task_id=$(jq -r '.id' <<< "$entry")
+        title=$(jq -r '.title' <<< "$entry")
+        output_text '  ' "$task_id  $title"
+        while IFS= read -r reason; do
+            output_text '    ' "$reason"
+        done < <(jq -r 'if (.blockers // [] | length) > 0 then .blockers[] else "No blocker reason recorded." end' <<< "$entry")
+    done < <(jq -c '.tasks[] | select(.status == "blocked")' "$TODO_FILE" 2>/dev/null)
+}
+
+finish_run_output() {
+    local exit_status="$1" state color
+    stop_live_status
+    cleanup_last_message_file
+    [ "$RUN_ACTIVE" -eq 1 ] || return 0
+    RUN_ACTIVE=0
+    case "$exit_status" in
+        0) state='Complete'; color="$OUTPUT_GREEN" ;;
+        2)
+            if [ -n "$RUN_STOP_REASON" ]; then
+                state='Paused'; color="$OUTPUT_YELLOW"
+            else
+                state='Failed (exit 2)'; color="$OUTPUT_RED"
+            fi
+            ;;
+        130|143) state='Interrupted'; color="$OUTPUT_YELLOW" ;;
+        *) state="Failed (exit $exit_status)"; color="$OUTPUT_RED" ;;
+    esac
+    printf '\n%s%s%s' "$color$OUTPUT_BOLD" "$state" "$OUTPUT_RESET"
+    [ -z "$RUN_STOP_REASON" ] || printf '  %s' "$RUN_STOP_REASON"
+    printf '\n'
+    output_text '  ' "This run  $RUN_COMPLETED done | $RUN_BLOCKED blocked | $RUN_ATTEMPTED attempted | $(format_duration "$((SECONDS - RUN_STARTED))")"
+    print_backlog
+    if [ "${BACKLOG_BLOCKED:-0}" -gt 0 ]; then
+        printf '\n%sBlocked tasks%s\n' "$OUTPUT_BOLD" "$OUTPUT_RESET"
+        print_blocked_tasks
+    fi
+    if [ "$state" = 'Paused' ]; then
+        if [ "${BACKLOG_READY:-0}" -gt 0 ] || [ "${BACKLOG_DOING:-0}" -gt 0 ]; then
+            output_text '  ' 'Next: Run Looper again to continue.'
+        elif [ "${BACKLOG_BLOCKED:-0}" -gt 0 ]; then
+            output_text '  ' "Next: Resolve the blockers in $TODO_FILE. Set resolved tasks to todo, then run Looper again."
+        elif [ "${BACKLOG_WAITING:-0}" -gt 0 ]; then
+            output_text '  ' "Next: Check depends_on in $TODO_FILE for dependency cycles, then run Looper again."
+        else
+            output_text '  ' 'Next: Run Looper again to continue.'
+        fi
+    elif [ "$state" = 'Interrupted' ]; then
+        output_text '  ' 'Next: Run Looper again to resume the unfinished work.'
+    elif [ "$exit_status" -ne 0 ]; then
+        output_text '  ' 'Next: Check the error above and the task file before you run Looper again.'
+    fi
+    if [ -n "$LOG_FILE" ]; then
+        printf '  Log       %s\n' "$LOG_FILE"
+    fi
+}
+
 progress_line() {
     local line="$1"
     [ -z "$line" ] && return 0
@@ -795,6 +1000,13 @@ progress_line() {
     local msg_type
     msg_type=$(echo "$line" | jq -r '.type // .event // empty' 2>/dev/null)
     [ -z "$msg_type" ] && return 0
+
+    case "$msg_type" in
+        error|turn.failed)
+            [ "$OUTPUT_TTY" -ne 1 ] || printf '\r\033[2K'
+            ;;
+        *) [ "$LOOPER_VERBOSE" -eq 1 ] || return 0 ;;
+    esac
 
     case "$msg_type" in
         assistant|assistant_message|message|assistant_response)
@@ -821,7 +1033,7 @@ progress_line() {
             fi
             ;;
         result|final|done)
-            echo "Result: done"
+            echo "Agent: finished"
             ;;
         error|turn.failed)
             local err_msg
@@ -1293,6 +1505,37 @@ follow_last_agent_message() {
 }
 
 print_run_info() {
+    printf '\n%sLooper%s\n' "$OUTPUT_BOLD" "$OUTPUT_RESET"
+    output_text '  ' "Project   $WORKDIR"
+    local schedule="$LOOPER_ITER_SCHEDULE"
+    case "$schedule" in
+        odd-even) schedule="odd: $LOOPER_ITER_ODD_AGENT, even: $LOOPER_ITER_EVEN_AGENT" ;;
+        round-robin) schedule="$LOOPER_ITER_RR_AGENTS (round-robin)" ;;
+    esac
+    output_text '  ' "Agents    $schedule | review: $LOOPER_REVIEW_AGENT | repair: $LOOPER_REPAIR_AGENT"
+    if should_use_codex; then
+        output_text '  ' "Codex     $CODEX_MODEL | reasoning: $CODEX_REASONING_EFFORT"
+    fi
+    if should_use_claude; then
+        output_text '  ' "Claude    ${CLAUDE_MODEL:-default model}"
+    fi
+    local iteration_label='iterations'
+    [ "$MAX_ITERATIONS" != '1' ] || iteration_label='iteration'
+    output_text '  ' "Run       Up to $MAX_ITERATIONS $iteration_label | pause: ${LOOP_DELAY_SECONDS}s"
+    output_text '  ' "Tasks     $TODO_FILE"
+    print_backlog
+    if [ -n "$LOG_FILE" ]; then
+        printf '  Log       %s\n' "$LOG_FILE"
+    else
+        output_text '  ' 'Log       disabled'
+    fi
+    if [ "$LOOPER_VERBOSE" -eq 1 ]; then
+        printf '\n'
+        print_run_debug_info
+    fi
+}
+
+print_run_debug_info() {
     local mode="default"
     if [ "$CODEX_YOLO" -eq 1 ]; then
         mode="yolo"
@@ -1510,14 +1753,18 @@ run_with_agent() {
     local agent="$1"
     shift
 
+    start_live_status "$agent running"
+    local exit_status=0
     case "$agent" in
         claude)
-            run_claude "$@"
+            run_claude "$@" || exit_status=$?
             ;;
         codex|*)
-            run_codex "$@"
+            run_codex "$@" || exit_status=$?
             ;;
     esac
+    stop_live_status
+    return "$exit_status"
 }
 
 run_codex() {
@@ -1580,10 +1827,27 @@ handle_last_message() {
     status=$(jq -r '.status // empty' "$LAST_MESSAGE_FILE")
     summary=$(jq -r '.summary // empty' "$LAST_MESSAGE_FILE")
 
-    if [ -n "$task_id" ] && [ -n "$status" ]; then
-        echo "Summary: $task_id -> $status"
+    if [[ "$label" == iter-* ]] && [ -n "$task_id" ] && [ -n "$status" ]; then
+        local state='Done' color="$OUTPUT_GREEN" file_count file_label='files'
+        if [ "$status" = "blocked" ]; then
+            state='Blocked'
+            color="$OUTPUT_YELLOW"
+        fi
+        file_count=$(jq '.files | length' "$LAST_MESSAGE_FILE")
+        [ "$file_count" -ne 1 ] || file_label='file'
+        printf '  %s%s%s  %s | %s %s' "$color$OUTPUT_BOLD" "$state" "$OUTPUT_RESET" \
+            "$(format_duration "$((SECONDS - TASK_STARTED))")" "$file_count" "$file_label"
+        if read_backlog_counts; then
+            printf ' | %s/%s done' "$BACKLOG_DONE" "$BACKLOG_TOTAL"
+        fi
+        printf '\n'
+        [ -z "$summary" ] || output_text '    ' "$summary"
+        local reason
+        while IFS= read -r reason; do
+            output_text '    ' "Blocker: $reason"
+        done < <(jq -r '.blockers[]? | gsub("[\\r\\n\\t]"; " ")' "$LAST_MESSAGE_FILE")
     elif [ -n "$summary" ]; then
-        echo "Summary: $(shorten "$summary" 120)"
+        output_text '  ' "Review: $summary"
     fi
 }
 
@@ -1668,6 +1932,7 @@ run_review_pass() {
         return 1
     fi
 
+    printf '\n%sReview%s  %s | checking completed tasks\n' "$OUTPUT_BOLD" "$OUTPUT_RESET" "$review_agent"
     run_with_agent "$review_agent" "review-$iteration" 0 "$iteration" "$CAPTURE_LAST_MESSAGE" <<EOF
 You are running a final review pass after all tasks are complete.
 
@@ -1708,7 +1973,9 @@ EOF
     fi
     rm -f "$todo_backup"
 
-    handle_last_message "review-$iteration"
+    if [ "$exit_status" -eq 0 ]; then
+        handle_last_message "review-$iteration"
+    fi
     cleanup_last_message_file
     return "$exit_status"
 }
@@ -1911,6 +2178,12 @@ main() {
         require_cmd "$CLAUDE_BIN"
     fi
 
+    init_output
+    RUN_STARTED=$SECONDS
+    trap 'finish_run_output "$?"' EXIT
+    trap 'RUN_STOP_REASON="Received Ctrl-C."; exit 130' INT
+    trap 'RUN_STOP_REASON="Received termination signal."; exit 130' TERM
+
     CODEX_FLAGS=(
         exec
         -m "$CODEX_MODEL"
@@ -1950,37 +2223,23 @@ main() {
     bootstrap_todo
     ensure_valid_todo
 
-    echo "Starting Codex RALF loop"
+    RUN_ACTIVE=1
     print_run_info
-    echo "Project: $WORKDIR"
-    echo "Task file: $TODO_FILE"
-    echo "Max iterations: $MAX_ITERATIONS"
 
     iteration=0
     consecutive_review_failures=0
-    trap 'echo "Interrupted. Exiting."; exit 130' INT TERM
 
     while true; do
         iteration=$((iteration + 1))
 
         if [ "$iteration" -gt "$MAX_ITERATIONS" ]; then
-            echo "Reached max iterations ($MAX_ITERATIONS)."
             recover_task_states
 
             if has_open_tasks; then
-                local todo_count blocked_count done_count
-                todo_count=$(jq '[.tasks[] | select(.status == "todo")] | length' "$TODO_FILE")
-                blocked_count=$(jq '[.tasks[] | select(.status == "blocked")] | length' "$TODO_FILE")
-                done_count=$(jq '[.tasks[] | select(.status == "done")] | length' "$TODO_FILE")
-
-                echo "--- Final State Summary ---"
-                echo "Tasks remaining: $((todo_count + blocked_count)) (todo: $todo_count, blocked: $blocked_count)"
-                echo "Tasks completed: $done_count"
-                echo "Run 'looper.sh' to continue working on remaining tasks."
+                RUN_STOP_REASON="Iteration limit reached ($MAX_ITERATIONS)."
                 return 2
             else
                 if ! last_task_is_project_done; then
-                    echo "All tasks complete. Running final review pass..."
                     if ! run_review_pass "$iteration"; then
                         echo "Error: final review failed; the project is not marked done." >&2
                         return 1
@@ -1988,14 +2247,14 @@ main() {
                     ensure_valid_todo
                 fi
                 if has_open_tasks; then
-                    echo "Review added open tasks. Run 'looper.sh' to continue." >&2
+                    RUN_STOP_REASON='Review added open tasks.'
                     return 2
                 fi
                 if ! last_task_is_project_done; then
                     echo "Error: all tasks are complete, but the project-done marker is missing." >&2
                     return 1
                 fi
-                echo "All tasks complete and project is marked done."
+                RUN_STOP_REASON='Project marked done.'
             fi
             break
         fi
@@ -2004,11 +2263,10 @@ main() {
 
         if ! has_open_tasks; then
             if last_task_is_project_done; then
-                echo "No open tasks remain and project is marked done. Exiting."
+                RUN_STOP_REASON='Project marked done.'
                 break
             fi
 
-            echo "No open tasks remain. Running final review..."
             run_review_pass "$iteration"
             local review_exit_code=$?
             ensure_valid_todo
@@ -2027,7 +2285,7 @@ main() {
 
             if ! has_open_tasks; then
                 if last_task_is_project_done; then
-                    echo "Final review complete; project marked done. Exiting."
+                    RUN_STOP_REASON='Project marked done.'
                     break
                 else
                     echo "No open tasks remain after review and no project-done marker was added."
@@ -2039,15 +2297,12 @@ main() {
             continue
         fi
 
-        echo "Iteration $iteration/$MAX_ITERATIONS"
-
         local task_line task_id task_status task_title
         task_line=$(current_task_line)
         if [ -n "$task_line" ]; then
             IFS=$'\t' read -r task_id task_status task_title <<< "$task_line"
-            echo "Task: $task_id ($task_status) - $task_title"
         else
-            echo "No runnable tasks remain. Resolve blocked tasks or dependencies, then run Looper again." >&2
+            RUN_STOP_REASON='No runnable tasks remain.'
             return 2
         fi
 
@@ -2069,7 +2324,11 @@ main() {
 
         local iter_agent
         iter_agent=$(select_iter_agent "$iteration")
-        echo "Iteration agent: $iter_agent"
+        TASK_STARTED=$SECONDS
+        RUN_ATTEMPTED=$((RUN_ATTEMPTED + 1))
+        printf '\n%s  %s[%s/%s] %s%s  %s\n' "$(date +%H:%M:%S)" \
+            "$OUTPUT_BOLD" "$iteration" "$MAX_ITERATIONS" "$selected_task_id" "$OUTPUT_RESET" "$iter_agent"
+        output_text '  ' "$selected_task_title"
 
         local rate_limit_attempt=0
         local rate_limit_prompt
@@ -2129,7 +2388,7 @@ EOF
             return 1
         fi
         if [ "$(jq -r '.status' "$LAST_MESSAGE_FILE")" = "done" ] && [ -n "$LOOPER_VERIFY_COMMAND" ]; then
-            echo "Verifying task $selected_task_id..."
+            output_text '  ' "Verifying $selected_task_id..."
             local verification_status=0
             bash -lc "$LOOPER_VERIFY_COMMAND" || verification_status=$?
             log_verification "$selected_task_id" "$verification_status"
@@ -2141,7 +2400,6 @@ EOF
                 return 1
             fi
         fi
-        handle_last_message "iter-$iteration"
         if ! apply_summary_to_todo; then
             echo "Error: failed to apply the summary for task '$selected_task_id'." >&2
             cp "$todo_backup" "$TODO_FILE"
@@ -2149,6 +2407,12 @@ EOF
             cleanup_last_message_file
             return 1
         fi
+        if [ "$(jq -r '.status' "$LAST_MESSAGE_FILE")" = 'done' ]; then
+            RUN_COMPLETED=$((RUN_COMPLETED + 1))
+        else
+            RUN_BLOCKED=$((RUN_BLOCKED + 1))
+        fi
+        handle_last_message "iter-$iteration"
         rm -f "$todo_backup"
         if [ -n "$LOOPER_HOOK" ]; then
             local summary_status
@@ -2158,13 +2422,12 @@ EOF
         cleanup_last_message_file
         ensure_valid_todo
 
-        if [ "$LOOP_DELAY_SECONDS" -gt 0 ]; then
+        if [ "$LOOP_DELAY_SECONDS" -gt 0 ] && [ "$iteration" -lt "$MAX_ITERATIONS" ] && [ -n "$(current_task_line)" ]; then
             # Add ±20% jitter so multiple instances don't synchronize
             local jitter=$(( LOOP_DELAY_SECONDS / 5 ))
             local jittered=$(( LOOP_DELAY_SECONDS + RANDOM % (jitter + 1) - jitter / 2 ))
             [ "$jittered" -lt 1 ] && jittered=1
-            echo "Sleeping ${jittered}s (base ${LOOP_DELAY_SECONDS}s ± jitter)..." >&2
-            sleep "$jittered"
+            pause_between_tasks "$jittered"
         fi
     done
 }

@@ -131,7 +131,9 @@ normal_status=$?
 set -e
 test "$normal_status" -eq 2
 
-log_contains "Task: T2" "$RUN_LOG"
+log_contains '\[1/1\] T2  codex' "$RUN_LOG"
+log_contains 'Done  .*1 file.*1/2 done' "$RUN_LOG"
+log_contains 'This run  1 done.*0 blocked.*1 attempted' "$RUN_LOG"
 log_contains "exec -m gpt-6-sol -c model_reasoning_effort=max" "$NORMAL_ARGS_LOG"
 test -f "$PROJECT_DIR/README.md"
 test -f "$PROJECT_DIR/to-do.schema.json"

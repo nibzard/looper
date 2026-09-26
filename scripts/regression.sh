@@ -12,6 +12,14 @@ write_test_schema() {
         _ "$TMP_DIR/functions.sh" "$1"
 }
 
+write_test_summary_schema() {
+    /bin/bash -c 'source "$1"; SUMMARY_SCHEMA_FILE="$2"; write_summary_schema_if_missing' \
+        _ "$TMP_DIR/functions.sh" "$1"
+}
+
+write_test_summary_schema "$TMP_DIR/summary.schema.json"
+jq -e 'has("$schema") | not' "$TMP_DIR/summary.schema.json" >/dev/null
+
 cat > "$TMP_DIR/bin/codex" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -87,7 +95,8 @@ expect_status() {
         cd "$TMP_DIR/$name"
         CODEX_BIN="$TMP_DIR/bin/codex" \
         CLAUDE_BIN="${TEST_CLAUDE_BIN:-$TMP_DIR/bin/claude}" \
-        CODEX_JSON_LOG=0 \
+        CODEX_JSON_LOG="${TEST_JSON_LOG:-0}" \
+        LOOPER_BASE_DIR="$TMP_DIR/$name/logs" \
         LOOPER_GIT_INIT=0 \
         LOOP_DELAY_SECONDS=0 \
         MAX_ITERATIONS="${TEST_MAX_ITERATIONS:-1}" \
@@ -122,6 +131,12 @@ expect_status 7 failed_agent to-do.json
 jq -e '.tasks[0].status == "todo"' "$TMP_DIR/failed_agent/to-do.json" >/dev/null
 unset STUB_EXIT_CODE STUB_EDIT_TODO
 
+make_project agent_exit_two
+export STUB_EXIT_CODE=2
+expect_status 2 agent_exit_two to-do.json
+grep -q 'Failed (exit 2)' "$TMP_DIR/agent_exit_two/output.log"
+unset STUB_EXIT_CODE
+
 make_project failed_review done
 export STUB_REVIEW_FAIL=1 STUB_REVIEW_MARKER=1 TEST_MAX_ITERATIONS=5
 expect_status 1 failed_review to-do.json
@@ -147,7 +162,7 @@ if grep -Eq -- 'stream-json|--include-partial-messages' "$TMP_DIR/claude/claude-
     echo "Claude received streaming output flags" >&2
     exit 1
 fi
-grep -q 'Review agent: codex' "$TMP_DIR/claude/output.log"
+grep -q 'Agents .*claude | review: codex | repair: claude' "$TMP_DIR/claude/output.log"
 grep -q -- '--json-schema' "$TMP_DIR/claude/claude-args.log"
 unset STUB_REVIEW_MARKER
 
@@ -162,7 +177,76 @@ expect_status 2 newly_blocked to-do.json
 jq -e '.tasks[0].status == "blocked" and .tasks[0].blockers[0] == "API key is missing"' \
     "$TMP_DIR/newly_blocked/to-do.json" >/dev/null
 test "$(wc -l < "$TMP_DIR/newly_blocked/calls.log")" -eq 1
+grep -q 'Blocker: API key is missing' "$TMP_DIR/newly_blocked/output.log"
+grep -q 'This run  0 done | 1 blocked | 1 attempted' "$TMP_DIR/newly_blocked/output.log"
+grep -q 'Set resolved tasks to todo' "$TMP_DIR/newly_blocked/output.log"
 unset STUB_SUMMARY
+
+make_project output_summary
+export STUB_SUMMARY='{"task_id":"T1","status":"done","summary":"Added fixtures and checked the parser.","files":["parser.sh"],"blockers":[]}' STUB_REVIEW_MARKER=1
+expect_status 0 output_summary to-do.json
+grep -q 'Added fixtures and checked the parser.' "$TMP_DIR/output_summary/output.log"
+grep -q 'Done  .*1 file | 2/2 done' "$TMP_DIR/output_summary/output.log"
+grep -q 'Complete  Project marked done' "$TMP_DIR/output_summary/output.log"
+grep -q 'This run  1 done | 0 blocked | 1 attempted' "$TMP_DIR/output_summary/output.log"
+grep -q 'Backlog   2/2 done | 0 ready | 0 waiting | 0 blocked' "$TMP_DIR/output_summary/output.log"
+if grep -Eq 'Codex flags:|Result: done|Starting Codex|Sleeping|Iteration agent:' "$TMP_DIR/output_summary/output.log"; then
+    echo 'Default output contains debug details' >&2
+    exit 1
+fi
+if grep -q $'\033' "$TMP_DIR/output_summary/output.log"; then
+    echo 'Redirected output contains terminal escape codes' >&2
+    exit 1
+fi
+unset STUB_SUMMARY STUB_REVIEW_MARKER
+
+make_project logged_output
+export TEST_JSON_LOG=1 STUB_REVIEW_MARKER=1
+expect_status 0 logged_output to-do.json
+log_files=("$TMP_DIR/logged_output/logs"/*/*.jsonl)
+test "${#log_files[@]}" -eq 1
+jq -se 'length == 2 and all(.[]; .type == "result" and (.looper_run_id | length > 0))' \
+    "${log_files[0]}" >/dev/null
+grep -Fq "${log_files[0]}" "$TMP_DIR/logged_output/output.log"
+unset TEST_JSON_LOG STUB_REVIEW_MARKER
+
+make_project verbose_output
+export STUB_REVIEW_MARKER=1
+expect_status 0 verbose_output --verbose to-do.json
+grep -q 'Codex flags:' "$TMP_DIR/verbose_output/output.log"
+grep -q 'Agent: finished' "$TMP_DIR/verbose_output/output.log"
+unset STUB_REVIEW_MARKER
+
+make_project limit_with_blocker
+jq '.tasks[1].status = "todo"' "$TMP_DIR/limit_with_blocker/to-do.json" > "$TMP_DIR/limit_with_blocker/next.json"
+mv "$TMP_DIR/limit_with_blocker/next.json" "$TMP_DIR/limit_with_blocker/to-do.json"
+export STUB_SUMMARY='{"task_id":"T1","status":"blocked","summary":"Missing input","files":[],"blockers":["API key is missing"]}'
+expect_status 2 limit_with_blocker to-do.json
+grep -q '0/2 done | 1 ready | 0 waiting | 1 blocked' "$TMP_DIR/limit_with_blocker/output.log"
+grep -q 'Next: Run Looper again to continue.' "$TMP_DIR/limit_with_blocker/output.log"
+unset STUB_SUMMARY
+
+make_project waiting_output blocked
+jq '.tasks[0].blockers = ["A human must review the labels."]
+    | .tasks += [{"id":"T3","title":"Use the labels","priority":2,"status":"todo","depends_on":["T1"]}]' \
+    "$TMP_DIR/waiting_output/to-do.json" > "$TMP_DIR/waiting_output/next.json"
+mv "$TMP_DIR/waiting_output/next.json" "$TMP_DIR/waiting_output/to-do.json"
+expect_status 2 waiting_output to-do.json
+grep -q '1/3 done | 0 ready | 1 waiting | 1 blocked' "$TMP_DIR/waiting_output/output.log"
+grep -q 'T1  First task' "$TMP_DIR/waiting_output/output.log"
+grep -q 'A human must review the labels.' "$TMP_DIR/waiting_output/output.log"
+if grep -q '\[1/1\]' "$TMP_DIR/waiting_output/output.log"; then
+    echo 'Output announces an iteration with no runnable task' >&2
+    exit 1
+fi
+
+make_project cycle_output
+jq '.tasks[0].depends_on = ["T2"] | .tasks[1].status = "todo" | .tasks[1].depends_on = ["T1"]' \
+    "$TMP_DIR/cycle_output/to-do.json" > "$TMP_DIR/cycle_output/next.json"
+mv "$TMP_DIR/cycle_output/next.json" "$TMP_DIR/cycle_output/to-do.json"
+expect_status 2 cycle_output to-do.json
+grep -q '0/2 done | 0 ready | 2 waiting | 0 blocked' "$TMP_DIR/cycle_output/output.log"
+grep -q 'dependency cycles' "$TMP_DIR/cycle_output/output.log"
 
 make_project dependency
 jq '.tasks[0].depends_on = ["T3"] | .tasks += [{"id":"T3","title":"Prerequisite","priority":5,"status":"todo"}]' \
@@ -192,6 +276,12 @@ expect_status 1 verify_failure to-do.json
 jq -e '.tasks[0].status == "todo"' "$TMP_DIR/verify_failure/to-do.json" >/dev/null
 test -f "$TMP_DIR/verify_failure/agent-change.txt"
 grep -q 'code changes and commits remain' "$TMP_DIR/verify_failure/output.log"
+grep -q 'Failed (exit 1)' "$TMP_DIR/verify_failure/output.log"
+grep -q 'This run  0 done | 0 blocked | 1 attempted' "$TMP_DIR/verify_failure/output.log"
+if grep -q '  Done  ' "$TMP_DIR/verify_failure/output.log"; then
+    echo 'Output reports done before verification succeeds' >&2
+    exit 1
+fi
 unset STUB_WRITE_CODE LOOPER_VERIFY_COMMAND
 
 make_project schema_flag
@@ -241,5 +331,12 @@ fi
 source "$TMP_DIR/functions.sh"
 test "$(strip_json_fence '{"task_id":"T1"}')" = '{"task_id":"T1"}'
 test "$(strip_json_fence $'```json\n{"task_id":"T1"}\n```')" = '{"task_id":"T1"}'
+
+if command -v python3 >/dev/null 2>&1; then
+    python3 "$ROOT_DIR/scripts/terminal-output.py"
+    python3 "$ROOT_DIR/scripts/skill-regression.py"
+else
+    echo 'Terminal output checks skipped: python3 is unavailable.'
+fi
 
 echo "Regression tests passed."
