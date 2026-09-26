@@ -10,3 +10,7 @@ invalid downloads or uncommitted version files stop publication.
 Validation: make test, final helper regression checks, all four skill
 validators, shell syntax checks, and git diff checks passed. External
 release operations were tested with local substitutes.
+
+Archive verification occurs after the tag and GitHub release are
+published. A download failure stops the formula update; it does not undo
+earlier publication. Version files must be committed before tag pushes.
