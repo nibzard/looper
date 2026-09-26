@@ -17,6 +17,9 @@ SKILLS_DIR="$TMP_DIR/user-skills"
 test -f "$SKILLS_DIR/git-conventional-commit/SKILL.md"
 test -f "$SKILLS_DIR/todo-json-manager/SKILL.md"
 test -f "$SKILLS_DIR/release-runbook/SKILL.md"
+test -x "$SKILLS_DIR/release-runbook/scripts/release.sh"
+test -f "$SKILLS_DIR/release-runbook/references/helper.md"
+"$SKILLS_DIR/release-runbook/scripts/release.sh" --help >/dev/null
 
 "$BREW_DIR/bin/looper-uninstall" --skip-bin --skills-dir "$SKILLS_DIR"
 test ! -e "$SKILLS_DIR/git-conventional-commit"

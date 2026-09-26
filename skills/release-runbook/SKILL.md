@@ -1,75 +1,44 @@
 ---
 name: release-runbook
-description: "Release preparation and publish workflow: run tests, bump version, tag, push, and create a GitHub release (and update Homebrew formula if present). Use when asked to cut a release, bump version, create tags, or publish a release."
+description: Prepare or publish a software release when requested, including version updates, final checks, tags, GitHub releases, and Homebrew formulas. Preparation alone does not authorize publication.
 ---
 
-# Release Runbook
+# Prepare and publish a release
 
-## Overview
-Execute a clean release workflow: verify repo state, run tests, bump versions, tag, push, publish a GitHub release, and update downstream artifacts after the tag exists.
+Follow the user's requested scope and the project's release rules.
+A version update, release review, or skill edit does not authorize publication.
+When publication is already authorized, complete the workflow without asking again.
 
 ## Workflow
 
-### 1) Preflight
-- Check repo state: `git status -s` and `git diff` should be clean.
-- Confirm remote: `git remote -v` and current branch.
-- Verify GitHub auth: `gh auth status`.
-- Ensure required tools are available (`git`, `gh`, `jq`, language runtimes).
+1. Inspect the branch, remote, working tree, release instructions, and
+   existing tags. Identify unrelated edits and the intended version.
+2. Update the version using the project's normal method.
+   A version file must contain only the version if the helper overwrites it.
+3. Run the required checks against the final version and release artifacts.
+   Record actual results. Skip checks only when explicitly allowed, and
+   report the skipped checks.
+4. Review the release diff, notes, target branch, and version.
+   Commit only release changes using the project's message rules.
+   Include any required context note.
+5. If publication is authorized, tag the verified commit and push the
+   intended branch and tag. Verify each result before the next action.
+6. Create the requested release. Use a file for multiline release notes.
+   Verify that the release exists. Do not silently skip a requested step.
+7. After the tag is available, update a requested Homebrew formula using
+   the downloaded archive's checksum. Verify the archive before hashing.
+   Commit and push the formula separately when authorized.
 
-### 2) Decide the version bump
-- Choose SemVer bump (major/minor/patch) based on changes.
-- Locate version references and update them before tagging:
-  - Common files: `VERSION`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `setup.cfg`, `setup.py`, `Formula/*.rb` (url only), `README.md` badges.
-  - Use `rg -n "version|VERSION|__version__"` to find references.
+On failure, stop before the next external action. Report completed steps,
+remaining steps, and the exact failure. Inspect existing tags and releases
+before retrying. Do not delete or replace a published tag to recover.
 
-### 3) Run tests (or a documented smoke test)
-- Prefer project-defined tests (README/Makefile/CI):
-  - `make test`, `npm test`, `pytest`, `go test ./...`, etc.
-- If no tests exist, run a minimal smoke check and record it in the release notes.
-- Looper-specific smoke check (if repo contains `bin/looper.sh`):
-  - Create a temp project, set `MAX_ITERATIONS` low, run the loop, and verify it exits cleanly.
+## Helper
 
-### 4) Commit release changes
-- Stage and commit all changes required for the release.
-- Keep commit messages Conventional Commits unless the repo specifies otherwise.
+Use [scripts/release.sh](scripts/release.sh) from this skill's directory.
+Run it with the target repository as the working directory.
+The helper publishes a release; use it only within authorized scope.
+For preparation alone, perform steps 1 through 4 without this helper.
 
-### 5) Tag and push
-- Create an annotated tag on the release commit:
-  - `git tag -a vX.Y.Z -m "vX.Y.Z"`
-- Push code and tag:
-  - `git push origin <branch>`
-  - `git push origin vX.Y.Z`
-
-### 6) Publish GitHub release
-- Create a release from the tag:
-  - `gh release create vX.Y.Z --title "vX.Y.Z" --notes "<summary>"`
-
-### 7) Update Homebrew formula (if present)
-- Only after the release tag exists (tarball is published).
-- Compute the new sha:
-  - `curl -L -s https://github.com/<org>/<repo>/archive/refs/tags/vX.Y.Z.tar.gz | sha256sum | awk '{print $1}'`
-- Update `Formula/*.rb` with the new `url` and `sha256`.
-- Commit and push the formula update.
-
-## Notes
-- Tag should point to the release commit; formula updates are separate and can land after the tag.
-- If tests fail, stop and fix before tagging.
-- Keep release notes short and factual (highlights + testing performed).
-
-## Helper Script
-From this repository's root, use
-`skills/release-runbook/scripts/release.sh` to automate the release flow.
-
-Examples:
-```bash
-# Tag, push, release, and update Formula/*.rb
-skills/release-runbook/scripts/release.sh --version 0.2.0 --test-cmd "make test"
-
-# Use a custom bump command and a VERSION file
-skills/release-runbook/scripts/release.sh --version 1.4.0 --bump-cmd "npm version minor --no-git-tag-version" --version-file VERSION
-```
-
-Notes:
-- `--version-file` overwrites files with the raw version string (no leading `v`).
-- Formula updates are performed after the tag exists; set `--skip-formula` to skip.
-- Use `--dry-run` to preview commands without executing.
+Read [references/helper.md](references/helper.md) when using the helper.
+It explains dry runs, test gates, scoped staging, and recovery limits.

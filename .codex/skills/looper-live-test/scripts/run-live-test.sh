@@ -14,11 +14,6 @@ resolve_looper_bin() {
         return 0
     fi
 
-    if command -v looper.sh >/dev/null 2>&1; then
-        command -v looper.sh
-        return 0
-    fi
-
     if [ -x "./bin/looper.sh" ]; then
         printf "%s" "$(pwd -P)/bin/looper.sh"
         return 0
@@ -26,6 +21,18 @@ resolve_looper_bin() {
 
     if [ -n "${LOOPER_REPO:-}" ] && [ -x "$LOOPER_REPO/bin/looper.sh" ]; then
         printf "%s" "$(cd "$LOOPER_REPO" && pwd -P)/bin/looper.sh"
+        return 0
+    fi
+
+    local checkout
+    checkout=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)
+    if [ -x "$checkout/bin/looper.sh" ]; then
+        printf '%s' "$checkout/bin/looper.sh"
+        return 0
+    fi
+
+    if command -v looper.sh >/dev/null 2>&1; then
+        command -v looper.sh
         return 0
     fi
 
@@ -39,7 +46,7 @@ log_contains() {
     if command -v rg >/dev/null 2>&1; then
         rg -m 1 "$pattern" "$file" || true
     else
-        grep -m 1 "$pattern" "$file" || true
+        grep -E -m 1 "$pattern" "$file" || true
     fi
 }
 
@@ -78,9 +85,11 @@ run_status=0
 (
     cd "$PROJECT_DIR"
     CODEX_JSON_LOG=0 \
+        LOOPER_BASE_DIR="$TMP_DIR/logs" \
         LOOPER_GIT_INIT=0 \
+        LOOP_DELAY_SECONDS=0 \
         MAX_ITERATIONS=1 \
-        "$LOOPER_BIN" to-do.json | tee "$RUN_LOG"
+        "$LOOPER_BIN" to-do.json 2>&1 | tee "$RUN_LOG"
 ) || run_status=$?
 
 if [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
@@ -88,15 +97,24 @@ if [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
     exit "$run_status"
 fi
 
+require_outcome() {
+    if ! jq -e '
+        any(.tasks[]; .id == "T2" and .status == "done")
+        and any(.tasks[]; .id == "T10" and .status == "todo")
+    ' "$PROJECT_DIR/to-do.json" >/dev/null || [ ! -s "$PROJECT_DIR/README.md" ]; then
+        echo "Error: expected T2 done, T10 todo, and a nonempty README.md." >&2
+        echo "Inspect $PROJECT_DIR and $RUN_LOG." >&2
+        exit 1
+    fi
+}
+require_outcome
+
+echo "Looper executable: $LOOPER_BIN"
 echo "Temp project: $PROJECT_DIR"
 echo "Run log: $RUN_LOG"
-echo "Selected task: $(log_contains "^Task:" "$RUN_LOG")"
-echo "Summary: $(log_contains "^Summary:" "$RUN_LOG")"
+echo "Selected task: $(log_contains '^[0-9:]+  \[[0-9]+/[0-9]+\]' "$RUN_LOG")"
+echo "Result: $(log_contains '^  (Done|Blocked)  ' "$RUN_LOG")"
 
-if command -v jq >/dev/null 2>&1; then
-    echo "Task statuses:"
-    jq -r '.tasks[] | "\(.id)\t\(.status)\t\(.title)"' "$PROJECT_DIR/to-do.json"
-else
-    echo "to-do.json:"
-    cat "$PROJECT_DIR/to-do.json"
-fi
+echo "Task statuses:"
+jq -r '.tasks[] | "\(.id)\t\(.status)\t\(.title)"' "$PROJECT_DIR/to-do.json"
+echo "Live test outcome verified."

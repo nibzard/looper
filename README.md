@@ -146,7 +146,52 @@ Minimal example:
 }
 ```
 
-## Logs and Output
+## Logs and output
+
+The terminal shows a compact run header, task results, and a final report:
+
+```text
+Looper
+  Project   /home/agent/measuretwice
+  Agents    claude | review: claude | repair: claude
+  Claude    default model
+  Run       Up to 50 iterations | pause: 90s
+  Tasks     to-do.json
+  Backlog   12/15 done | 3 ready | 0 waiting | 0 blocked
+  Log       .../20260924-101305-651973.jsonl
+
+10:13:05  [1/50] T063  claude
+  Obtain human review of public challenge labels
+  Blocked  2m 08s | 0 files | 12/15 done
+    The public labels need human review.
+    Blocker: A reviewer must approve the challenge labels.
+
+10:16:48  [2/50] T071  claude
+  Publish API, schema, and CLI references
+  Done  4m 12s | 3 files | 13/15 done
+    Added the references and checked the examples.
+```
+
+Each task shows its start time, iteration, agent, elapsed time, and reported file count.
+The result includes the agent's summary and blocker reasons.
+Looper validates the summary and applies the task update before it reports a task as done.
+If you set `LOOPER_VERIFY_COMMAND`, that command must also succeed.
+
+During a run, a live line shows elapsed time or the pause countdown.
+Completed entries stay in terminal scrollback.
+Redirected output uses plain text with no colors or live line updates.
+Set `NO_COLOR=1` to disable colors, or `TERM=dumb` to disable all terminal formatting.
+Set `CODEX_PROGRESS=0` to hide live activity and agent events.
+
+The final report separates results from this run and the full backlog.
+It shows why Looper stopped, blocked tasks, their reasons, and the next action.
+`ready` counts tasks that can run. `waiting` counts tasks with unfinished dependencies.
+Backlog counts exclude the final `project-done` marker.
+Looper skips the pause when no next task can run or the iteration limit is reached.
+
+Use `looper.sh --verbose` (or `-v`) to include configuration details and agent events.
+You can also set `LOOPER_VERBOSE=1`.
+
 Logs are stored per project under:
 ```
 ~/.looper/<project>-<hash>/
@@ -181,7 +226,9 @@ Environment variables (defaults in parentheses):
 - `CODEX_FULL_AUTO` (0)
 - `CODEX_PROFILE` (empty)
 - `CODEX_JSON_LOG` (1)
-- `CODEX_PROGRESS` (1)
+- `CODEX_PROGRESS` (1; show live activity and agent events)
+- `LOOPER_VERBOSE` (0; show configuration and agent events)
+- `NO_COLOR` (empty; any nonempty value disables colors)
 - `CODEX_ENFORCE_OUTPUT_SCHEMA` (1)
 - `LOOPER_VERIFY_COMMAND` (empty)
 - `CLAUDE_BIN` (claude)
@@ -212,13 +259,25 @@ project done. Reaching the iteration limit with open tasks returns exit code 2.
 If the project is not a git repo and `LOOPER_GIT_INIT=1`, Looper runs `git init`.
 If git is unavailable or init fails, Codex runs with `--skip-git-repo-check`.
 
-## Included Skills
+## Included skills
+
 This repo ships a small, focused skills bundle:
-- `git-conventional-commit`
-- `todo-json-manager`
-- `release-runbook`
+
+- `git-conventional-commit`: Create scoped commits and preserve unrelated edits.
+- `todo-json-manager`: Maintain task backlogs and report verified Looper outcomes.
+- `release-runbook`: Prepare and publish releases within the requested scope.
 
 They are installed into `~/.codex/skills` by default.
+Run `./install.sh` to update Looper and the bundled skills.
+
+The release helper requires `--test-cmd` or an explicit `--skip-tests`.
+It runs checks after version updates. Dry runs stay offline and leave files unchanged.
+Use the helper only when publishing is authorized.
+See its [usage reference](skills/release-runbook/references/helper.md) for staging and recovery rules.
+
+The local `looper-live-test` skill is in `.codex/skills` and is not part of the installed bundle.
+It checks task selection, task status, and file creation in a temporary project.
+Routine checks use local stubs; a live smoke test uses a real agent.
 
 ## Dev Notes
 ```bash
