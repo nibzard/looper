@@ -1,0 +1,12 @@
+Improve terminal feedback for long unattended Looper runs. Show task
+summaries and blocker reasons, retain completed entries in scrollback,
+and keep redirected output free of terminal formatting.
+
+Update the bundled skills and local live-test skill to use focused scope,
+verified outcomes, explicit staging, and recoverable release steps.
+Release dry runs stay offline. Verification follows version updates, and
+invalid downloads or uncommitted version files stop publication.
+
+Validation: make test, final helper regression checks, all four skill
+validators, shell syntax checks, and git diff checks passed. External
+release operations were tested with local substitutes.
