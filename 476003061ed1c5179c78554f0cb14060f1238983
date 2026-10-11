@@ -1,0 +1,6 @@
+# Context
+
+tmux window-size "latest" lets any attached client on the server
+resize detached capture panes; -x/-y only set the initial size.
+The recorder now uses a dedicated socket (-L) and fails unless
+the pane reports exactly 104x30.
