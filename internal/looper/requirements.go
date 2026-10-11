@@ -115,11 +115,11 @@ func (e *Engine) startupImportPlans() {
 // analyzeImport runs the configured review agent in a private inspection
 // worktree over the current backlog, prior imported requirements, and the
 // new captured text. Analysis must not change code.
-func (e *Engine) analyzeImport(ctx context.Context, plans []capturedPlan) (*importProposal, string, error) {
+func (e *Engine) analyzeImport(ctx context.Context, plans []capturedPlan) (*importProposal, error) {
 	name := identifier("import-analysis")
 	work, err := e.Repo.Workspace(name, e.State.Tip, e.State.Backlog)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer e.Repo.Remove(work)
 	op := e.capture()
@@ -152,11 +152,11 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 	dir := filepath.Join(e.Dir, name)
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	var proposal importProposal
 	if err = json.Unmarshal(raw, &proposal); err != nil {
-		return nil, "", fmt.Errorf("the analysis returned invalid JSON: %w", err)
+		return nil, fmt.Errorf("the analysis returned invalid JSON: %w", err)
 	}
 	for i := range proposal.Additions {
 		t := proposal.Additions[i]
@@ -167,12 +167,12 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 	}
 	after, err := e.Repo.Snapshot(work)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if after != e.State.Published {
-		return nil, "", fmt.Errorf("the analysis changed code; its result was not applied")
+		return nil, fmt.Errorf("the analysis changed code; its result was not applied")
 	}
-	return &proposal, dir, nil
+	return &proposal, nil
 }
 
 func orNone(s string) string {

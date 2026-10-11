@@ -85,31 +85,18 @@ type settingSources struct {
 	reviewEvery                                                         intValue
 }
 
-// flagOptions records setting flags in command-line order so replay applies
-// the same last-flag-wins semantics the original parser had. An explicit
-// empty value ("--model \"\"") is a real override, not an absent flag.
+// flagOptions records setting flags as replay functions in command-line
+// order. Replaying after the environment layer preserves the ordered
+// semantics of overlapping flags: a later --agent, --all, or
+// --review-agent wins over --interleave, exactly as the original parser
+// behaved. An explicit empty value ("--model \"\"") is a real override, not
+// an absent flag.
 type flagOptions struct {
-	apps []flagApplication
+	apps []func(*settingSources)
 }
 
-const (
-	flagAgent = iota
-	flagReviewAgent
-	flagAll
-	flagModel
-	flagEffort
-	flagJobs
-	flagReviewEvery
-	flagInterleave
-)
-
-type flagApplication struct {
-	field int
-	value string
-}
-
-func (f *flagOptions) apply(field int, value string) {
-	f.apps = append(f.apps, flagApplication{field, value})
+func (f *flagOptions) apply(fn func(*settingSources)) {
+	f.apps = append(f.apps, fn)
 }
 
 func env(key, fallback string) string {
@@ -239,7 +226,16 @@ func Parse(args []string) (Config, error) {
 		case "--smart", "-s":
 			c.Smart = true
 		case "--interleave":
-			flags.apply(flagInterleave, "")
+			flags.apply(func(s *settingSources) {
+				// At its command-line position: a later --agent, --all, or
+				// --review-agent still wins. The preset fills an empty review
+				// agent from any layer, so a present-but-empty value keeps a
+				// second-opinion reviewer.
+				s.agent = inputValue{"claude", SourceFlag}
+				if s.reviewAgent.value == "" {
+					s.reviewAgent = inputValue{"codex", SourceFlag}
+				}
+			})
 		case "--plan":
 			v, err = value()
 			if err != nil {
@@ -257,19 +253,25 @@ func Parse(args []string) (Config, error) {
 			}
 			switch a {
 			case "--jobs":
-				flags.apply(flagJobs, v)
+				flags.apply(func(s *settingSources) { s.jobs = inputValue{v, SourceFlag} })
 			case "--check-jobs":
 				checks = v
 			case "--agent":
-				flags.apply(flagAgent, v)
+				flags.apply(func(s *settingSources) { s.agent = inputValue{v, SourceFlag} })
 			case "--all":
-				flags.apply(flagAll, v)
+				flags.apply(func(s *settingSources) {
+					s.agent = inputValue{v, SourceFlag}
+					s.reviewAgent = inputValue{v, SourceFlag}
+				})
 			case "--review-agent":
-				flags.apply(flagReviewAgent, v)
+				flags.apply(func(s *settingSources) { s.reviewAgent = inputValue{v, SourceFlag} })
 			case "--model":
-				flags.apply(flagModel, v)
+				flags.apply(func(s *settingSources) {
+					s.model = inputValue{v, SourceFlag}
+					s.claudeModel = inputValue{v, SourceFlag}
+				})
 			case "--effort":
-				flags.apply(flagEffort, v)
+				flags.apply(func(s *settingSources) { s.effort = inputValue{v, SourceFlag} })
 			case "--ls":
 				c.Command = "status"
 				c.ListStatus = v
@@ -281,7 +283,7 @@ func Parse(args []string) (Config, error) {
 				if a == "--max-iterations" {
 					c.Limit = n
 				} else {
-					flags.apply(flagReviewEvery, v)
+					flags.apply(func(s *settingSources) { s.reviewEvery = intValue{n, SourceFlag} })
 				}
 			}
 		default:
@@ -347,35 +349,8 @@ func Parse(args []string) (Config, error) {
 	}
 	// Layer 4: explicit flags, replayed in command-line order so the last
 	// flag for each field wins, exactly as the original parser did.
-	for _, app := range flags.apps {
-		switch app.field {
-		case flagJobs:
-			settings.jobs = inputValue{app.value, SourceFlag}
-		case flagAgent:
-			settings.agent = inputValue{app.value, SourceFlag}
-		case flagAll:
-			settings.agent = inputValue{app.value, SourceFlag}
-			settings.reviewAgent = inputValue{app.value, SourceFlag}
-		case flagReviewAgent:
-			settings.reviewAgent = inputValue{app.value, SourceFlag}
-		case flagModel:
-			settings.model = inputValue{app.value, SourceFlag}
-			settings.claudeModel = inputValue{app.value, SourceFlag}
-		case flagEffort:
-			settings.effort = inputValue{app.value, SourceFlag}
-		case flagReviewEvery:
-			n, _ := strconv.Atoi(app.value) // validated during parsing
-			settings.reviewEvery = intValue{n, SourceFlag}
-		case flagInterleave:
-			// At its command-line position: a later --agent, --all, or
-			// --review-agent still wins, exactly as the original parser
-			// behaved. The preset fills an empty review agent from any layer,
-			// so a present-but-empty value keeps a second-opinion reviewer.
-			settings.agent = inputValue{"claude", SourceFlag}
-			if settings.reviewAgent.value == "" {
-				settings.reviewAgent = inputValue{"codex", SourceFlag}
-			}
-		}
+	for _, fn := range flags.apps {
+		fn(&settings)
 	}
 	if settings.jobs.value == "auto" {
 		c.JobsAuto = true

@@ -46,7 +46,7 @@ type Observation struct {
 }
 
 func activeAttempt(a *Attempt) bool {
-	return a.Phase != "done" && a.Phase != "blocked" && a.Phase != "abandoned"
+	return a.Phase != "done" && a.Phase != "blocked"
 }
 
 // Restrict discovery to Looper-owned artifacts. Never inspect agent home files.

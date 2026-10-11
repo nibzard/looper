@@ -346,6 +346,9 @@ func (s Summary) Validate(id string) error {
 	return nil
 }
 
+// Attempt is one worker run of a task. Phase is its position in the engine
+// state machine: running, ready, verifying, integrated, done, blocked, or
+// resume. Recovery coerces any other loaded value to ready or resume.
 type Attempt struct {
 	ID           string     `json:"id"`
 	Task         Task       `json:"task"`
@@ -370,20 +373,17 @@ type Attempt struct {
 // optional state fields: projects without imports serialize exactly as
 // before, and older records load with empty import lists.
 type ImportRecord struct {
-	RequestID        string       `json:"request_id"`
-	Digests          []string     `json:"digests"`
-	Artifacts        []string     `json:"artifacts"`
-	SourcePaths      []string     `json:"source_paths,omitempty"`
-	Status           string       `json:"status"`
-	AddedTasks       []string     `json:"added_tasks,omitempty"`
-	Covered          []CoveredRef `json:"covered,omitempty"`
-	Conflicts        []string     `json:"conflicts,omitempty"`
-	Evidence         string       `json:"evidence,omitempty"`
-	AcceptedRevision string       `json:"accepted_revision,omitempty"`
-	BacklogDigest    string       `json:"backlog_digest,omitempty"`
-	Error            string       `json:"error,omitempty"`
-	Enqueued         string       `json:"enqueued"`
-	Applied          string       `json:"applied,omitempty"`
+	RequestID   string       `json:"request_id"`
+	Digests     []string     `json:"digests"`
+	Artifacts   []string     `json:"artifacts"`
+	SourcePaths []string     `json:"source_paths,omitempty"`
+	Status      string       `json:"status"`
+	AddedTasks  []string     `json:"added_tasks,omitempty"`
+	Covered     []CoveredRef `json:"covered,omitempty"`
+	Conflicts   []string     `json:"conflicts,omitempty"`
+	Error       string       `json:"error,omitempty"`
+	Enqueued    string       `json:"enqueued"`
+	Applied     string       `json:"applied,omitempty"`
 }
 
 // CoveredRef records a requirement already satisfied by existing work.
