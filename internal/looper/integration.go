@@ -124,7 +124,13 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 			return e.hold(a, "The same failure persists after a fresh diagnosis. "+feedback)
 		}
 		a.Diagnosed = true
-		feedback = "Fresh diagnosis required. The previous approach repeats the same failure. Find its cause and use a different approach. Split remaining work into evidence-backed followups only if this task's acceptance criteria remain satisfied.\n" + feedback
+		if d, ok := e.diagnose(ctx, a, feedback); ok {
+			feedback = "An independent diagnosis by the review agent found this root cause: " + d.RootCause +
+				"\nEvidence: " + d.Evidence +
+				"\nUse a different approach: " + d.FixApproach + "\n" + feedback
+		} else {
+			feedback = "Fresh diagnosis required. The previous approach repeats the same failure. Find its cause and use a different approach. Split remaining work into evidence-backed followups only if this task's acceptance criteria remain satisfied.\n" + feedback
+		}
 	}
 	a.Repairs++
 	e.capacity = max(1, e.capacity-1)
@@ -152,6 +158,46 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 	e.event("repair", "Repairing "+a.Task.ID+" with the recorded failure evidence.")
 	e.launch(ctx, a, out)
 	return nil
+}
+
+// diagnosis is the structured result of one repair consultation.
+type diagnosis struct {
+	RootCause   string `json:"root_cause"`
+	Evidence    string `json:"evidence"`
+	FixApproach string `json:"fix_approach"`
+}
+
+// diagnose asks the review agent for an independent, read-only explanation of
+// a repeated failure, so the next repair starts from a cause instead of the
+// same evidence. The consultation runs in the retained worktree; a changed
+// snapshot or any error discards the result and the caller repairs as before.
+func (e *Engine) diagnose(ctx context.Context, a *Attempt, feedback string) (diagnosis, bool) {
+	before, err := e.Repo.Snapshot(a.Worktree)
+	if err != nil {
+		return diagnosis{}, false
+	}
+	dir := filepath.Join(a.Directory, fmt.Sprintf("diagnose-%02d-%s", a.Repairs, identifier("session")))
+	prompt := fmt.Sprintf(`Diagnose the repeated failure of task %s. Read the worktree and the attempt records under %s (summaries, check logs, receipts), and the failure feedback below. Do not change any files.
+Failure feedback:
+%s
+Return one JSON object: {"root_cause":"why the current approach keeps failing","evidence":"files or logs that show the cause","fix_approach":"a different approach that resolves the cause"}.`, a.Task.ID, a.Directory, feedback)
+	op := e.capture()
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, a.Worktree, dir, prompt, false)
+	if err != nil {
+		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation failed; repairing with the recorded evidence.")
+		return diagnosis{}, false
+	}
+	var d diagnosis
+	if json.Unmarshal(raw, &d) != nil || strings.TrimSpace(d.RootCause) == "" || strings.TrimSpace(d.FixApproach) == "" {
+		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation returned no usable cause; repairing with the recorded evidence.")
+		return diagnosis{}, false
+	}
+	if after, err := e.Repo.Snapshot(a.Worktree); err != nil || after != before {
+		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation changed files; its result was discarded.")
+		return diagnosis{}, false
+	}
+	e.event("diagnosis", fmt.Sprintf("%s  Independent diagnosis: %s", a.Task.ID, d.RootCause))
+	return d, true
 }
 
 // The journal is committed before applying files. Restart accepts only the

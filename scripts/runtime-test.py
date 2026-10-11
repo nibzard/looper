@@ -51,6 +51,12 @@ elif "Recover the final task report" in prompt:
     task=next(t for t in tasks if t["id"] in prompt)
     event("recover",task["id"])
     result={"task_id":"WRONG" if mode=="invalid" else task["id"],"status":"done","summary":"recovered","files":[task["id"]+".txt"],"blockers":[]}
+elif "Diagnose the repeated failure" in prompt:
+    task=next(t for t in tasks if t["id"] in prompt)
+    event("diagnose",task["id"])
+    result={"root_cause":"the verify command fails before the task output is checked",
+            "evidence":"verify.log shows the failure",
+            "fix_approach":"make the verify command pass first"}
 else:
     task=next(t for t in tasks if "Complete task "+t["id"]+":" in prompt)
     task_id=task["id"]
@@ -332,6 +338,8 @@ class ParallelTests(unittest.TestCase):
         self.run_loop(2)
         self.assertFalse((self.project/"T1.txt").exists())
         self.assertEqual(self.state()["attempts"][0]["repairs"],2)
+        # The repeated failure triggers one independent diagnosis.
+        self.assertEqual([e["kind"] for e in self.recorded() if e["kind"]=="diagnose"],["diagnose"])
 
     def test_bad_plan_fails_without_starting_workers(self):
         self.env["TEST_MODE"]="bad_plan"

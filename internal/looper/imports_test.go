@@ -11,7 +11,10 @@ import (
 )
 
 // fakeAgent writes a canned JSON result wherever the agent protocol expects
-// its final message, so import tests exercise the real agent plumbing.
+// its final message, so import tests exercise the real agent plumbing. The
+// prompt on stdin selects LOOPER_FAKE_DIAGNOSIS for diagnosis consultations
+// and LOOPER_FAKE_RESULT otherwise. With LOOPER_FAKE_TOUCH set, it also
+// creates that file to simulate an agent that breaks its read-only contract.
 func fakeAgent(t *testing.T, proposal string) (bin string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -22,7 +25,13 @@ for a in "$@"; do
   if [ "$prev" = "--output-last-message" ]; then out="$a"; fi
   prev="$a"
 done
-if [ -n "$out" ]; then printf '%s' "$LOOPER_FAKE_RESULT" > "$out"; fi
+p="$(cat)"
+result="$LOOPER_FAKE_RESULT"
+if [ -n "$LOOPER_FAKE_DIAGNOSIS" ] && printf '%s' "$p" | grep -q "Diagnose the repeated failure"; then
+  result="$LOOPER_FAKE_DIAGNOSIS"
+fi
+if [ -n "$out" ]; then printf '%s' "$result" > "$out"; fi
+if [ -n "$LOOPER_FAKE_TOUCH" ]; then touch "$LOOPER_FAKE_TOUCH"; fi
 exit 0
 `
 	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
