@@ -5,3 +5,6 @@
   CLI source (github.com/zai-org/ZCode, apps/zcode-cli).
 - Revisit streaming activity interpretation if the dashboard needs
   live worker progress for zcode.
+
+Done 2026-10-11: live-binary verification completed; see the
+design note on the follow-up commit.
