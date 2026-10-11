@@ -280,8 +280,9 @@ identity reported by the provider.
 
 `zcode` is a third coding agent: `looper --agent zcode` drives the Z.ai
 harness through its command. That command has no structured-output flag, so
-Looper states the output shape in the prompt and parses the answer.
-Planning runs in zcode's read-only plan mode; workers run with full access.
+Looper states the output shape in the prompt and parses the answer. Planning
+keeps the inspection-only prompt as its limit; zcode's plan mode answers in
+prose and drops the JSON. Workers run with full access.
 
 There is no token budget in the controller. The dispatch limit is unlimited
 by default. Spend more computation on independent review, diagnosis, and

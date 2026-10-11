@@ -119,13 +119,12 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		// zcode ships no schema flag; the prompt states the output shape and
 		// the response text is parsed below. Headless already defaults to
 		// full access, so the mode is explicit for the invocation record.
-		mode := "yolo"
-		if progress != nil {
-			// Plan mode allows read-only tools and denies writes, like the
-			// codex read-only sandbox.
-			mode = "plan"
-		}
-		args = []string{a.Config.ZcodeBin, "--cwd", cwd, "--output-format", "json", "--mode", mode, "-p", prompt}
+		// stream-json, not json: the json summary prints pretty and spans
+		// lines, while the stream result terminator is one line. Planning
+		// stays in yolo with the inspection-only prompt as its restriction:
+		// zcode's plan mode answers with a prose summary and drops the JSON
+		// (verified against a live binary).
+		args = []string{a.Config.ZcodeBin, "--cwd", cwd, "--output-format", "stream-json", "--mode", "yolo", "-p", prompt}
 	} else {
 		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--add-dir", cwd}
 		if progress != nil {
