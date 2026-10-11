@@ -11,17 +11,17 @@ import (
 )
 
 type Config struct {
-	Root, Todo, BaseDir, Agent, ReviewAgent, CodexBin, ClaudeBin, Model, ClaudeModel, Effort, Verify, Setup, Assess, Hook string
-	InspectTask                                                                                                           string
-	After                                                                                                                 int64
-	Command, ListStatus                                                                                                   string
-	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                              int
-	Poll, RetryDelay, Timeout, GitTimeout                                                                                 time.Duration
-	Once, Follow, JSON, Verbose, Smart, GitInit, JobsAuto                                                                 bool
-	Plain, Yes, Reset, Detached                                                                                           bool
-	Sources                                                                                                               Sources
-	ProfilePath                                                                                                           string
-	Plans                                                                                                                 []string
+	Root, Todo, BaseDir, Agent, ReviewAgent, CodexBin, ClaudeBin, ZcodeBin, Model, ClaudeModel, Effort, Verify, Setup, Assess, Hook string
+	InspectTask                                                                                                                     string
+	After                                                                                                                           int64
+	Command, ListStatus                                                                                                             string
+	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                                        int
+	Poll, RetryDelay, Timeout, GitTimeout                                                                                           time.Duration
+	Once, Follow, JSON, Verbose, Smart, GitInit, JobsAuto                                                                           bool
+	Plain, Yes, Reset, Detached                                                                                                     bool
+	Sources                                                                                                                         Sources
+	ProfilePath                                                                                                                     string
+	Plans                                                                                                                           []string
 }
 
 // Source records where a setting's effective value came from. Higher values
@@ -138,7 +138,7 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 	home, _ := os.UserHomeDir()
-	c := Config{Root: root, Todo: "to-do.json", BaseDir: env("LOOPER_BASE_DIR", filepath.Join(home, ".looper")), CodexBin: env("CODEX_BIN", "codex"), ClaudeBin: env("CLAUDE_BIN", "claude"), Assess: env("LOOPER_ASSESS_COMMAND", ""), Hook: env("LOOPER_HOOK", ""), Command: "run", GitInit: env("LOOPER_GIT_INIT", "1") != "0"}
+	c := Config{Root: root, Todo: "to-do.json", BaseDir: env("LOOPER_BASE_DIR", filepath.Join(home, ".looper")), CodexBin: env("CODEX_BIN", "codex"), ClaudeBin: env("CLAUDE_BIN", "claude"), ZcodeBin: env("ZCODE_BIN", "zcode"), Assess: env("LOOPER_ASSESS_COMMAND", ""), Hook: env("LOOPER_HOOK", ""), Command: "run", GitInit: env("LOOPER_GIT_INIT", "1") != "0"}
 	for k, p := range map[string]*int{"MAX_ITERATIONS": &c.Limit, "LOOPER_MAX_REPAIRS": &c.MaxRepairs, "LOOPER_RATE_LIMIT_MAX": &c.RetryLimit} {
 		d := 0
 		switch k {
@@ -390,8 +390,8 @@ func Parse(args []string) (Config, error) {
 		ReviewEvery: settings.reviewEvery.from,
 	}
 	for _, a := range []string{c.Agent, c.ReviewAgent} {
-		if a != "codex" && a != "claude" {
-			return c, fmt.Errorf("unsupported agent %q; use codex or claude", a)
+		if a != "codex" && a != "claude" && a != "zcode" {
+			return c, fmt.Errorf("unsupported agent %q; use codex, claude, or zcode", a)
 		}
 	}
 	if c.Poll <= 0 {

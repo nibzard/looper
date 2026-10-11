@@ -176,8 +176,8 @@ func (p *Profile) Validate() error {
 		return fmt.Errorf("unsupported profile version %d; this Looper reads version %d", p.Version, ProfileVersion)
 	}
 	for _, agent := range []string{p.Agent, p.ReviewAgent} {
-		if agent != "" && agent != "codex" && agent != "claude" {
-			return fmt.Errorf("invalid agent %q; use codex or claude", agent)
+		if agent != "" && agent != "codex" && agent != "claude" && agent != "zcode" {
+			return fmt.Errorf("invalid agent %q; use codex, claude, or zcode", agent)
 		}
 	}
 	if p.Jobs < 0 {

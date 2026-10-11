@@ -40,7 +40,7 @@ Options:
   --plan <path>          Add Markdown requirements at startup; repeatable
   --jobs auto|N          Maximum concurrent workers (default: auto)
   --check-jobs N         Concurrent setup and checks (default: 1)
-  --agent codex|claude   Coding agent (default: codex)
+  --agent NAME           Coding agent: codex, claude, or zcode (default: codex)
   --review-agent NAME   Planning and review agent (default: coding agent)
   --model NAME          Explicit model; otherwise use the agent's configuration
   --effort NAME         Codex reasoning effort
@@ -256,14 +256,14 @@ func doctor(c Config, out io.Writer) int {
 		return 0
 	})
 	code := 0
-	agentBin := map[string]string{"codex": c.CodexBin, "claude": c.ClaudeBin}
+	agentBin := map[string]string{"codex": c.CodexBin, "claude": c.ClaudeBin, "zcode": c.ZcodeBin}
 	checks := []struct{ name, hint string }{
 		{"git", "install Git and make sure git is on PATH"},
 		{"bash", "install Bash or point LOOPER_* commands at another shell"},
-		{agentBin[c.Agent], "install " + c.Agent + " or set " + map[string]string{"codex": "CODEX_BIN", "claude": "CLAUDE_BIN"}[c.Agent]},
+		{agentBin[c.Agent], "install " + c.Agent + " or set " + map[string]string{"codex": "CODEX_BIN", "claude": "CLAUDE_BIN", "zcode": "ZCODE_BIN"}[c.Agent]},
 	}
 	if c.ReviewAgent != c.Agent {
-		checks = append(checks, struct{ name, hint string }{agentBin[c.ReviewAgent], "install " + c.ReviewAgent + " or set " + map[string]string{"codex": "CODEX_BIN", "claude": "CLAUDE_BIN"}[c.ReviewAgent]})
+		checks = append(checks, struct{ name, hint string }{agentBin[c.ReviewAgent], "install " + c.ReviewAgent + " or set " + map[string]string{"codex": "CODEX_BIN", "claude": "CLAUDE_BIN", "zcode": "ZCODE_BIN"}[c.ReviewAgent]})
 	}
 	for _, check := range checks {
 		path, err := exec.LookPath(check.name)

@@ -40,14 +40,14 @@ var ErrAborted = huh.ErrUserAborted
 func agentField(s *Settings) *huh.Select[string] {
 	return huh.NewSelect[string]().
 		Title("Coding agent").
-		Options(huh.NewOptions("codex", "claude")...).
+		Options(huh.NewOptions("codex", "claude", "zcode")...).
 		Value(&s.Agent)
 }
 
 func reviewAgentField(s *Settings, selection *string) *huh.Select[string] {
 	return huh.NewSelect[string]().
 		Title("Review agent").
-		Options(huh.NewOptions(sameAsAgent, "codex", "claude")...).
+		Options(huh.NewOptions(sameAsAgent, "codex", "claude", "zcode")...).
 		Value(selection)
 }
 

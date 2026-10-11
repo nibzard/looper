@@ -100,8 +100,9 @@ metadata; they are workspace isolation, not a security sandbox.
 Worker agents run with permission checks disabled. Claude Code receives
 `--dangerously-skip-permissions`. Codex receives
 `--dangerously-bypass-approvals-and-sandbox`. Set `CODEX_YOLO=0` to give
-Codex a workspace-write sandbox instead. Run Looper only in repositories
-whose contents you trust.
+Codex a workspace-write sandbox instead. zcode workers run in its
+full-access `yolo` mode. Run Looper only in repositories whose contents you
+trust.
 
 ## Dashboard
 
@@ -254,6 +255,11 @@ Availability depends on your agent installation and account. Invocation
 records store the requested configuration; raw agent logs retain any model
 identity reported by the provider.
 
+`zcode` is a third coding agent: `looper --agent zcode` drives the Z.ai
+harness through its command. That command has no structured-output flag, so
+Looper states the output shape in the prompt and parses the answer.
+Planning runs in zcode's read-only plan mode; workers run with full access.
+
 There is no token budget in the controller. The dispatch limit is unlimited
 by default. Spend more computation on independent review, diagnosis, and
 acceptance checks. Increasing worker count alone can increase conflicts and
@@ -314,7 +320,7 @@ Most projects need only `looper`. These settings cover exceptional cases:
 | `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure |
 | `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds |
 | `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |
-| `CODEX_BIN`, `CLAUDE_BIN` | `codex`, `claude` | Installed agent commands |
+| `CODEX_BIN`, `CLAUDE_BIN`, `ZCODE_BIN` | `codex`, `claude`, `zcode` | Installed agent commands |
 | `LOOPER_HOOK` | unset | Optional executable called after a result |
 
 The hook receives task ID, status, summary path, and attempt ID. It has a
