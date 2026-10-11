@@ -1,0 +1,1 @@
+Designed for unattended VM runs and tmux. Observers read snapshots and retained evidence. The controller applies confirmed requeue requests with session and revision checks. Validation: make test, Go race tests, macOS cross-build, and tmux previews.
