@@ -82,6 +82,7 @@ func plannerActivity(line []byte) []string {
 // Read a bounded amount each tick. Incomplete lines wait for the next read.
 // Oversized records are skipped without losing the next complete record.
 type plannerActivityReader struct {
+	decode   func([]byte) []string
 	offset   int64
 	pending  []byte
 	skipping bool
@@ -108,7 +109,11 @@ func (r *plannerActivityReader) poll(path string, emit func(string)) bool {
 			break
 		}
 		if !r.skipping && end <= 1<<20 {
-			for _, action := range plannerActivity(r.pending[:end]) {
+			decode := r.decode
+			if decode == nil {
+				decode = plannerActivity
+			}
+			for _, action := range decode(r.pending[:end]) {
 				emit(action)
 			}
 		}

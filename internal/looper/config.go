@@ -12,6 +12,8 @@ import (
 
 type Config struct {
 	Root, Todo, BaseDir, Agent, ReviewAgent, CodexBin, ClaudeBin, Model, ClaudeModel, Effort, Verify, Setup, Assess, Hook string
+	InspectTask                                                                                                           string
+	After                                                                                                                 int64
 	Command, ListStatus                                                                                                   string
 	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                              int
 	Poll, RetryDelay, Timeout, GitTimeout                                                                                 time.Duration
@@ -201,7 +203,7 @@ func Parse(args []string) (Config, error) {
 		}
 		var v string
 		switch a {
-		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-plan":
+		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-plan", "events", "inspect":
 			c.Command = a
 		case "--help", "-h":
 			c.Command = "help"
@@ -211,6 +213,15 @@ func Parse(args []string) (Config, error) {
 			c.Command = "doctor"
 		case "--tail":
 			c.Command = "tail"
+		case "--after":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			c.After, err = strconv.ParseInt(v, 10, 64)
+			if err != nil || c.After < 0 {
+				return c, fmt.Errorf("--after needs a nonnegative event ID")
+			}
 		case "--follow":
 			c.Follow = true
 		case "--once":
@@ -285,6 +296,13 @@ func Parse(args []string) (Config, error) {
 					return c, e
 				}
 				c.Plans = append(c.Plans, filepath.Clean(path))
+				continue
+			}
+			if c.Command == "inspect" {
+				if c.InspectTask != "" {
+					return c, fmt.Errorf("inspect accepts one task ID")
+				}
+				c.InspectTask = a
 				continue
 			}
 			c.Todo = a

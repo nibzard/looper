@@ -50,6 +50,7 @@ type AttemptView struct {
 	Repairs  int    `json:"repairs"`
 	Base     string `json:"base,omitempty"`
 	Worktree string `json:"worktree,omitempty"`
+	LogDir   string `json:"log_dir,omitempty"`
 }
 
 // TaskView describes a ready task.

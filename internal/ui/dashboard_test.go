@@ -31,7 +31,7 @@ func TestPlanningOnPhoneTerminal(t *testing.T) {
 			Ready:    []TaskView{{ID: "T050", Title: "Compose an optional tmux writer"}},
 		}}
 		view := m.View()
-		for _, want := range []string{"PLANNING", "55/63 complete", "q exit", "[L] logs"} {
+		for _, want := range []string{"PLANNING", "55/63 complete", "[Q] Detach", "[L] Logs"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("%v: missing %q: %s", size, want, view)
 			}
@@ -84,7 +84,7 @@ func TestPhoneBoardScrollAndResize(t *testing.T) {
 		m = next.(model)
 	}
 	view := m.View()
-	if !strings.Contains(view, "PLANNING") || !strings.Contains(view, "Events") || !strings.Contains(view, "q exit") {
+	if !strings.Contains(view, "PLANNING") || !strings.Contains(view, "Recent activity") || !strings.Contains(view, "[Q] Detach") {
 		t.Fatalf("missing fixed status or scroll content: %s", view)
 	}
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
@@ -166,5 +166,139 @@ func TestPhonePlannerOutputAge(t *testing.T) {
 	m.snap.ActivityUpdated = ""
 	if !strings.Contains(m.View(), "No agent output yet") {
 		t.Fatal("invented activity before output")
+	}
+}
+
+func TestWorkerLogUsesSelectedAttempt(t *testing.T) {
+	m := model{width: 40, height: 18, snap: &ViewSnapshot{ActivityLog: "old-plan/events-00.jsonl", Attempts: []AttemptView{{ID: "task-a", TaskID: "T050"}, {ID: "task-b", TaskID: "T051"}}}, selected: "task-b", tailView: viewport.New(40, 8)}
+	m.ctrl.Log = func(string) (string, error) { t.Fatal("opened planner log during implementation"); return "", nil }
+	m.ctrl.WorkerLog = func(id string) (string, string, error) {
+		if id != "task-b" {
+			t.Fatalf("wrong task: %s", id)
+		}
+		return "work/events-01.jsonl", "Worker output", nil
+	}
+	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	m = next.(model)
+	if m.logAttempt != "task-b" || !strings.Contains(m.View(), "T051 worker log") || !strings.Contains(m.View(), "Worker output") {
+		t.Fatalf("worker log missing: %s", m.View())
+	}
+	// Completing a different task must not switch the open log to a planner.
+	m.snap.ActivityLog = "new-plan/events-00.jsonl"
+	m.refreshLog()
+	if m.logPath != "work/events-01.jsonl" {
+		t.Fatal("planner replaced selected worker log")
+	}
+}
+
+func TestCurrentRunEventsAndHistory(t *testing.T) {
+	m := model{width: 50, height: 20, snap: &ViewSnapshot{Started: "2026-10-11T13:19:02Z"}, events: []JournalEvent{
+		{Time: "2026-10-11T13:05:09Z", Kind: "progress", Message: "old run"},
+		{Time: "2026-10-11T13:19:02Z", Kind: "resume", Message: "current run"},
+	}}
+	if strings.Contains(m.View(), "old run") || !strings.Contains(m.View(), "current run") {
+		t.Fatalf("incorrect current events: %s", m.View())
+	}
+	m.mode = ModeTail
+	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m = next.(model)
+	if !strings.Contains(m.eventText(), "old run") || !strings.Contains(m.eventText(), "Recent history") {
+		t.Fatal("history unavailable")
+	}
+	if eventStyle("resume").GetForeground() != lipgloss.Color("7") || eventStyle("done").GetForeground() != lipgloss.Color("10") || eventStyle("review-error").GetForeground() != lipgloss.Color("9") {
+		t.Fatal("event colors do not convey outcome")
+	}
+}
+
+func TestSelectedRowsStayVisibleAndResetStyles(t *testing.T) {
+	m := model{width: 30, height: 14, snap: &ViewSnapshot{Counters: ViewCounters{InFlight: 4}}}
+	for i := 0; i < 4; i++ {
+		m.snap.Attempts = append(m.snap.Attempts, AttemptView{ID: fmt.Sprintf("task-%d", i), TaskID: fmt.Sprintf("T%03d", i), Phase: "running", Title: "Compose an optional tmux writing desk"})
+	}
+	for i := 0; i < 3; i++ {
+		next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = next.(model)
+		view := m.View()
+		if !strings.Contains(view, fmt.Sprintf("› T%03d", i+1)) {
+			t.Fatalf("selection scrolled away: %s", view)
+		}
+		if lipgloss.Width(view) > 30 || lipgloss.Height(view) > 14 {
+			t.Fatalf("overflow: %s", view)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if !strings.HasPrefix(line, "\x1b[0m") || !strings.HasSuffix(line, "\x1b[0m") {
+				t.Fatal("style can leak across clipped rows")
+			}
+		}
+	}
+	// ANSI in an event must not control the color of the next line.
+	m.events = []JournalEvent{{Message: "\x1b[42mgreen background\x1b[0m"}}
+	if strings.Contains(m.eventTail(5), "\x1b[42m") {
+		t.Fatal("event injected terminal styling")
+	}
+	m.snap.Attempts = m.snap.Attempts[:1]
+	if m.selectedAttempt() != "task-0" {
+		t.Fatal("selection did not recover after task removal")
+	}
+}
+
+func TestCapitalShortcutsPreservePlanPathCase(t *testing.T) {
+	m := model{width: 40, height: 18, tailView: viewport.New(40, 8)}
+	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	m = next.(model)
+	if m.mode != ModeTail {
+		t.Fatal("capital T did not open events")
+	}
+	next, _ = m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	m = next.(model)
+	if m.mode != ModeBoard {
+		t.Fatal("capital B did not return to board")
+	}
+	m.dialog = "add-plan"
+	for _, key := range "MyPlan.md" {
+		next, _ = m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m = next.(model)
+	}
+	if m.planPath != "MyPlan.md" {
+		t.Fatalf("plan path case changed: %q", m.planPath)
+	}
+}
+
+func TestBlockedTaskScrollHintsOnPhone(t *testing.T) {
+	m := model{width: 44, height: 18, snap: &ViewSnapshot{
+		Blocked: []BlockedView{{ID: "T050", Title: "Add expiry cases", Reasons: []string{
+			strings.Repeat("Expiry needs a configuration decision. ", 12),
+		}}},
+	}}
+	top := m.View()
+	for _, want := range []string{"Blocked · 1 task", "T050 Add expiry cases", "Reason:", "[J] More below"} {
+		if !strings.Contains(top, want) {
+			t.Fatalf("missing %q: %s", want, top)
+		}
+	}
+	m.scroll = m.maxBoardScroll()
+	bottom := m.View()
+	if !strings.Contains(bottom, "[K] More above") || strings.Contains(bottom, "[J] More below") {
+		t.Fatalf("incorrect end-of-content hint: %s", bottom)
+	}
+	for _, view := range []string{top, bottom} {
+		if lipgloss.Width(view) > m.width || lipgloss.Height(view) > m.height {
+			t.Fatalf("phone view overflows: %s", view)
+		}
+	}
+}
+
+func TestControllerViewReloadsAfterSettings(t *testing.T) {
+	// No new channel notification is needed when a settings form closes.
+	ch := make(chan ViewSnapshot)
+	snapshot := &ViewSnapshot{Session: "current", Counters: ViewCounters{Done: 64, Total: 92}}
+	m := model{ctrl: Controls{Snapshot: ch, Poll: func() *ViewSnapshot { return snapshot }}}
+	if m.waitSnapshot() != nil {
+		t.Fatal("polling view leaves a channel reader behind after settings")
+	}
+	next, _ := m.Update(tickMsg{})
+	m = next.(model)
+	if m.snap == nil || m.snap.Counters.Done != 64 || m.staleView {
+		t.Fatal("controller snapshot did not reload")
 	}
 }

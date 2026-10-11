@@ -116,7 +116,7 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		}
 		args = append(args, "-")
 	} else {
-		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--add-dir", cwd}
+		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--add-dir", cwd}
 		if progress != nil {
 			// Planning can inspect files but cannot invoke a shell or delegate work.
 			args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose",

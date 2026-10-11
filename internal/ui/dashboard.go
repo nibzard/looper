@@ -31,13 +31,14 @@ type ExitAction struct {
 // engine package. Controlling mode supplies Snapshot; observer mode supplies
 // Poll. Callbacks return errors for display; they never crash the view.
 type Controls struct {
-	Snapshot <-chan ViewSnapshot
-	Poll     func() *ViewSnapshot
-	Events   func(after int64, limit int) []JournalEvent
-	Drain    func() error
-	Diff     func(attemptID string) (string, error)
-	Log      func(path string) (string, error)
-	AddPlan  func(path string) error
+	Snapshot  <-chan ViewSnapshot
+	Poll      func() *ViewSnapshot
+	Events    func(after int64, limit int) []JournalEvent
+	Drain     func() error
+	Diff      func(attemptID string) (string, error)
+	Log       func(path string) (string, error)
+	WorkerLog func(attemptID string) (string, string, error)
+	AddPlan   func(path string) error
 	// Done reports that the local controller exited (controlling mode).
 	Done func() bool
 	// Cancel stops the local controller with retained work (controlling mode).
@@ -50,51 +51,54 @@ type Controls struct {
 }
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	busyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	blockedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	selectStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("8"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	sectionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
-	dialogStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2)
-	attemptStyles = map[string]lipgloss.Style{
-		"running": busyStyle, "verifying": busyStyle, "ready": dimStyle,
-		"resume": busyStyle, "integrated": busyStyle,
-	}
+	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	textStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("7"))
+	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	busyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	blockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	selectStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12"))
+	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
+	dialogStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2)
 )
 
 type tickMsg struct{}
 
 type model struct {
-	ctrl       Controls
-	snap       *ViewSnapshot
-	staleView  bool
-	events     []JournalEvent
-	cursor     int64
-	mode       int
-	width      int
-	height     int
-	selected   string // attempt ID, preserved across row changes
-	scroll     int
-	diffText   string
-	diffFor    string
-	diffView   viewport.Model
-	message    string
-	err        string
-	dialog     string // "", "drain", "exit", "add-plan"
-	drainAsked bool
-	planPath   string
-	tailView   viewport.Model
-	logPath    string
-	logText    string
+	ctrl        Controls
+	snap        *ViewSnapshot
+	staleView   bool
+	events      []JournalEvent
+	cursor      int64
+	mode        int
+	width       int
+	height      int
+	selected    string // attempt ID, preserved across row changes
+	scroll      int
+	diffText    string
+	diffFor     string
+	diffView    viewport.Model
+	message     string
+	err         string
+	dialog      string // "", "drain", "exit", "add-plan"
+	drainAsked  bool
+	planPath    string
+	tailView    viewport.Model
+	logPath     string
+	logText     string
+	logAttempt  string
+	logTask     string
+	showHistory bool
 }
 
 func RunDashboard(c Controls) (ExitAction, error) {
 	m := model{ctrl: c, mode: ModeBoard, cursor: -1, message: c.Notice, diffView: viewport.New(0, 0), tailView: viewport.New(0, 0)}
 	if c.Snapshot == nil && c.Poll == nil {
 		return ExitAction{}, fmt.Errorf("dashboard needs a snapshot source")
+	}
+	if c.Poll != nil {
+		m.snap = c.Poll()
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	out, err := p.Run()
@@ -119,7 +123,7 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) waitSnapshot() tea.Cmd {
-	if m.ctrl.Snapshot != nil {
+	if m.ctrl.Snapshot != nil && m.ctrl.Poll == nil {
 		ch := m.ctrl.Snapshot
 		return func() tea.Msg { return <-ch }
 	}
@@ -137,7 +141,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.diffText))
 		}
 		if m.mode == ModeHelp {
-			m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(helpText))
+			m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.helpText()))
 		}
 		if m.mode == ModeTail {
 			m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.eventText()))
@@ -192,7 +196,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.dialog != "" {
 		return m.dialogKeys(msg)
 	}
-	switch msg.String() {
+	switch strings.ToLower(msg.String()) {
 	case "ctrl+c":
 		if m.ctrl.ReadOnly || m.ctrl.Snapshot == nil {
 			return m, tea.Quit
@@ -232,7 +236,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.planPath = ""
 		return m, nil
 	case "d":
-		if sel := m.selectedAttempt(); sel != "" {
+		if sel := m.selectedAttempt(); sel != "" && m.ctrl.Diff != nil {
 			text, err := m.ctrl.Diff(sel)
 			if err != nil {
 				m.err = err.Error()
@@ -244,13 +248,31 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.diffView.GotoTop()
 			return m, nil
 		}
-	case "l", "L":
-		if m.snap != nil && m.snap.ActivityLog != "" && m.ctrl.Log != nil {
-			m.mode, m.logPath = ModeLog, m.snap.ActivityLog
-			m.refreshLog()
-			m.tailView.GotoBottom()
+	case "l":
+		m.logAttempt, m.logTask, m.logPath = "", "", ""
+		if id := m.selectedAttempt(); id != "" && m.ctrl.WorkerLog != nil {
+			m.logAttempt = id
+			for _, a := range m.snap.Attempts {
+				if a.ID == id {
+					m.logTask = a.TaskID
+				}
+			}
+		} else if m.snap != nil && m.snap.ActivityLog != "" && m.ctrl.Log != nil {
+			m.logPath = m.snap.ActivityLog
 		} else {
-			m.message = "No planner log is available."
+			m.message = "No active worker or planner log."
+			return m, nil
+		}
+		m.mode = ModeLog
+		m.logText = ""
+		m.refreshLog()
+		m.tailView.GotoBottom()
+		return m, nil
+	case "h":
+		if m.mode == ModeTail {
+			m.showHistory = !m.showHistory
+			m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.eventText()))
+			m.tailView.GotoBottom()
 		}
 		return m, nil
 	case "t":
@@ -266,7 +288,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeBoard
 		} else {
 			m.mode = ModeHelp
-			m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(helpText))
+			m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.helpText()))
 			m.tailView.GotoTop()
 		}
 		return m, nil
@@ -279,8 +301,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.mode == ModeTail || m.mode == ModeLog || m.mode == ModeHelp {
 			m.tailView.LineUp(1)
 		} else {
-			m.moveSelection(-1)
-			m.scroll = max(0, m.scroll-1)
+			m.navigateBoard(-1)
 		}
 		return m, nil
 	case "down", "j":
@@ -289,8 +310,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.mode == ModeTail || m.mode == ModeLog || m.mode == ModeHelp {
 			m.tailView.LineDown(1)
 		} else {
-			m.moveSelection(1)
-			m.scroll = min(m.maxBoardScroll(), m.scroll+1)
+			m.navigateBoard(1)
 		}
 		return m, nil
 	case "pgup":
@@ -316,7 +336,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.dialog {
 	case "exit":
-		switch msg.String() {
+		switch strings.ToLower(msg.String()) {
 		case "d":
 			if m.ctrl.Drain != nil {
 				if err := m.ctrl.Drain(); err != nil {
@@ -337,7 +357,7 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "drain":
-		switch msg.String() {
+		switch strings.ToLower(msg.String()) {
 		case "y", "enter":
 			if m.ctrl.Drain != nil {
 				if err := m.ctrl.Drain(); err != nil {
@@ -405,11 +425,44 @@ func (m *model) moveSelection(delta int) {
 	m.selected = m.snap.Attempts[index].ID
 }
 
-func (m model) selectedAttempt() string {
-	if m.selected == "" && m.snap != nil && len(m.snap.Attempts) > 0 {
-		return m.snap.Attempts[0].ID
+func (m *model) navigateBoard(delta int) {
+	before := m.selectedAttempt()
+	m.moveSelection(delta)
+	if m.selectedAttempt() == before {
+		m.scroll = max(0, min(m.maxBoardScroll(), m.scroll+delta))
+		return
 	}
-	return m.selected
+	_, body, available := m.boardLines(m.boardContent())
+	for _, a := range m.snap.Attempts {
+		if a.ID != m.selectedAttempt() {
+			continue
+		}
+		for start, line := range body {
+			if !strings.HasPrefix(strings.TrimSpace(ansi.Strip(line)), "› "+a.TaskID+"  ") {
+				continue
+			}
+			end := start + lipgloss.Height(m.attemptRow(a))
+			if start < m.scroll {
+				m.scroll = start
+			} else if end > m.scroll+available {
+				m.scroll = min(start, end-available)
+			}
+			m.scroll = max(0, min(m.scroll, m.maxBoardScroll()))
+			return
+		}
+	}
+}
+
+func (m model) selectedAttempt() string {
+	if m.snap == nil || len(m.snap.Attempts) == 0 {
+		return ""
+	}
+	for _, a := range m.snap.Attempts {
+		if a.ID == m.selected {
+			return a.ID
+		}
+	}
+	return m.snap.Attempts[0].ID
 }
 
 // StatusLabel reports controller state separately from its current activity.
@@ -478,6 +531,16 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 }
 
 func (m model) View() string {
+	// A scrolled slice can end inside a styled row. Never let its background
+	// leak into the footer, erased lines, or the terminal's next redraw.
+	lines := strings.Split(m.renderView(), "\n")
+	for i, line := range lines {
+		lines[i] = "\x1b[0m" + line + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renderView() string {
 	if m.width == 0 {
 		return "starting..."
 	}
@@ -500,29 +563,42 @@ func (m model) View() string {
 
 func (m model) header() string {
 	label, style := StatusLabel(m.snap, m.staleView)
-	role := "OBSERVING"
-	if m.ctrl.Snapshot != nil {
-		role = "CONTROLLING"
-	}
 	parts := []string{titleStyle.Render("LOOPER") + "  " + style.Render(label)}
-	if activity := activityLabel(m.snap, m.staleView); activity != "" {
-		parts = append(parts, busyStyle.Render(activity))
-	}
 	if m.snap != nil {
-		parts = append(parts, dimStyle.Render(fmt.Sprintf("%s elapsed", m.elapsed())), dimStyle.Render(fmt.Sprintf("%d/%d complete", m.snap.Counters.Done, m.snap.Counters.Total)))
-		if m.snap.Counters.InFlight+m.snap.Counters.Checking > 0 {
-			parts = append(parts, busyStyle.Render(fmt.Sprintf("%d implementing · %d checking", m.snap.Counters.InFlight, m.snap.Counters.Checking)))
+		parts = append(parts, dimStyle.Render(m.elapsed()))
+	}
+	head := wrapItems(parts, "   ", m.width)
+	var details []string
+	if m.snap != nil {
+		details = append(details, fmt.Sprintf("%d/%d complete", m.snap.Counters.Done, m.snap.Counters.Total))
+		if n := m.snap.Counters.InFlight; n > 0 {
+			word := "workers"
+			if n == 1 {
+				word = "worker"
+			}
+			details = append(details, fmt.Sprintf("%d %s", n, word))
+		}
+		if n := m.snap.Counters.Checking; n > 0 {
+			details = append(details, fmt.Sprintf("%d checking", n))
+		}
+		if len(m.snap.Attempts) == 0 {
+			if a := activityLabel(m.snap, m.staleView); a != "" {
+				details = append(details, a)
+			}
 		}
 	}
+	parts = nil
 	if m.snap != nil && m.snap.State == "planning" && m.snap.ActivityLog != "" {
 		output := "No agent output yet"
 		if at, err := time.Parse(time.RFC3339, m.snap.ActivityUpdated); err == nil {
 			output = fmt.Sprintf("Last output %s ago", max(time.Duration(0), time.Since(at)).Round(time.Second))
 		}
-		parts = append(parts, dimStyle.Render(output))
+		details = append(details, output)
 	}
-	parts = append(parts, dimStyle.Render(role))
-	return wrapItems(parts, "   ", m.width)
+	if len(details) > 0 {
+		head += "\n" + dimStyle.Render(wrapItems(details, " · ", m.width))
+	}
+	return head
 }
 
 // Wrap at item boundaries so key labels and counters remain together.
@@ -588,50 +664,34 @@ func (m model) boardContent() string {
 		b.WriteString(dimStyle.Render("Planning task scopes and checks.") + "\n\n")
 	}
 	if len(m.snap.Attempts) > 0 || m.staleView {
-		b.WriteString(sectionStyle.Render("Workers"))
-		b.WriteString("\n")
+		b.WriteString(sectionStyle.Render("Working") + "\n")
 		for _, a := range m.snap.Attempts {
-			phase := PhaseLabel(a.Phase)
-			line := fmt.Sprintf("%s %s  %s", a.TaskID, phase, a.Title)
-			if a.Repairs > 0 {
-				line += fmt.Sprintf("repair %d", a.Repairs)
-			}
-			if a.ID == m.selectedAttempt() {
-				b.WriteString(selectStyle.Render(" " + line))
-			} else {
-				style := dimStyle
-				if s, ok := attemptStyles[a.Phase]; ok {
-					style = s
-				}
-				b.WriteString(" " + style.Render(line))
-			}
-			b.WriteString("\n")
+			b.WriteString(m.attemptRow(a) + "\n")
 		}
 		b.WriteString("\n")
 	}
 	if len(m.snap.Ready) > 0 {
-		b.WriteString(sectionStyle.Render("Ready"))
+		b.WriteString(sectionStyle.Render("Ready · " + countLabel(len(m.snap.Ready), "task")))
 		b.WriteString("\n")
-		titles := make([]string, 0, len(m.snap.Ready))
 		for _, t := range m.snap.Ready {
-			titles = append(titles, t.ID+" "+t.Title)
+			b.WriteString(indentText(plainText(t.ID+" "+t.Title), m.width) + "\n")
 		}
-		b.WriteString(dimStyle.Render("  " + strings.Join(titles, "\n  ")))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
 	if len(m.snap.Blocked) > 0 {
-		b.WriteString(blockedStyle.Render("Blocked"))
+		b.WriteString(blockedStyle.Render("Blocked · " + countLabel(len(m.snap.Blocked), "task")))
 		b.WriteString("\n")
 		for _, t := range m.snap.Blocked {
 			reason := "blocked"
 			if len(t.Reasons) > 0 {
 				reason = strings.Join(t.Reasons, "; ")
 			}
-			b.WriteString(blockedStyle.Render(fmt.Sprintf("  %s — %s\n", t.ID, reason)))
+			b.WriteString(blockedStyle.Render(indentText(plainText(t.ID+" "+t.Title), m.width)) + "\n")
+			b.WriteString(blockedStyle.Render(indentText("Reason: "+plainText(reason), m.width)) + "\n")
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(sectionStyle.Render("Events"))
+	b.WriteString(sectionStyle.Render("Recent activity"))
 	b.WriteString("\n")
 	b.WriteString(m.eventTail(5))
 	b.WriteString("\n")
@@ -643,54 +703,155 @@ func (m model) boardContent() string {
 	return b.String()
 }
 
-func (m model) eventTail(n int) string {
-	if len(m.events) == 0 {
-		return dimStyle.Render("  no events yet\n")
+func countLabel(n int, name string) string {
+	if n != 1 {
+		name += "s"
 	}
-	start := max(0, len(m.events)-n)
+	return fmt.Sprintf("%d %s", n, name)
+}
+
+func indentText(text string, width int) string {
+	lines := strings.Split(lipgloss.NewStyle().Width(max(1, width-2)).Render(text), "\n")
+	for i, line := range lines {
+		lines[i] = "  " + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) attemptRow(a AttemptView) string {
+	prefix := "  "
+	style := textStyle
+	if a.ID == m.selectedAttempt() {
+		prefix = "› "
+		style = selectStyle
+	}
+	first := prefix + a.TaskID + "  " + PhaseLabel(a.Phase)
+	if a.Repairs > 0 {
+		first += fmt.Sprintf(" · repair %d", a.Repairs)
+	}
+	first = lipgloss.NewStyle().Width(m.width).Render(first)
+	title := lipgloss.NewStyle().Width(max(1, m.width-2)).Render(plainText(a.Title))
+	var lines []string
+	lines = append(lines, strings.Split(first, "\n")...)
+	for _, line := range strings.Split(title, "\n") {
+		lines = append(lines, "  "+line)
+	}
+	for i, line := range lines {
+		lines[i] = style.Width(m.width).Render(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func plainText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return ' '
+		}
+		return r
+	}, ansi.Strip(s))
+}
+
+func eventStyle(kind string) lipgloss.Style {
+	switch {
+	case strings.Contains(kind, "error"), kind == "fail":
+		return errorStyle
+	case kind == "done", kind == "finish", kind == "integrated":
+		return okStyle
+	case kind == "blocked", kind == "hold", kind == "waiting", kind == "stop":
+		return blockedStyle
+	default:
+		return textStyle
+	}
+}
+
+func (m model) visibleEvents(history bool) []JournalEvent {
+	if history || m.snap == nil {
+		return m.events
+	}
+	start, err := time.Parse(time.RFC3339Nano, m.snap.Started)
+	if err != nil {
+		return m.events
+	}
+	var events []JournalEvent
+	for _, e := range m.events {
+		at, err := time.Parse(time.RFC3339Nano, e.Time)
+		if err == nil && !at.Before(start) {
+			events = append(events, e)
+		}
+	}
+	return events
+}
+
+func (m model) eventTail(n int) string {
+	events := m.visibleEvents(false)
+	if len(events) == 0 {
+		return dimStyle.Render("  No activity in this run yet.\n")
+	}
 	var b strings.Builder
-	for _, e := range m.events[start:] {
+	for _, e := range events[max(0, len(events)-n):] {
 		stamp := ""
 		if t, err := time.Parse(time.RFC3339Nano, e.Time); err == nil {
-			stamp = t.Local().Format("15:04:05")
+			stamp = t.Local().Format("15:04")
 		}
-		b.WriteString(dimStyle.Render("  "+stamp+" ") + truncate(e.Message, m.width-12) + "\n")
+		b.WriteString(dimStyle.Render("  "+stamp+" ") + eventStyle(e.Kind).Render(truncate(plainText(e.Message), max(1, m.width-8))) + "\n")
 	}
 	return b.String()
 }
 
 func (m model) eventText() string {
 	var b strings.Builder
-	for _, e := range m.events {
+	scope := "Current run"
+	if m.showHistory {
+		scope = "Recent history (all runs)"
+	}
+	b.WriteString(sectionStyle.Render(scope) + "\n\n")
+	events := m.visibleEvents(m.showHistory)
+	if len(events) == 0 {
+		b.WriteString("No activity in this run yet.\n")
+	}
+	for _, e := range events {
 		stamp := e.Time
 		if t, err := time.Parse(time.RFC3339Nano, e.Time); err == nil {
 			stamp = t.Local().Format("15:04:05")
 		}
-		b.WriteString(stamp + "  " + e.Message + "\n")
+		b.WriteString(dimStyle.Render(stamp+"  ") + eventStyle(e.Kind).Render(plainText(e.Message)) + "\n")
 	}
 	return b.String()
 }
 
 func (m model) footer() string {
-	keys := "j/k scroll · a add plan · s settings · t tail · [L] logs · d diff · x drain · ? help · q exit"
-	if m.ctrl.ReadOnly {
-		keys = "j/k scroll · t tail · [L] logs · d diff · ? help · q detach (read-only)"
+	logLabel := "[L] Logs"
+	if m.selectedAttempt() != "" {
+		logLabel = "[L] Worker log"
+	} else if m.snap != nil && m.snap.ActivityLog != "" {
+		logLabel = "[L] Planner log"
 	}
-	if m.height < 14 {
-		keys = "j/k scroll · [L] logs · ? help · q exit"
+	keys := []string{logLabel}
+	if m.selectedAttempt() != "" {
+		keys = append(keys, "[D] Diff")
 	}
-	return dimStyle.Render(wrapItems(strings.Split(keys, " · "), " · ", m.width))
+	nav := "[J/K] Scroll"
+	if m.selectedAttempt() != "" {
+		nav = "[J/K] Select"
+	}
+	keys = append(keys, "[T] Events", nav, "[?] Help")
+	exit := "[Q] Detach"
+	if m.ctrl.Snapshot != nil && !m.ctrl.ReadOnly {
+		exit = "[Q] Exit"
+	}
+	keys = append(keys, exit)
+	return dimStyle.Render(wrapItems(keys, " · ", m.width))
 }
 
 func (m model) tailScreen() string {
 	m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.eventText()))
-	footer := wrapItems([]string{"b board", "j/k scroll", "? help"}, " · ", m.width)
+	footer := wrapItems([]string{"[B] Board", "[J/K] Scroll", "[H] History"}, " · ", m.width)
 	m.tailView.Height = max(1, m.height-lipgloss.Height(m.header())-lipgloss.Height(footer)-3)
 	return m.header() + "\n\n" + m.tailView.View() + "\n" + dimStyle.Render(footer)
 }
 
 func (m model) diffScreen() string {
-	footer := wrapItems([]string{"diff " + m.diffFor, "j/k scroll", "esc back"}, " · ", m.width)
+	footer := wrapItems([]string{"diff " + m.diffFor, "[J/K] Scroll", "[Esc] Back"}, " · ", m.width)
 	m.diffView.Height = max(1, m.height-lipgloss.Height(m.header())-lipgloss.Height(footer)-3)
 	return m.header() + "\n\n" + m.diffView.View() + "\n" + dimStyle.Render(footer)
 }
@@ -705,21 +866,31 @@ const helpText = `Run state
 
 RUNNING confirms the controller is active. It does not prove agent progress.
 
-keys
-  j / k, arrows     move selection or scroll
-  d                 diff of the selected attempt's worktree
-  t / b             tail and board views
-  l / L             planner activity log (refreshes each second)
-  x                 request a drain (active work finishes)
-  s                 settings (controlling mode)
-  a                 add a plan file (controlling mode)
-  q                 exit (observers detach; the controller keeps running)
-  ctrl+c            observers detach; controlling mode interrupts and retains work
+Keys (letters work in either case)
+  [J/K], arrows     select workers; scroll at the ends
+  [PgUp/PgDn]       scroll the board or current view
+  [D]               diff of the selected attempt's worktree
+  [T/B]             current-run events and board views
+  [H]               toggle recent history in the events view
+  [L]               selected worker or planner log (refreshes each second)
+  [X]               request a drain (active work finishes)
+  [S]               settings (controlling mode)
+  [A]               add a plan file (controlling mode)
+  [Q]               exit (observers detach; the controller keeps running)
+  [Ctrl+C]          observers detach; controlling mode interrupts and retains work
 `
 
+func (m model) helpText() string {
+	role := "Attached view: exiting detaches; the controller keeps running."
+	if m.ctrl.Snapshot != nil {
+		role = "Local run: exiting offers drain or interrupt."
+	}
+	return role + "\n\n" + helpText
+}
+
 func (m model) helpView() string {
-	m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(helpText))
-	footer := wrapItems([]string{"b board", "j/k scroll", "esc back"}, " · ", m.width)
+	m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.helpText()))
+	footer := wrapItems([]string{"[B] Board", "[J/K] Scroll", "[Esc] Back"}, " · ", m.width)
 	m.tailView.Height = max(1, m.height-lipgloss.Height(m.header())-lipgloss.Height(footer)-3)
 	return m.header() + "\n\n" + m.tailView.View() + "\n" + dimStyle.Render(footer)
 }
@@ -727,11 +898,11 @@ func (m model) helpView() string {
 func (m model) dialogView() string {
 	switch m.dialog {
 	case "exit":
-		return m.dialogBox("Exit controller?\n\n d  drain, then exit\n c  interrupt; retain work\n esc  stay")
+		return m.dialogBox("Exit controller?\n\n [D] Drain, then exit\n [C] Interrupt; retain work\n [Esc] Stay")
 	case "drain":
-		return m.dialogBox("Drain work?\n\n y  finish active work\n any other key  cancel")
+		return m.dialogBox("Drain work?\n\n [Y] Finish active work\n any other key  cancel")
 	case "add-plan":
-		return m.dialogBox("Add plan\n\n path: " + truncate(m.planPath, max(1, m.width-14)) + "_\n\n enter submit · esc cancel")
+		return m.dialogBox("Add plan\n\n path: " + truncate(m.planPath, max(1, m.width-14)) + "_\n\n [Enter] Submit · [Esc] Cancel")
 	}
 	return ""
 }
@@ -763,17 +934,36 @@ func (m model) fitBoard(content string) string {
 	offset := min(m.scroll, max(0, len(body)-available))
 	end := min(len(body), offset+available)
 	lines := append(header[:len(header):len(header)], body[offset:end]...)
-	return strings.Join(lines, "\n") + "\n\n" + m.footer()
+	hint := ""
+	switch {
+	case offset > 0 && end < len(body):
+		hint = "[K] Above · [J] Below"
+	case end < len(body):
+		hint = "[J] More below"
+	case offset > 0:
+		hint = "[K] More above"
+	}
+	return strings.Join(lines, "\n") + "\n" + dimStyle.Render(truncate(hint, m.width)) + "\n" + m.footer()
 }
 
 func (m *model) refreshLog() {
-	if m.ctrl.Log == nil {
-		return
+	var text string
+	var err error
+	if m.logAttempt != "" && m.ctrl.WorkerLog != nil {
+		var path string
+		path, text, err = m.ctrl.WorkerLog(m.logAttempt)
+		if path != "" {
+			m.logPath = path
+		}
+	} else {
+		if m.ctrl.Log == nil {
+			return
+		}
+		if m.snap != nil && m.snap.ActivityLog != "" {
+			m.logPath = m.snap.ActivityLog
+		}
+		text, err = m.ctrl.Log(m.logPath)
 	}
-	if m.snap != nil && m.snap.ActivityLog != "" {
-		m.logPath = m.snap.ActivityLog
-	}
-	text, err := m.ctrl.Log(m.logPath)
 	if err != nil {
 		m.logText = err.Error()
 	} else {
@@ -790,13 +980,24 @@ func (m *model) refreshLog() {
 	}
 }
 
+func logFileName(path string) string {
+	if path == "" {
+		return "Waiting for output"
+	}
+	return filepath.Base(path)
+}
+
 func (m model) logHeader() string {
-	return m.header() + "\n" + wrapItems([]string{"Planner log", filepath.Base(m.logPath)}, " · ", m.width)
+	label := "Planner log"
+	if m.logAttempt != "" {
+		label = m.logTask + " worker log"
+	}
+	return m.header() + "\n" + wrapItems([]string{label, logFileName(m.logPath)}, " · ", m.width)
 }
 
 func (m model) logScreen() string {
 	header := m.logHeader()
-	footer := wrapItems([]string{"b board", "j/k scroll", "esc back"}, " · ", m.width)
+	footer := wrapItems([]string{"[B] Board", "[J/K] Scroll", "[Esc] Back"}, " · ", m.width)
 	m.tailView.Height = max(1, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-2)
 	return header + "\n" + m.tailView.View() + "\n" + dimStyle.Render(footer)
 }
@@ -806,9 +1007,12 @@ func (m *model) sizeViewports() {
 	if m.width <= 0 {
 		return
 	}
-	footer := wrapItems([]string{"b board", "j/k scroll", "esc back"}, " · ", m.width)
+	footer := wrapItems([]string{"[B] Board", "[J/K] Scroll", "[Esc] Back"}, " · ", m.width)
+	if m.mode == ModeTail {
+		footer = wrapItems([]string{"[B] Board", "[J/K] Scroll", "[H] History"}, " · ", m.width)
+	}
 	m.tailView.Height = max(1, m.height-lipgloss.Height(m.header())-lipgloss.Height(footer)-3)
-	diffFooter := wrapItems([]string{"diff " + m.diffFor, "j/k scroll", "esc back"}, " · ", m.width)
+	diffFooter := wrapItems([]string{"diff " + m.diffFor, "[J/K] Scroll", "[Esc] Back"}, " · ", m.width)
 	m.diffView.Height = max(1, m.height-lipgloss.Height(m.header())-lipgloss.Height(diffFooter)-3)
 	if m.mode == ModeLog {
 		m.tailView.Height = max(1, m.height-lipgloss.Height(m.logHeader())-lipgloss.Height(footer)-2)
