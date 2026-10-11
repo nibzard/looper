@@ -1,0 +1,6 @@
+# Context
+
+The launcher stayed through 0.6.1 so upgraders kept a working
+command. Removal became safe when every script and the formula
+referenced only the Go binary. The uninstaller still deletes old
+files for machines that upgraded from the Bash version.
