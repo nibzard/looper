@@ -1,0 +1,1 @@
+Updated after publishing v0.5.0 because its archive checksum is available only after the tag exists. Verified the downloaded archive and built its Go executable with the formula build command. Both command entry points are covered by package smoke tests. Homebrew is not installed on this VM, so a direct brew install test was unavailable.
