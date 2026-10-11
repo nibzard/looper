@@ -9,15 +9,18 @@ import (
 	"testing"
 )
 
-// The stub prints the --output-format json summary that zcode emits and
-// records its arguments, so tests cover the invocation and the parse.
+// The stub prints the stream-json shapes zcode emits — an event with a
+// nested payload.response, then the one-line result terminator with the
+// top-level response — and records its arguments, so tests cover the
+// invocation and the parse.
 func zcodeStub(t *testing.T, response string) (bin, argsPath string) {
 	t.Helper()
 	dir := t.TempDir()
 	bin, argsPath = filepath.Join(dir, "zcode.sh"), filepath.Join(dir, "args")
 	script := "#!/bin/bash\n" +
 		"printf '%s\\n' \"$*\" > " + argsPath + "\n" +
-		"printf '{\"sessionId\":\"s1\",\"response\":%s,\"eventCount\":1}\\n' \"$ZCODE_STUB_RESPONSE\"\n" +
+		"printf '{\"type\":\"turn.completed\",\"payload\":{\"response\":\"other\"}}\\n'\n" +
+		"printf '{\"type\":\"result\",\"sessionId\":\"s1\",\"response\":%s,\"eventCount\":2}\\n' \"$ZCODE_STUB_RESPONSE\"\n" +
 		"exit 0\n"
 	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
 		t.Fatal(err)
@@ -45,14 +48,17 @@ func TestZcodeWorkerInvocationAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--cwd " + cwd, "--output-format json", "--mode yolo", "-p complete T001"} {
+	for _, want := range []string{"--cwd " + cwd, "--output-format stream-json", "--mode yolo", "-p complete T001"} {
 		if !strings.Contains(string(args), want) {
 			t.Fatalf("invocation %q missing %q", args, want)
 		}
 	}
 }
 
-func TestZcodePlannerRunsInPlanMode(t *testing.T) {
+// Planning keeps the worker invocation: zcode's plan mode answers with a
+// prose summary and drops the JSON, so the inspection-only prompt is the
+// planner's restriction.
+func TestZcodePlannerKeepsWorkerMode(t *testing.T) {
 	plan := `{"setup":"npm ci","verify":"npm test","tasks":[{"task_id":"T001","write_paths":["."],"resources":[]}]}`
 	quoted, err := json.Marshal(plan)
 	if err != nil {
@@ -70,8 +76,8 @@ func TestZcodePlannerRunsInPlanMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(args), "--mode plan") || strings.Contains(string(args), "--mode yolo") {
-		t.Fatalf("planning must select plan mode: %q", args)
+	if !strings.Contains(string(args), "--mode yolo") || strings.Contains(string(args), "--mode plan") {
+		t.Fatalf("planning must keep the worker mode: %q", args)
 	}
 }
 
