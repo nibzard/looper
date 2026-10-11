@@ -107,10 +107,16 @@ trust.
 ## Dashboard
 
 Start the terminal user interface (TUI) with `looper tui`. It starts a
-controller or attaches to the active run. The header shows run state, elapsed
-time, completion, and active worker counts. Each worker has a separate row
-for its task ID, phase, and wrapped title. Planning and review activity
-appear when no workers are active.
+controller or attaches to the active run. The overview shows the goal,
+controller activity, snapshot age, progress, attention items, and active
+workers. Recent outcomes stay visible even when worker events fill the log.
+Integration counts cover the current session, the last hour, and the last
+24 hours. These counts come from the journal, not the viewer's event buffer.
+
+For an unattended run, use `looper start`, then attach with `looper tui`.
+Keep the viewer in tmux or reconnect later. In attached mode, `q` detaches
+without stopping the controller. A missing snapshot shows `UNKNOWN` and
+retains the last known state. Quiet worker output does not prove a failure.
 
 ![The dashboard: run state and progress in the header, working and blocked
 tasks, recent events](docs/assets/tui.png)
@@ -123,34 +129,54 @@ tasks, recent events](docs/assets/tui.png)
 | `BLOCKED` | Red | Work needs attention. |
 | `COMPLETE` | Green | The goal is met; Looper waits for new work. |
 | `STOPPED` | Gray | No controller is active. |
+| `UNKNOWN` | Yellow | The snapshot is unavailable; displayed work is the last known state. |
 
-Text labels remain visible without color. Common keys: `L` opens the
-selected worker's log, `T` shows current-run events, `B` returns to the
-board, `D` shows the selected task's diff, `Q` exits. Press `?` for help and
-the complete list.
+Text labels remain visible without color. Press `u` to browse all tasks,
+including completed and blocked tasks. Search with `/` and filter with `f`.
+Press Enter to inspect task details, dependencies, recovery instructions,
+changed files, and recorded checks. Wide terminals show the inspector beside
+the task list. Smaller terminals open it as a separate screen.
+
+Common keys: `l` opens task logs, `t` shows activity, `b` returns to the
+overview, and `d` shows the selected task's diff. Press `?` for all controls.
 
 <details>
 <summary>Complete key reference, planning view, and small screens</summary>
 
-Shortcut labels use brackets, such as **[L] Logs** and **[Q] Exit**.
+Shortcut labels use lowercase keys, such as **[l] Logs** and **[q] Exit**.
 Letter shortcuts accept lowercase and uppercase keys. You do not need Shift.
 
 | Key | Action |
 | --- | --- |
-| `L` | Open the selected worker's log, or the planner log while planning. |
-| `T` / `B` | Open current-run events / return to the board. |
-| `H` | In the events view, toggle recent history from all runs. |
-| `J` / `K`, arrows | Select workers; scroll at the ends of the list. |
+| `u` | Browse all tasks. |
+| Enter | Inspect the selected task. |
+| `/` / `f` | Search tasks / change the task filter. |
+| `r` | In the inspector, confirm blocker resolution and request a requeue. |
+| `l` | Open the selected task's log, or the planner log while planning. |
+| `t` / `b` | Open activity / return to the overview. |
+| `h` | In activity, toggle recent history from all runs. |
+| `j` / `k`, arrows | Select tasks or scroll the current view. |
 | Page Up / Page Down | Scroll the board or current view. |
-| `V` | Toggle full board details on small screens. |
-| `D` | Show the selected task's diff. |
-| `A` / `S` | Add a plan / open settings when controls are available. |
-| `X` | Request a drain: stop new dispatch and finish current work. |
-| `Q` | Detach an observer or open the controller exit choices. |
-| `Ctrl+C` | Interrupt a controller and retain work, or detach an observer. |
+| End | Resume live activity after scrolling. |
+| Tab | Cycle overview, tasks, and activity. |
+| Esc | Return from the inspector or finish a search. |
+| `d` | Show the selected task's diff. |
+| `a` / `s` | Add a plan / open settings when controls are available. |
+| `x` | Request a drain: stop new dispatch and finish current work. |
+| `q` | Detach an observer or open the controller exit choices. |
+| `ctrl+c` | Interrupt a controller and retain work, or detach an observer. |
 | `?` | Show help. |
 
-There is no pause command. A drain waits for current planning or agent work
+Scrolling activity pauses the displayed text while new events arrive.
+The view reports the new event count. End resumes live activity.
+This pauses the viewer only; the controller continues to work.
+
+Requeue requests apply only while Looper is idle. Resolve the blocker first,
+then press `r` in its inspector and confirm with `y`. The controller rejects
+changed tasks and requests from earlier sessions. Retained work stays
+available for reuse. A read-only observer cannot requeue tasks.
+
+There is no command to pause execution. A drain waits for current planning or agent work
 to finish. To stop immediately, choose **interrupt; retain work** in the exit
 dialog. Restarting retains task progress, but unfinished planning runs
 again.
@@ -170,15 +196,12 @@ planning prompt tells both agents to identify commands without running
 builds, tests, benchmarks, or dataset generators. Planning has no timeout.
 Press Ctrl+C to interrupt and retain work.
 
-In mobile terminals and tmux panes, the header and controls wrap to fit the
-pane. Below 80 columns or 24 rows, the board uses single-line task titles
-and blocker reasons. It shows two recent events. Press `v` to show full
-details, then scroll to read them. The board lists active work, blocked
-tasks, and ready tasks before planner output. Use `j` and `k`, arrow keys,
-or Page Up and Page Down to scroll the board. The header and controls stay
-visible when the keyboard reduces the pane height. The footer shows common
-controls. Press `?` for settings, plan imports, drain, and the complete list
-of controls. The board shows only the current run's events. Information
+In mobile terminals and tmux panes, the overview uses a compact summary.
+Task details remain available through the inspector. Use `j` and `k`,
+arrow keys, or Page Up and Page Down to navigate. The header and controls
+stay visible when the keyboard reduces the pane height. The footer shows
+common controls. Press `?` for settings, plan imports, drain, and all keys.
+The overview shows only the current run's outcomes. Information
 uses neutral text; green marks successful results, yellow marks waiting or
 blocked work, and red marks errors.
 

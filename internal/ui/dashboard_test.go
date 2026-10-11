@@ -31,7 +31,7 @@ func TestPlanningOnPhoneTerminal(t *testing.T) {
 			Ready:    []TaskView{{ID: "T050", Title: "Compose an optional tmux writer"}},
 		}}
 		view := m.View()
-		for _, want := range []string{"PLANNING", "55/63 complete", "[Q] Detach", "[L] Logs"} {
+		for _, want := range []string{"PLANNING", "55/63 complete", "[q] Detach", "[l] Logs"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("%v: missing %q: %s", size, want, view)
 			}
@@ -84,7 +84,7 @@ func TestPhoneBoardScrollAndResize(t *testing.T) {
 		m = next.(model)
 	}
 	view := m.View()
-	if !strings.Contains(view, "PLANNING") || !strings.Contains(view, "Recent activity") || !strings.Contains(view, "[Q] Detach") {
+	if !strings.Contains(view, "PLANNING") || !strings.Contains(view, "Recent activity") || !strings.Contains(view, "[q] Detach") {
 		t.Fatalf("missing fixed status or scroll content: %s", view)
 	}
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
@@ -271,14 +271,14 @@ func TestBlockedTaskScrollHintsOnPhone(t *testing.T) {
 		}}},
 	}}
 	top := m.View()
-	for _, want := range []string{"Blocked · 1 task", "T050 Add expiry cases", "Reason:", "[J] More below"} {
+	for _, want := range []string{"Blocked · 1 task", "T050 Add expiry cases", "Reason:", "[j] More below"} {
 		if !strings.Contains(top, want) {
 			t.Fatalf("missing %q: %s", want, top)
 		}
 	}
 	m.scroll = m.maxBoardScroll()
 	bottom := m.View()
-	if !strings.Contains(bottom, "[K] More above") || strings.Contains(bottom, "[J] More below") {
+	if !strings.Contains(bottom, "[k] More above") || strings.Contains(bottom, "[j] More below") {
 		t.Fatalf("incorrect end-of-content hint: %s", bottom)
 	}
 	for _, view := range []string{top, bottom} {
@@ -317,7 +317,7 @@ func TestCompactBoardPrioritizesTasksAndPreservesDetails(t *testing.T) {
 		m.events = append(m.events, JournalEvent{Message: fmt.Sprintf("Activity %d", i)})
 	}
 	view := m.View()
-	for _, want := range []string{"Blocked · 1 task", "Ready · 5 tasks", "T059", "Latest:", "Activity 4", "[V] Details", "[Q] Detach"} {
+	for _, want := range []string{"Blocked · 1 task", "Ready · 5 tasks", "T059", "Latest:", "Activity 4", "[v] Details", "[q] Detach"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("summary missing %q: %s", want, view)
 		}
@@ -333,7 +333,7 @@ func TestCompactBoardPrioritizesTasksAndPreservesDetails(t *testing.T) {
 	}
 	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
 	m = next.(model)
-	if m.maxBoardScroll() == 0 || !strings.Contains(m.boardContent(), "END OF REASON") || !strings.Contains(m.footer(), "[V] Summary") {
+	if m.maxBoardScroll() == 0 || !strings.Contains(m.boardContent(), "END OF REASON") || !strings.Contains(m.footer(), "[v] Summary") {
 		t.Fatal("full details are not accessible")
 	}
 	m.scroll = m.maxBoardScroll()

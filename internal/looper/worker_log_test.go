@@ -56,7 +56,7 @@ func TestWorkerLogTracksRetriesAndChecks(t *testing.T) {
 	}
 	a.Phase = "done"
 	e.publishView(false)
-	if _, _, err := workerLog(e.Dir, a.ID); err == nil {
-		t.Fatal("completed task still reported as active")
+	if _, text, err := workerLog(e.Dir, a.ID); err != nil || text == "" {
+		t.Fatal("completed task lost its retained logs")
 	}
 }

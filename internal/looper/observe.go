@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nibzard/looper/internal/ui"
@@ -80,6 +81,19 @@ func attemptLogs(a *Attempt) []string {
 func observeWorker(a *Attempt) WorkerObservation {
 	w := WorkerObservation{AttemptID: a.ID, TaskID: a.Task.ID, Phase: a.Phase, Progress: "unknown"}
 	paths := attemptLogs(a)
+	// A repair's old check logs must not masquerade as its worker output.
+	// A queued check similarly must not show an implementation process as live.
+	if a.Phase == "running" || a.Phase == "verifying" {
+		filtered := paths[:0]
+		for _, path := range paths {
+			rel, err := filepath.Rel(a.Directory, path)
+			isCheck := strings.HasPrefix(rel, "checks"+string(filepath.Separator))
+			if err == nil && ((a.Phase == "verifying" && isCheck) || (a.Phase == "running" && !isCheck)) {
+				filtered = append(filtered, path)
+			}
+		}
+		paths = filtered
+	}
 	if len(paths) == 0 {
 		return w
 	}

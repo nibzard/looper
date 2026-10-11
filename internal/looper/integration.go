@@ -43,6 +43,11 @@ func (e *Engine) prepare(a *Attempt, base string) (Candidate, error) {
 func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidate, p Plan) Candidate {
 	defer e.Repo.Remove(c.Worktree)
 	dir := filepath.Join(a.Directory, "checks", c.Commit)
+	if err := writeJSON(filepath.Join(dir, "verify-command.json"), map[string]string{"command": p.Verify}); err != nil {
+		c.OK = false
+		c.Feedback = "Cannot record verification command: " + err.Error()
+		return c
+	}
 	if err := e.command(ctx, p.Setup, c.Worktree, dir, "setup"); err != nil {
 		c.OK = false
 		c.Feedback = "Integration setup failed:\n" + logTail(filepath.Join(dir, "setup.log"))
