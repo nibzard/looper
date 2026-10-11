@@ -1,0 +1,6 @@
+# Context
+
+Driven by the 2026-10-11 practices report, dead-generality table
+rows one, two, and four. Load-time phase coercion in
+initializeState is what made the abandoned removal safe; the
+Attempt type comment now records that contract.
