@@ -1,0 +1,1 @@
+Review checked the local zcode CLI source and stream-output tests. The missing-result regression failed before the parser fix and passes afterward. Tests also reject invalid final responses and responses from failed processes. No paid live agent invocation was made.
