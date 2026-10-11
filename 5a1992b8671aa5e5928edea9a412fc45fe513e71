@@ -1,0 +1,3 @@
+Fix the eight confirmed review findings plus an idle-loop failure exposed by drain testing. Read one readiness message without waiting for pipe closure. Use a closed completion channel so dashboard polling cannot consume the exit result. Preserve pending plan imports across startup and resume saved analysis.
+
+Validation passed: make test (42 runtime tests, Go tests and vet, packaging and skill checks), go test -race ./..., and focused regression tests. Optional Measuretwice tests could not run because its package is absent and the npm registry returns 404.
