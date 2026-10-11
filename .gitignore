@@ -15,3 +15,7 @@ to-do.schema.json
 
 # OS
 .DS_Store
+
+# Build and optional adapter dependencies
+/build/
+node_modules/

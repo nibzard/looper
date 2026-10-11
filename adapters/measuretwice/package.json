@@ -1,0 +1,9 @@
+{
+  "name": "looper-measuretwice",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "peerDependencies": { "measuretwice": "0.1.x" },
+  "dependencies": { "@typesafe-ai/sdk": "0.6.0" },
+  "scripts": { "test": "node --test adapter.test.mjs" }
+}

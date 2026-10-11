@@ -15,7 +15,8 @@ A local stub checks the runner, but does not establish live agent behavior.
    To test a particular checkout, set `LOOPER_BIN` to its absolute
    `bin/looper.sh` path. The runner otherwise prefers its checkout over PATH.
 2. Run the script. It creates `PROJECT.md` and a two-task backlog, then
-   executes Looper with `MAX_ITERATIONS=1` and no iteration pause.
+   initializes Git, then executes Looper with `--once --jobs 1` and
+   `MAX_ITERATIONS=1`. The integration check requires a nonempty `README.md`.
 3. Inspect the task entry, result, and final report.
    The expected selection is `T2`, ahead of `T10` at equal priority.
 4. Verify the actual outcome: `T2` is `done`, `T10` remains `todo`, and

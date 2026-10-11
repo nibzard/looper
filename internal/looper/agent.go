@@ -1,0 +1,213 @@
+package looper
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type Agent struct{ Config Config }
+type AgentError struct {
+	Kind   string
+	Detail string
+}
+
+func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
+
+const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"}}}}}}`
+
+func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary bool) (json.RawMessage, error) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	if err := atomicWrite(filepath.Join(dir, "prompt.txt"), []byte(prompt), 0600); err != nil {
+		return nil, err
+	}
+	resultPath := filepath.Join(dir, "result.json")
+	schema := filepath.Join(dir, "schema.json")
+	if summary {
+		if err := atomicWrite(schema, []byte(summarySchema), 0600); err != nil {
+			return nil, err
+		}
+	}
+	var args []string
+	if kind == "codex" {
+		args = []string{a.Config.CodexBin, "exec", "--cd", cwd, "--json", "--output-last-message", resultPath}
+		if a.Config.Model != "" {
+			args = append(args, "--model", a.Config.Model)
+		}
+		if a.Config.Effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+fmt.Sprintf("%q", a.Config.Effort))
+		}
+		if env("CODEX_YOLO", "1") != "0" {
+			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		} else {
+			args = append(args, "--sandbox", "workspace-write")
+		}
+		if summary {
+			args = append(args, "--output-schema", schema)
+		}
+		args = append(args, "-")
+	} else {
+		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--add-dir", cwd}
+		if a.Config.ClaudeModel != "" {
+			args = append(args, "--model", a.Config.ClaudeModel)
+		}
+		if summary {
+			args = append(args, "--json-schema", summarySchema)
+		}
+	}
+	if err := writeJSON(filepath.Join(dir, "invocation.json"), map[string]any{"agent": kind, "model": map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], "effort": a.Config.Effort, "cwd": cwd}); err != nil {
+		return nil, err
+	}
+	for retry := 0; retry < a.Config.RetryLimit; retry++ {
+		os.Remove(resultPath)
+		log := filepath.Join(dir, fmt.Sprintf("events-%02d.jsonl", retry))
+		input := strings.NewReader(prompt)
+		err := runProcess(ctx, cwd, log, args, input, resourceEnv(dir))
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		raw, readErr := readBounded(log, 64<<20)
+		if readErr != nil {
+			return nil, readErr
+		}
+		var wrapper map[string]json.RawMessage
+		if kind == "claude" {
+			for _, line := range bytes.Split(raw, []byte{'\n'}) {
+				var o map[string]json.RawMessage
+				if json.Unmarshal(line, &o) == nil && o["result"] != nil || o["structured_output"] != nil {
+					wrapper = o
+				}
+			}
+			if string(wrapper["is_error"]) == "true" && err == nil {
+				err = errors.New("agent returned an execution error")
+			}
+		}
+		if err != nil {
+			failure := classifyFailure(string(raw))
+			if failure == "transient" && retry+1 < a.Config.RetryLimit {
+				delay := min(10*time.Minute, a.Config.RetryDelay*time.Duration(1<<min(retry, 8)))
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(delay):
+					continue
+				}
+			}
+			return nil, &AgentError{failure, fmt.Sprintf("%v; see %s", err, log)}
+		}
+		if kind == "codex" {
+			raw, err = readBounded(resultPath, 8<<20)
+			if err != nil {
+				return nil, &AgentError{"invalid_result", "missing final result; see " + dir}
+			}
+		} else if v := wrapper["structured_output"]; len(v) > 0 && string(v) != "null" {
+			raw = v
+		} else {
+			var s string
+			if json.Unmarshal(wrapper["result"], &s) == nil {
+				raw = []byte(s)
+			}
+		}
+		data, err := extractObject(raw)
+		if err != nil {
+			return nil, &AgentError{"invalid_result", fmt.Sprintf("%v; see %s", err, dir)}
+		}
+		if err = atomicWrite(resultPath, append(data, '\n'), 0600); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+	return nil, &AgentError{"transient", "retry limit reached"}
+}
+func readBounded(path string, limit int64) ([]byte, error) {
+	s, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if s.Size() > limit {
+		return nil, fmt.Errorf("artifact exceeds %d bytes: %s", limit, path)
+	}
+	return os.ReadFile(path)
+}
+func extractObject(b []byte) (json.RawMessage, error) {
+	b = bytes.TrimSpace(b)
+	var v map[string]json.RawMessage
+	if json.Unmarshal(b, &v) == nil && v != nil {
+		return b, nil
+	}
+	if bytes.HasPrefix(b, []byte("```")) {
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
+			b = bytes.TrimSpace(b[i+1:])
+			b = bytes.TrimSpace(bytes.TrimSuffix(b, []byte("```")))
+			if json.Unmarshal(b, &v) == nil && v != nil {
+				return b, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("final output must contain one JSON object")
+}
+func classifyFailure(s string) string {
+	s = strings.ToLower(s)
+	for _, w := range []string{"429", "rate limit", "rate_limit", "too many requests", "502", "503", "504", "connection reset", "connection refused", "timed out", "timeout"} {
+		if strings.Contains(s, w) {
+			return "transient"
+		}
+	}
+	for _, w := range []string{"unauthorized", "authentication", "401", "403", "permission denied", "invalid api key"} {
+		if strings.Contains(s, w) {
+			return "configuration"
+		}
+	}
+	return "execution"
+}
+func resourceEnv(dir string) map[string]string {
+	tmp := filepath.Join(dir, "tmp")
+	os.MkdirAll(tmp, 0700)
+	id := digest([]byte(dir))[:20]
+	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir, "TMPDIR": tmp}
+}
+
+func workerPrompt(b Backlog, t Task, feedback string) string {
+	data, _ := json.MarshalIndent(t, "", "  ")
+	sources, _ := json.Marshal(b.Sources)
+	p := fmt.Sprintf(`Complete task %s: %s.
+You work autonomously in a private Git worktree. Read repository instructions and source files %s.
+Project goal: %s
+Task contract:
+%s
+Implement the outcome and exercise its acceptance criteria. Repair problems you can resolve locally.
+Do not edit the backlog, other worktrees, shared Git refs, or repository configuration. Do not push.
+Use LOOPER_RESOURCE_PREFIX for private databases and temporary resources. Bind servers to free ports.
+Do not weaken acceptance criteria or remove failing tests to claim success.
+If an external prerequisite is missing, report blocked with an explicit unblock condition.
+Return JSON: task_id, status (done or blocked), summary, files (array), blockers (array),
+followups (array of title, details, evidence, depends_on, priority), and unblock_when (string).
+Capture concrete missing work in followups; do not invent unrelated product goals.
+`, t.ID, t.Title, sources, b.Goal, data)
+	if feedback != "" {
+		p += "\nRepair the task using the retained code and this evidence. Inspect existing edits before changing them.\n" + feedback
+	}
+	return p
+}
+
+func planPrompt(b Backlog) string {
+	data, _ := json.Marshal(b)
+	return `Plan execution for Looper. Read repository instructions and the source_files in this backlog:
+` + string(data) + `
+Do not change any files. Return JSON with setup (shell command or empty string), verify (shell command),
+and tasks [{task_id, write_paths: [relative file or directory prefixes], resources: [shared interface names]}].
+Include each unfinished task. Use ["."] when the write scope is uncertain. Include generated files and wiring.
+Setup must recreate ignored dependencies in each worktree. Never share mutable build output between worktrees.
+Checks must execute meaningful acceptance checks for the combined product; a no-op is invalid.
+Commands receive LOOPER_RESOURCE_PREFIX and TMPDIR unique to the operation. Isolate databases and bind free ports.
+Tasks sharing public interfaces or migration ordering need the same resource name, even if files differ.
+Do not create tasks or change requirements. Use existing commands and lockfiles where available.`
+}

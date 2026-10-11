@@ -5,7 +5,7 @@ usage() {
     cat <<'USAGE'
 Usage: ./install.sh [options]
 
-Installs looper.sh and Codex skills into user-appropriate locations.
+Installs looper and its compatibility launcher and Codex skills into user-appropriate locations.
 
 Options:
   --prefix <path>      Install into a prefix (bin -> <prefix>/bin,
@@ -13,7 +13,7 @@ Options:
   --bin-dir <path>     Override bin dir (default: <prefix>/bin)
   --codex-home <path>  Override CODEX_HOME (default: ~/.codex)
   --skills-dir <path>  Override skills dir (default: <CODEX_HOME>/skills)
-  --skip-bin           Skip installing looper.sh
+  --skip-bin           Skip installing the binary
   --skip-skills        Skip installing skills
   --dry-run            Print actions without making changes
   -h, --help           Show help
@@ -22,7 +22,7 @@ USAGE
 
 DEFAULT_PREFIX="$HOME/.local"
 PREFIX="${PREFIX:-$DEFAULT_PREFIX}"
-CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+TARGET_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
 PREFIX_OVERRIDE=""
 BIN_DIR_OVERRIDE=""
@@ -81,7 +81,7 @@ if [ -n "$PREFIX_OVERRIDE" ]; then
 fi
 
 if [ -n "$CODEX_HOME_OVERRIDE" ]; then
-    CODEX_HOME="$CODEX_HOME_OVERRIDE"
+    TARGET_CODEX_HOME="$CODEX_HOME_OVERRIDE"
 fi
 
 if [ "$PREFIX" != "$DEFAULT_PREFIX" ]; then
@@ -100,20 +100,20 @@ else
     if [ "$PREFIX_MODE" -eq 1 ] && [ -z "$CODEX_HOME_OVERRIDE" ]; then
         SKILLS_DIR="$PREFIX/share/looper/skills"
     else
-        SKILLS_DIR="$CODEX_HOME/skills"
+        SKILLS_DIR="$TARGET_CODEX_HOME/skills"
     fi
 fi
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR="$SCRIPT_DIR"
 SRC_BIN="$ROOT_DIR/bin/looper.sh"
-SRC_RUNTIME="$ROOT_DIR/lib/looper_parallel.py"
+SRC_PROGRAM="$ROOT_DIR/build/looper"
 SRC_SKILLS="$ROOT_DIR/skills"
 
 # Homebrew installs the commands in bin and the skills in share/looper.
 if [ ! -f "$SRC_BIN" ] && [ -f "$SCRIPT_DIR/looper.sh" ]; then
     SRC_BIN="$SCRIPT_DIR/looper.sh"
-    SRC_RUNTIME="$SCRIPT_DIR/looper_parallel.py"
+    SRC_PROGRAM="$SCRIPT_DIR/looper"
 fi
 if [ ! -d "$SRC_SKILLS" ] && [ -d "$SCRIPT_DIR/../share/looper/skills" ]; then
     SRC_SKILLS="$SCRIPT_DIR/../share/looper/skills"
@@ -123,8 +123,8 @@ if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_BIN" ]; then
     echo "Error: missing $SRC_BIN" >&2
     exit 1
 fi
-if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_RUNTIME" ]; then
-    echo "Error: missing $SRC_RUNTIME" >&2
+if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_PROGRAM" ] && [ ! -f "$ROOT_DIR/go.mod" ]; then
+    echo "Error: missing $SRC_PROGRAM" >&2
     exit 1
 fi
 
@@ -149,9 +149,14 @@ warn_missing() {
 }
 
 if [ "$INSTALL_BIN" -eq 1 ]; then
+    if [ -f "$ROOT_DIR/go.mod" ]; then
+        run mkdir -p "$ROOT_DIR/build"
+        run go -C "$ROOT_DIR" build -trimpath -o "$SRC_PROGRAM" ./cmd/looper
+    fi
     run install -d "$BIN_DIR"
+    run install -m 0755 "$SRC_PROGRAM" "$BIN_DIR/looper"
     run install -m 0755 "$SRC_BIN" "$BIN_DIR/looper.sh"
-    run install -m 0644 "$SRC_RUNTIME" "$BIN_DIR/looper_parallel.py"
+
 fi
 
 if [ "$INSTALL_SKILLS" -eq 1 ]; then
@@ -168,13 +173,13 @@ if [ "$INSTALL_BIN" -eq 1 ]; then
     esac
 fi
 
-warn_missing jq
-warn_missing python3
+warn_missing git
+warn_missing bash
 warn_missing codex
 
 echo "Install complete."
 if [ "$INSTALL_BIN" -eq 1 ]; then
-    echo "  looper.sh -> $BIN_DIR/looper.sh"
+    echo "  looper -> $BIN_DIR/looper"
 fi
 if [ "$INSTALL_SKILLS" -eq 1 ]; then
     echo "  skills -> $SKILLS_DIR"

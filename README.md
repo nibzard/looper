@@ -1,386 +1,250 @@
 # Looper
 
-A task runner for the Codex CLI with optional Claude Code CLI (`claude`)
-interleaving. Looper finds independent work in a JSON backlog and runs it in
-separate Git worktrees. Each task gets fresh context. Looper checks combined
-changes before it updates your project and marks tasks done.
+Looper keeps a local development process running. It plans tasks, runs coding
+agents in private Git worktrees, checks their combined changes, and integrates
+successful work. It uses Codex or Claude Code through their installed commands.
 
-The entrypoint is `bin/looper.sh`. The parallel coordinator is
-`lib/looper_parallel.py` and uses the Python standard library.
+The controller is one Go binary. SQLite stores execution state. Git stores code
+snapshots. Sequential and parallel runs use the same engine. Pull requests and
+remote services are optional parts of your project, not requirements of Looper.
 
-## Quick Start
-```bash
-./install.sh
-looper.sh
-```
+## Start
 
-If `to-do.json` is missing, Looper bootstraps it from project docs, validates it
-against `to-do.schema.json`, and repairs it if needed.
+You need Go 1.22 or later to build, Git, Bash, and an authenticated coding agent.
+The runtime supports Linux and macOS. The binary needs no Python, Node, or SQLite
+command. Python is used by the repository tests. Node is optional for Measuretwice.
 
-No parallel setup is required. Run from the Git repository root with Python
-3.9 or later available. Use `looper.sh --jobs 1` for the sequential runner.
-
-## What It Does
-- Bootstraps `to-do.json` and `to-do.schema.json` if missing.
-- Validates `to-do.json` (jsonschema if available, jq fallback).
-- Repairs invalid task files via Codex or `claude`.
-- Plans independent tasks and project checks from the repository itself.
-- Runs ready tasks in isolated worktrees, with one task per agent session.
-- Gives priority to tasks that unblock longer dependency chains.
-- Tests combined changes before it publishes them and releases dependent tasks.
-- When tasks are exhausted, runs a review pass; it must append a final
-  `project-done` marker task if no new work is found.
-- Supports interleaving `claude` for iterations and a configurable review agent.
-- Enforces structured summaries and logs JSONL per run.
-- Applies validated model summaries back into `to-do.json`.
-
-## Install
-```bash
-./install.sh
-```
-
-Common options:
-```bash
-./install.sh --codex-home ~/.codex
-./install.sh --prefix /opt/looper
+```sh
+make build
 ./install.sh --skip-skills
+cd /path/to/project
+looper
 ```
 
-Tip: If `~/.local/bin` is not on PATH, add it to your shell profile.
+Run from the repository root. Keep the intended outcome and exclusions in a file
+such as `PROJECT.md`. If `to-do.json` is absent, Looper asks the planning agent to
+create tasks from the existing requirements. A project without Git gets a local
+repository unless `LOOPER_GIT_INIT=0` is set.
 
-## Homebrew
-```bash
-brew install <tap>/looper
-looper-install --skip-bin
+Looper waits for new work after completing the current goal. Edit the task file
+or project requirements while it is idle. Looper reads the changes and continues.
+Use `--once` when you want a finite run.
+
+```sh
+looper --once
+looper --jobs 1
+looper --jobs 4 --check-jobs 2
+looper --agent claude --review-agent codex
+looper status
+looper tail --follow
+looper stop
 ```
 
-`looper-install` installs skills into `~/.codex/skills` by default.
+`looper stop` stops new dispatch and lets active work finish. An interrupt stops
+child processes and retains partial work. Run `looper` again to resume.
+`bin/looper.sh` remains a compatibility launcher for the Go binary.
 
-## Usage
-```bash
-looper.sh [to-do.json]
-looper.sh run [to-do.json]
-looper.sh --ls todo [to-do.json]
-looper.sh --tail --follow
-looper.sh --doctor [to-do.json]
-looper.sh --interleave
-looper.sh --smart
-looper.sh --jobs 3
-looper.sh --jobs 1
-looper.sh --iter-schedule odd-even
-looper.sh --iter-schedule round-robin --rr-agents claude,codex
-```
+## The development loop
 
-## Interleaving
-`--interleave` runs iterations with `claude` and keeps the
-final review pass on Codex. Iteration schedules are configurable:
+1. Read the goal, task dependencies, and acceptance criteria.
+2. Plan independent write scopes, shared resources, setup, and verification.
+3. Implement ready tasks in private worktrees.
+4. Combine each result with the current integration revision and run checks.
+5. Publish only the exact checked tree, then mark its task complete.
+6. Review complete product workflows at milestones and at the end.
+7. Add evidence-backed findings to the backlog and continue.
 
-- `--iter-schedule codex` (default)
-- `--iter-schedule claude`
-- `--iter-schedule odd-even` (odd uses Codex, even uses `claude`)
-- `--iter-schedule round-robin` (uses `--rr-agents`, default `claude,codex`)
+A task dependency becomes ready only after integration. Work on unrelated tasks
+continues during repairs. Repeated failures trigger a fresh diagnosis. A task
+that still fails becomes blocked; its code and logs remain available.
 
-`claude` runs with `--dangerously-skip-permissions` and `--output-format json`.
+The default worker limit is automatic, up to four workers. Setup and checks share
+one execution slot by default. Declared write scopes and resources prevent known
+collisions. Actual Git changes control integration. Unexpected conflicts return
+to a worker for repair. With multiple check slots, speculative checks overlap;
+a result can publish only when its checked base is still current.
 
-Optional overrides:
-```
---odd-agent <codex|claude>
---even-agent <codex|claude>
---rr-agents <comma-separated list>
---repair-agent <codex|claude>
---review-agent <codex|claude>
-```
+Each process receives a unique `LOOPER_RESOURCE_PREFIX`, a private `TMPDIR`, and
+`LOOPER_ARTIFACT_DIR`. Use these for databases and other test resources. Let the
+operating system choose available server ports. Worktrees share Git metadata;
+they are workspace isolation, not a security sandbox.
 
-Use `--smart` (or `-s`) to select the smart Codex configuration.
-Normal mode uses `gpt-6-sol` with `max` reasoning effort.
-Smart mode uses `gpt-6-astra` with `max` reasoning effort.
+## Tasks and checks
 
-`--interleave` also defaults repair to `claude`; use `--repair-agent codex` to keep Codex.
+A minimal task file looks like this:
 
-### Examples
-
-Use Claude for all iterations, Codex for review:
-```bash
-looper.sh --interleave
-```
-
-Alternate between Codex (odd) and Claude (even):
-```bash
-looper.sh --interleave --iter-schedule odd-even
-```
-
-Flip the pattern (Claude on odd, Codex on even):
-```bash
-looper.sh --interleave --iter-schedule odd-even --odd-agent claude --even-agent codex
-```
-
-Round-robin through multiple agents:
-```bash
-looper.sh --interleave --iter-schedule round-robin --rr-agents claude,codex,claude,codex
-```
-
-Custom pattern (2x Claude, then Codex, repeating):
-```bash
-looper.sh --iter-schedule round-robin --rr-agents claude,claude,codex
-# Pattern: claude → claude → codex → claude → claude → codex → ...
-```
-
-The final review pass uses Codex by default. Set `--review-agent claude` to use Claude.
-
-## Task File (to-do.json)
-`to-do.json` is the source of truth for the loop and must match
-`to-do.schema.json`. Each worker receives one task. The coordinator selects:
-
-1. Unfinished work retained from an earlier run.
-2. Ready tasks whose dependencies are integrated and done, ordered by priority.
-3. Within one priority, tasks on longer remaining dependency chains, then task ID.
-
-The sequential runner keeps its original order: `doing` first, then ready
-`todo` tasks by priority and task ID. You do not need new backlog fields for
-parallel execution.
-
-Looper does not retry blocked tasks automatically. If no task can run, it exits
-with code 2. Resolve a blocker and change its status to `todo` to retry it.
-Task IDs must be unique. Each dependency must name another task in the file.
-Put a clear acceptance criterion in each task's `details` field.
-
-Minimal example:
 ```json
 {
   "schema_version": 1,
-  "source_files": ["README.md"],
+  "goal": "Implement the workflows in PROJECT.md",
+  "source_files": ["PROJECT.md"],
   "tasks": [
     {
-      "id": "T1",
-      "title": "Add README",
+      "id": "T001",
+      "title": "Implement the first complete workflow",
       "priority": 1,
-      "status": "todo"
+      "status": "todo",
+      "details": "Describe observable acceptance criteria here.",
+      "depends_on": []
     }
   ]
 }
 ```
 
-## Parallel execution
+Statuses are `todo`, `doing`, `blocked`, and `done`. Priorities range from 1 to 5.
+Looper rejects dependency cycles and unknown fields instead of dropping them.
+Task fields also support `steps`, `files`, `blockers`, `tags`, `created_at`,
+`updated_at`, and `unblock_when`.
 
-`--jobs auto` is the default. Looper starts with a limit of up to four workers,
-based on available processors and memory. It reduces dispatch under resource
-pressure, when checks accumulate, or after integration failures. Successful
-integrations gradually restore the initial limit. `--jobs N` sets the maximum;
-the coordinator can still use fewer workers. `LOOPER_JOBS` sets the same default.
+The planning agent finds project commands. You can supply known commands:
 
-Before work starts, a planning agent reads the backlog, code, and repository
-instructions. It identifies file scopes, shared interfaces, dependency setup,
-and integration checks. Tasks with overlapping scopes or shared resources run
-sequentially. Missing scopes are treated as project-wide. This internal plan
-does not change your backlog or require manual file ownership rules.
+```sh
+export LOOPER_SETUP_COMMAND='npm ci'
+export LOOPER_VERIFY_COMMAND='npm test && npm run build'
+looper
+```
 
-Each task runs in a separate worktree. Looper captures its changes in an internal
-commit. A separate worktree combines the result with integrated work and runs
-the planned checks. `LOOPER_VERIFY_COMMAND`, when set, overrides the planned
-integration check. Setup and verification have a separate concurrency limit.
-Checks invoked directly by agents still follow the repository's instructions.
+Setup runs in each implementation and verification worktree. Checks must not
+leave changes to tracked source files or unignored generated files. Keep build
+output ignored. Looper checks the combined result, not just each worker's branch.
 
-Checks can run concurrently on a chain of candidate commits. Each candidate
-includes the changes ahead of it. Publication follows that order.
-Only a result tested against the current integration base can be published.
-If that base changes, Looper rebuilds and rechecks the candidate. Conflicts and
-failed checks return to the task worker for up to two repair attempts. Failed
-work stays isolated. Dependent tasks start as soon as their prerequisites
-integrate; they do not wait for unrelated workers.
+Reviews run after five integrations by default. They compare the product against
+requirements, exercise workflows, and report missing capabilities. Worker reports
+can also propose follow-up tasks with acceptance criteria and observed evidence.
+These findings must stay within the project goal. This remains model judgment;
+executable acceptance checks provide stronger evidence where available.
 
-`MAX_ITERATIONS` limits task dispatches in a run. Integration repairs do not
-consume additional dispatches. At the limit, Looper drains running tasks and
-checks. It performs final review when all tasks finish. Review can add tasks;
-only a successful review can add the `project-done` marker. Automatic dispatch
-does not use the sequential runner's `LOOP_DELAY_SECONDS` pause.
+When an external prerequisite is missing, a blocked task records the reason and
+an unblock condition. Resolve it, then change the task to `todo` while Looper is
+idle. Looper reuses its partial work. It does not repeatedly dispatch blocked tasks
+without that change. Editing a retained task's requirements starts a fresh attempt.
 
-One process lock covers a repository and its linked worktrees, including
-sequential runs. A second Looper invocation exits without claiming tasks.
+## Models
 
-## Recovery and project files
+The default agent is Codex. Looper uses each installed agent's configured model
+unless you select one explicitly. This preserves your provider configuration
+and avoids treating an alias as proof of a particular model.
 
-Parallel mode leaves your branch and staged changes intact. It snapshots
-tracked and nonignored untracked project files into an internal Git reference.
-Workers start from that snapshot, including uncommitted edits. Repositories
-without an initial commit are supported. Verified changes
-return to your working directory as unstaged edits. Looper does not push them.
-Ignored dependencies and build output are recreated by the planned setup command.
+```sh
+looper --model YOUR_MODEL --effort high
+looper --agent claude --review-agent codex
+```
 
-Only the coordinator writes your task file. It stores attempt records, summaries,
-check logs, and a publication journal under
-`~/.looper/<project>-<hash>/parallel/`. These records remain available even when
-`CODEX_JSON_LOG=0` disables the consolidated activity log.
+`CODEX_MODEL`, `CLAUDE_MODEL`, and `CODEX_REASONING_EFFORT` can configure the agents
+separately. `--smart` selects `CODEX_SMART_MODEL` (default `gpt-6-astra`) and
+`CODEX_SMART_REASONING_EFFORT` (default `high`). Availability depends on your agent
+installation and account. Invocation records store the requested configuration;
+raw agent logs retain any model identity reported by the provider.
 
-Run the same command after interruption. Looper stops surviving attempt
-processes, resumes partial work, rechecks pending results, and completes any
-recorded publication before it releases dependencies. It retains failed and
-blocked worktrees for inspection. Successful worktrees are removed; their
-commits remain reachable through internal `refs/looper` and `refs/looper-tasks`
-references.
+There is no token budget in the controller. The dispatch limit is unlimited by
+default. Spend more computation on independent review, diagnosis, and acceptance
+checks. Increasing worker count alone can increase conflicts and resource use.
 
-If you change project files, the branch, or an active task's requirements while
-unintegrated work is retained, Looper stops and retains its work. It does not overwrite
-those changes or apply a result to changed acceptance criteria. Avoid editing
-the project while Looper is running. After a run drains all attempts, the next
-run can start from a new snapshot of your edited project.
+## State and recovery
 
-Automatic mode uses the sequential runner when worktrees are unavailable:
-outside a repository root, with submodules, or with
-unresolved index conflicts. Explicit `--jobs N` values above one report these
-conditions as errors. Without Python, automatic mode also uses the sequential
-runner; repository locking and durable worktree recovery require Python.
-
-
-## Logs and output
-
-Parallel runs show running tasks, verification, completed counts, and task results.
-Use `--tail --follow` for the latest activity. Detailed agent output and check
-logs remain in each attempt directory.
-
-The sequential runner shows the following output:
+The default state directory is:
 
 ```text
-Looper
-  Project   /home/agent/measuretwice
-  Agents    claude | review: claude | repair: claude
-  Claude    default model
-  Run       Up to 50 iterations | pause: 90s
-  Tasks     to-do.json
-  Backlog   12/15 done | 3 ready | 0 waiting | 0 blocked
-  Log       .../20260924-101305-651973.jsonl
-
-10:13:05  [1/50] T063  claude
-  Obtain human review of public challenge labels
-  Blocked  2m 08s | 0 files | 12/15 done
-    The public labels need human review.
-    Blocker: A reviewer must approve the challenge labels.
-
-10:16:48  [2/50] T071  claude
-  Publish API, schema, and CLI references
-  Done  4m 12s | 3 files | 13/15 done
-    Added the references and checked the examples.
+~/.looper/<project-name>-<path-hash>/runtime/
+  state.db
+  history/
+  worktrees/
+  task-*/
+  plan-*/
+  review-*/
 ```
 
-Each task shows its start time, iteration, agent, elapsed time, and reported file count.
-The result includes the agent's summary and blocker reasons.
-Looper validates the summary and applies the task update before it reports a task as done.
-If you set `LOOPER_VERIFY_COMMAND`, that command must also succeed.
+SQLite owns execution state. `to-do.json` is its editable projection. A journal
+protects task-file exports and code publication. A restart recognizes an operation
+before or after publication and resumes it without marking unchecked work done.
+Completed worker receipts avoid repeating implementation after a controller crash.
+Invalid final reports get a separate report recovery attempt with code changes
+prohibited.
 
-During a run, a live line shows elapsed time or the pause countdown.
-Completed entries stay in terminal scrollback.
-Redirected output uses plain text with no colors or live line updates.
-Set `NO_COLOR=1` to disable colors, or `TERM=dumb` to disable all terminal formatting.
-Set `CODEX_PROGRESS=0` to hide live activity and agent events.
+Your branch, `HEAD`, and staged index remain unchanged. Successful changes appear
+as unstaged edits. Looper retains private refs for snapshots and results. It does
+not automatically commit, push, or open pull requests on your branch.
 
-The final report separates results from this run and the full backlog.
-It shows why Looper stopped, blocked tasks, their reasons, and the next action.
-`ready` counts tasks that can run. `waiting` counts tasks with unfinished dependencies.
-Backlog counts exclude the final `project-done` marker.
-Looper skips the pause when no next task can run or the iteration limit is reached.
+A repository lock covers all linked worktrees. Concurrent outside edits during
+integration stop publication and retain the result. Restore the saved baseline
+and task contract before resuming interrupted work. Do not delete the runtime
+directory or private refs while you need recovery. Logs and refs are retained;
+there is no automatic retention limit yet.
 
-Use `looper.sh --verbose` (or `-v`) to include configuration details and agent events.
-You can also set `LOOPER_VERBOSE=1`.
+`looper status --json` returns the saved state. `looper tail --json` reads events.
+`looper doctor` checks local dependencies and the backlog. Exit codes are 0 for a
+completed finite run or drained stop, 2 for blocked work or a dispatch limit,
+1 for a controller failure, and 130 for interruption.
 
-Logs are stored per project under:
-```
-~/.looper/<project>-<hash>/
-```
+## Measuretwice
 
-Each run produces:
-- `<timestamp>-<pid>.jsonl` full JSONL trace
-- `<timestamp>-<pid>-<label>.last.json` the last assistant message
+Measuretwice is optional. The adapter in
+[`adapters/measuretwice`](adapters/measuretwice/README.md) checks task acceptance
+against the patch and verification evidence. It uses an unvalidated exploration
+profile in shadow mode.
 
-`looper.sh --tail --follow` watches the latest run in real time.
-
-## Hooks
-Set `LOOPER_HOOK` to run a script after each iteration:
-```
-LOOPER_HOOK=/path/to/hook.sh
-```
-
-The hook receives:
-```
-<task_id> <status> <last_message_json> <label>
-```
+A `fail` or `review` result requests an independent product review. It does not
+reject a change by itself. The reviewer must reproduce a defect before adding a
+repair task. Provider errors remain visible in the records. Large evidence packets
+produce `review` without silent truncation. No advisory result replaces tests.
 
 ## Configuration
-Environment variables (defaults in parentheses):
 
-- `MAX_ITERATIONS` (50)
-- `CODEX_MODEL` (gpt-6-sol)
-- `CODEX_SMART_MODEL` (gpt-6-astra)
-- `CODEX_REASONING_EFFORT` (max)
-- `CODEX_SMART_REASONING_EFFORT` (max)
-- `CODEX_YOLO` (1)
-- `CODEX_FULL_AUTO` (0)
-- `CODEX_PROFILE` (empty)
-- `CODEX_JSON_LOG` (1)
-- `CODEX_PROGRESS` (1; show live activity and agent events)
-- `LOOPER_VERBOSE` (0; show configuration and agent events)
-- `NO_COLOR` (empty; any nonempty value disables colors)
-- `CODEX_ENFORCE_OUTPUT_SCHEMA` (1)
-- `LOOPER_VERIFY_COMMAND` (empty)
-- `CLAUDE_BIN` (claude)
-- `CLAUDE_MODEL` (empty)
-- `LOOPER_ITER_SCHEDULE` (codex)
-- `LOOPER_ITER_ODD_AGENT` (codex)
-- `LOOPER_ITER_EVEN_AGENT` (claude)
-- `LOOPER_ITER_RR_AGENTS` (claude,codex)
-- `LOOPER_REPAIR_AGENT` (codex)
-- `LOOPER_REVIEW_AGENT` (codex)
-- `LOOPER_INTERLEAVE` (0)
-- `LOOPER_BASE_DIR` (~/.looper)
-- `LOOPER_APPLY_SUMMARY` (1; other values are not supported)
-- `LOOPER_GIT_INIT` (1)
-- `LOOPER_HOOK` (empty)
-- `LOOP_DELAY_SECONDS` (90)
+Most projects need only `looper`. These settings cover exceptional cases:
 
-Set `LOOPER_VERIFY_COMMAND='make test'` to check a completed task before Looper
-marks it done. Use a command that works in the target project. Looper runs it
-from the project directory.
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `LOOPER_JOBS` / `--jobs` | `auto` | Maximum implementation workers |
+| `LOOPER_CHECK_JOBS` / `--check-jobs` | `1` | Concurrent setup and checks |
+| `LOOPER_REVIEW_EVERY` / `--review-every` | `5` | Integrations between product reviews; 0 disables milestones |
+| `MAX_ITERATIONS` / `--max-iterations` | `0` | Dispatch limit; 0 means unlimited |
+| `LOOPER_MAX_REPAIRS` | `6` | Repair limit per attempt |
+| `LOOPER_POLL_SECONDS` | `30` | Idle polling interval |
+| `LOOPER_TIMEOUT_SECONDS` | `0` | Worker timeout; 0 means unlimited |
+| `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure |
+| `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds |
+| `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |
+| `CODEX_BIN`, `CLAUDE_BIN` | `codex`, `claude` | Installed agent commands |
+| `LOOPER_HOOK` | unset | Optional executable called after a result |
 
-In sequential mode, an iteration stops with an error if the agent fails, returns an invalid summary,
-or fails verification. Looper restores the task file to its prior state. Code
-edits and commits remain for inspection. A failed review never marks the
-project done. Reaching the iteration limit with open tasks returns exit code 2.
+The hook receives task ID, status, summary path, and attempt ID. It has a 30-second
+timeout. It is best effort and is not a transactional delivery mechanism.
 
-## Git Behavior
-If the project is not a git repo and `LOOPER_GIT_INIT=1`, Looper runs `git init`.
-If git is unavailable or init fails, Codex runs with `--skip-git-repo-check`.
+## Migration
 
-## Included skills
+Existing version 1 task files remain supported. The Go controller imports an
+unfinished Python parallel journal from the same project directory. It preserves
+the original journal and refs, converts the plan, and resumes retained work.
+Completed legacy runs need only their existing task file. Migration tests cover
+publication after files were applied but before status was saved.
 
-This repo ships a small, focused skills bundle:
+Run `make build`, then use the new launcher. Stop an old runner before switching.
+Do not run an old runner against state after the Go controller has imported it.
+Older sequential logs remain on disk but are not imported into SQLite.
 
-- `git-conventional-commit`: Create scoped commits and preserve unrelated edits.
-- `todo-json-manager`: Maintain task backlogs and report verified Looper outcomes.
-- `release-runbook`: Prepare and publish releases within the requested scope.
+The default run is now continuous. Add `--once` to scripts that expect completion.
+`--all`, `--interleave`, `--smart`, `--doctor`, `--tail`, and `--ls` remain aliases.
+Odd/even and round-robin agent schedules are replaced by explicit coding and
+review agents. Submodules and unresolved index conflicts are not supported.
 
-They are installed into `~/.codex/skills` by default.
-Run `./install.sh` to update Looper and the bundled skills.
+The Homebrew stable formula still targets the published v0.4.0 archive. The Go
+build is selected for `--HEAD`. No new release or archive checksum is implied.
 
-The release helper requires `--test-cmd` or an explicit `--skip-tests`.
-It runs checks after version updates. Dry runs stay offline and leave files unchanged.
-Use the helper only when publishing is authorized.
-See its [usage reference](skills/release-runbook/references/helper.md) for staging and recovery rules.
+## Development
 
-The local `looper-live-test` skill is in `.codex/skills` and is not part of the installed bundle.
-It checks task selection, task status, and file creation in a temporary project.
-Routine checks use local stubs; a live smoke test uses a real agent.
-
-## Dev Notes
-```bash
-make install
-make uninstall
-make smoke
+```sh
 make test
+make race
+make test-measuretwice   # optional adapter dependencies required
 ```
 
-The shell runner is in `bin/looper.sh`. The worktree scheduler and recovery
-logic are in `lib/looper_parallel.py`. `scripts/parallel-test.py` exercises
-real Git repositories with local agent stubs, including process interruption,
-speculative verification, conflict repair, and preservation of staged files.
-See [the comparison pilot](EXPERIMENT-PLAN.md) for the remaining product test.
-The dated [research report](docs/research/LOOPER-RESEARCH-REPORT.md) records the
-earlier decision to keep a smaller Bash controller. The [Go proposal](docs/archive/MIGRATION.md)
-is archived.
+The integration suite uses the actual executable, real Git repositories, and
+local agent stubs. It covers parallel checks, dependency ordering, repair,
+publication, migration, process cleanup, blocked work, and continuous operation.
+The optional adapter tests use the actual Measuretwice library with scripted
+judgments. They validate plumbing, not judgment accuracy.
+
+The source entry point is `cmd/looper/main.go`. The controller lives in
+`internal/looper`. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for state
+invariants and failure behavior. See [the validation record](docs/VALIDATION.md)
+for the automated checks and live Codex run.
