@@ -15,6 +15,8 @@ import (
 // prompt on stdin selects LOOPER_FAKE_DIAGNOSIS for diagnosis consultations
 // and LOOPER_FAKE_RESULT otherwise. With LOOPER_FAKE_TOUCH set, it also
 // creates that file to simulate an agent that breaks its read-only contract.
+// With LOOPER_FAKE_SLEEP set, it sleeps that many seconds first, so a test
+// can hold a dispatched worker in the running phase.
 func fakeAgent(t *testing.T, proposal string) (bin string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -26,6 +28,7 @@ for a in "$@"; do
   prev="$a"
 done
 p="$(cat)"
+if [ -n "$LOOPER_FAKE_SLEEP" ]; then sleep "$LOOPER_FAKE_SLEEP"; fi
 result="$LOOPER_FAKE_RESULT"
 if [ -n "$LOOPER_FAKE_DIAGNOSIS" ] && printf '%s' "$p" | grep -q "Diagnose the repeated failure"; then
   result="$LOOPER_FAKE_DIAGNOSIS"

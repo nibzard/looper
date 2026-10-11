@@ -585,11 +585,16 @@ func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog
 	return r
 }
 
+// A retained attempt holds no live worker, so it cannot reserve its scope:
+// two retained attempts with overlapping scopes would veto each other forever
+// and no task would dispatch again. start() relaunches a retained attempt and
+// marks it running before the next candidate is evaluated, which restores
+// exclusivity from that moment.
 func (e *Engine) compatible(t Task) bool {
 	scope := e.State.Plan.Scope(t.ID)
 	for _, a := range e.State.Attempts {
 		switch a.Phase {
-		case "done", "blocked", "abandoned":
+		case "done", "blocked", "abandoned", "resume":
 			continue
 		}
 		if a.Task.ID == t.ID {
