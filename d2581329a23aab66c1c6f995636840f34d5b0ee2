@@ -1,0 +1,35 @@
+# ADR: benchmark follow-up scope
+
+## Status
+Accepted
+
+## Context
+The 2026-10-11 benchmark (same model through two harnesses) and
+the live zcode verification produced five candidate improvements.
+Four look like repairs; the temptation is to guard the failure
+that produced the most dramatic numbers.
+
+## Decision
+Accept only changes that state an existing invariant (prompt
+line), add a bound (evidence cap), or respect an OS limit while
+preserving a documented property (TMPDIR). Reject the verify
+lint (deny-list of observed patterns) and the verify re-plan
+path (model judgment steering deterministic control flow, new
+loop state). Defer zcode parity knobs until a user needs them.
+
+## Alternatives Considered
+- Plan-time lint for controller refs in verify — Rejected:
+  partial coverage, permanent surface, grows forever.
+- Diagnosis-triggered verify re-plan — Rejected: new state;
+  clever, not deterministic.
+- Accept the blocked-with-diagnosis outcome as designed —
+  Accepted; the work is making it cheap, not escaping it.
+
+## Consequences
+The unsatisfiable-verify class stays possible; its cost is
+bounded instead. Revisit with evidence if it recurs among real
+users.
+
+## References
+- docs/research/IMPROVEMENT-DECISIONS-2026-10-11.md
+- docs/research/BENCHMARK-ZCODE-VS-CLAUDE-2026-10-11.md
