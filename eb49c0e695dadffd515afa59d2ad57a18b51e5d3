@@ -1,0 +1,12 @@
+# Context
+
+## Gotchas
+The copy must stay lenient: bootstrap runs before the engine
+writes the schema at the project root, so a missing file is
+skipped, not an error. Excluded[0] is the todo and
+Excluded[1] its schema; Workspace already relied on that
+ordering.
+
+## Related
+- Regression test: internal/looper/git_test.go
+- Companion hardening: 6ef499d
