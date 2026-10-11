@@ -1,0 +1,6 @@
+Updated after publishing v0.6.0 because the archive checksum is
+available only after the tag exists. The release helper downloaded
+the v0.6.0 tarball, verified it as a gzip tar archive, and hashed
+it into the formula. Package smoke tests cover both command entry
+points and the skills install. Homebrew is not installed on this
+VM, so a direct brew install test was unavailable.
