@@ -1,0 +1,28 @@
+# Context
+
+## Background
+A code review of 20590df (the Go rewrite) compared the new engine
+against the deleted bin/looper.sh and lib/looper_parallel.py and found
+nine behavioral regressions. This commit fixes all nine.
+
+## Why This Way
+- Failure classification reads only the process error plus the last
+  8 KiB of the event log because the whole log contains the agent's
+  session output: a timed-out test it was fixing, or a file named
+  *_timeout*, used to trigger up to 12 retries with 10-minute backoff.
+- The git timeout is a package-level var assigned in Parse rather than
+  a Repository field because gitCommand is also called as a free
+  function (for example, from the assessment path).
+- The prepare-defer retry clears when a speculative check completes,
+  because that is the only event that moves the chain base the next
+  merge targets.
+
+## Gotchas
+- to-do.json and to-do.schema.json are gitignored runtime files; the
+  matching backlog for this work lives beside the repo, untracked.
+- TestShippedSchemaMatchesDefault skips when no repository-local
+  to-do.schema.json exists (fresh clones); initialize writes the
+  built-in default beside the task file when none exists.
+
+## Related
+- Fixes reported by the /code-review pass over 20590df.
