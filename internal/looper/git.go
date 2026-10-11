@@ -16,9 +16,18 @@ type Repository struct {
 	Excluded          []string
 }
 
+// One slow git operation on a large repository must not abort a run. The limit
+// comes from LOOPER_GIT_TIMEOUT_SECONDS; 0 disables it. Parse keeps it in sync
+// with the configuration.
+var gitTimeout = 10 * time.Minute
+
 func gitCommand(cwd string, input []byte, extra map[string]string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	ctx := context.Background()
+	if gitTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, gitTimeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
 	cmd.Env = cleanEnv(extra)
 	cmd.Stdin = bytes.NewReader(input)
@@ -85,12 +94,17 @@ func OpenRepository(c Config, dir string) (*Repository, error) {
 			return nil, fmt.Errorf("task file parents must not be symlinks: %s", p)
 		}
 	}
-	for _, p := range []string{c.Todo, filepath.Join(filepath.Dir(c.Todo), "to-do.schema.json")} {
+	schema := c.SchemaPath()
+	for _, p := range []string{c.Todo, schema} {
 		if st, e := os.Lstat(p); e == nil && st.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("control file must not be a symlink: %s", p)
 		}
 	}
-	r := &Repository{Root: c.Root, Common: common, Dir: dir, Excluded: []string{filepath.ToSlash(rel), filepath.ToSlash(filepath.Join(filepath.Dir(rel), "to-do.schema.json"))}}
+	relSchema, err := filepath.Rel(c.Root, schema)
+	if err != nil {
+		return nil, err
+	}
+	r := &Repository{Root: c.Root, Common: common, Dir: dir, Excluded: []string{filepath.ToSlash(rel), filepath.ToSlash(relSchema)}}
 	if rel, e := filepath.Rel(c.Root, c.BaseDir); e == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
 		if rel == "." {
 			return nil, fmt.Errorf("LOOPER_BASE_DIR must not be the project root")

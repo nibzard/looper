@@ -14,7 +14,7 @@ type Config struct {
 	Root, Todo, BaseDir, Agent, ReviewAgent, CodexBin, ClaudeBin, Model, ClaudeModel, Effort, Verify, Setup, Assess, Hook string
 	Command, ListStatus                                                                                                   string
 	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                              int
-	Poll, RetryDelay, Timeout                                                                                             time.Duration
+	Poll, RetryDelay, Timeout, GitTimeout                                                                                 time.Duration
 	Once, Follow, JSON, Verbose, Smart, GitInit                                                                           bool
 }
 
@@ -59,13 +59,15 @@ func Parse(args []string) (Config, error) {
 		}
 		*p = v
 	}
-	for k, p := range map[string]*time.Duration{"LOOPER_POLL_SECONDS": &c.Poll, "LOOPER_RATE_LIMIT_DELAY": &c.RetryDelay, "LOOPER_TIMEOUT_SECONDS": &c.Timeout} {
+	for k, p := range map[string]*time.Duration{"LOOPER_POLL_SECONDS": &c.Poll, "LOOPER_RATE_LIMIT_DELAY": &c.RetryDelay, "LOOPER_TIMEOUT_SECONDS": &c.Timeout, "LOOPER_GIT_TIMEOUT_SECONDS": &c.GitTimeout} {
 		d := 30
 		switch k {
 		case "LOOPER_RATE_LIMIT_DELAY":
 			d = 60
 		case "LOOPER_TIMEOUT_SECONDS":
 			d = 0
+		case "LOOPER_GIT_TIMEOUT_SECONDS":
+			d = 600
 		}
 		v, e := integer(k, d)
 		if e != nil {
@@ -192,9 +194,42 @@ func Parse(args []string) (Config, error) {
 	}
 	c.Todo = filepath.Clean(c.Todo)
 	c.BaseDir, err = filepath.Abs(c.BaseDir)
+	gitTimeout = c.GitTimeout
 	return c, err
 }
+
+// The schema control file is named after the task file: a trailing .json is
+// replaced by .schema.json, as in the earlier shell controller.
+func (c Config) SchemaPath() string {
+	base := filepath.Base(c.Todo)
+	if strings.HasSuffix(base, ".json") {
+		base = strings.TrimSuffix(base, ".json")
+	}
+	return filepath.Join(filepath.Dir(c.Todo), base+".schema.json")
+}
+
+// Use a conservative bound when Linux reports memory or container limits:
+// inside a container, /proc/meminfo shows the host, not the cgroup limit.
 func availableMemory() int64 {
+	bounds := []int64{}
+	if n := memAvailable(); n > 0 {
+		bounds = append(bounds, n)
+	}
+	for _, n := range []int64{cgroupHeadroom("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"), cgroupHeadroom("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes")} {
+		if n > 0 {
+			bounds = append(bounds, n)
+		}
+	}
+	if len(bounds) == 0 {
+		return 0
+	}
+	m := bounds[0]
+	for _, b := range bounds[1:] {
+		m = min(m, b)
+	}
+	return m
+}
+func memAvailable() int64 {
 	b, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0
@@ -207,4 +242,22 @@ func availableMemory() int64 {
 		}
 	}
 	return 0
+}
+func cgroupHeadroom(limitPath, usagePath string) int64 {
+	limit, err := readCount(limitPath)
+	if err != nil || limit <= 0 || limit > 1<<40 { // "max" or a legacy unlimited value
+		return 0
+	}
+	used, err := readCount(usagePath)
+	if err != nil {
+		return 0
+	}
+	return max(0, limit-used)
+}
+func readCount(path string) (int64, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
 }

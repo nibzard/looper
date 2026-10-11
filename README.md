@@ -201,6 +201,8 @@ Most projects need only `looper`. These settings cover exceptional cases:
 | `LOOPER_MAX_REPAIRS` | `6` | Repair limit per attempt |
 | `LOOPER_POLL_SECONDS` | `30` | Idle polling interval |
 | `LOOPER_TIMEOUT_SECONDS` | `0` | Worker timeout; 0 means unlimited |
+| `LOOPER_GIT_TIMEOUT_SECONDS` | `600` | Timeout for one Git command; 0 means unlimited |
+| `--verbose` | off | Print the run configuration at start |
 | `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure |
 | `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds |
 | `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |

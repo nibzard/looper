@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -91,7 +92,7 @@ func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			}
 		}
 		if err != nil {
-			failure := classifyFailure(string(raw))
+			failure := classifyFailure(err.Error() + "\n" + string(tail(raw, 8<<10)))
 			if failure == "transient" && retry+1 < a.Config.RetryLimit {
 				delay := min(10*time.Minute, a.Config.RetryDelay*time.Duration(1<<min(retry, 8)))
 				select {
@@ -154,19 +155,28 @@ func extractObject(b []byte) (json.RawMessage, error) {
 	}
 	return nil, fmt.Errorf("final output must contain one JSON object")
 }
+
+// Classification reads only the process error and the tail of the event log.
+// The whole session log cannot be trusted here: a timed-out test the agent was
+// fixing, a matching file name, or a bare number in echoed output would turn a
+// deterministic failure into hours of retries.
+var transientFailure = regexp.MustCompile(`(?i)\b(?:429|500|502|503|504|529)\b|rate.?limit|too many requests|bad gateway|service unavailable|gateway timeout|overloaded|connection (?:reset|refused|dropped)|network (?:error|unreachable|timeout)|temporarily unavailable|econnreset|econnrefused|etimedout|socket hang up`)
+var configurationFailure = regexp.MustCompile(`(?i)\b(?:401|403)\b|unauthorized|authentication|permission denied|invalid api key`)
+
 func classifyFailure(s string) string {
-	s = strings.ToLower(s)
-	for _, w := range []string{"429", "rate limit", "rate_limit", "too many requests", "502", "503", "504", "connection reset", "connection refused", "timed out", "timeout"} {
-		if strings.Contains(s, w) {
-			return "transient"
-		}
+	if transientFailure.MatchString(s) {
+		return "transient"
 	}
-	for _, w := range []string{"unauthorized", "authentication", "401", "403", "permission denied", "invalid api key"} {
-		if strings.Contains(s, w) {
-			return "configuration"
-		}
+	if configurationFailure.MatchString(s) {
+		return "configuration"
 	}
 	return "execution"
+}
+func tail(b []byte, n int) []byte {
+	if len(b) > n {
+		return b[len(b)-n:]
+	}
+	return b
 }
 func resourceEnv(dir string) map[string]string {
 	tmp := filepath.Join(dir, "tmp")
