@@ -1,0 +1,5 @@
+# Context
+
+Figures come from a stub-agent run captured under tmux, rendered
+from ANSI capture with PIL, and assembled with ffmpeg. No design
+tool or screenshot tool is involved; re-record to regenerate.
