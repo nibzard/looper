@@ -41,6 +41,15 @@ func TestDetectVerifyCommand(t *testing.T) {
 	if d := DetectVerifyCommand(root); d.Command != "go test ./..." {
 		t.Fatalf("tests target must not match: %+v", d)
 	}
+	// Variable assignments are not targets, in either syntax.
+	write(t, filepath.Join(root, "Makefile"), "test := dummy\nbuild:\n\tgo build\n")
+	if d := DetectVerifyCommand(root); d.Command != "go test ./..." {
+		t.Fatalf(":= assignment must not match: %+v", d)
+	}
+	write(t, filepath.Join(root, "Makefile"), "test ::= dummy\nbuild:\n\tgo build\n")
+	if d := DetectVerifyCommand(root); d.Command != "go test ./..." {
+		t.Fatalf("::= assignment must not match: %+v", d)
+	}
 }
 
 func TestDetectPackageManager(t *testing.T) {

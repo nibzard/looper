@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/mattn/go-isatty"
 	"github.com/mattn/go-runewidth"
@@ -106,18 +105,20 @@ func styleFor(kind string) eventStyle {
 
 // sanitize removes terminal control characters from task text and logs in
 // human views. Raw stored records and JSON output keep the original bytes.
+// Escape sequences are consumed whole: CSI (... final letter), string
+// sequences terminated by BEL or ST (OSC, DCS, SOS, PM, APC), and two-byte
+// escapes, so their payloads never leak into visible text.
 func sanitize(s string) string {
 	var b strings.Builder
-	inEscape := false
-	for _, r := range s {
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
 		case r == '\x1b':
-			inEscape = true
-			b.WriteRune('?')
-		case inEscape:
-			// Skip CSI/escape sequences entirely.
-			if unicode.IsLetter(r) {
-				inEscape = false
+			if n := escapeLength(runes[i:]); n > 0 {
+				i += n - 1 // consume the whole sequence
+			} else {
+				b.WriteRune('?')
 			}
 		case r == '\n' || r == '\t':
 			b.WriteRune(r)
@@ -128,6 +129,35 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// escapeLength reports how many runes the escape sequence starting at the ESC
+// rune occupies, or zero for a lone ESC at end of input.
+func escapeLength(runes []rune) int {
+	if len(runes) < 2 {
+		return 0
+	}
+	switch runes[1] {
+	case '[': // CSI: parameters and intermediates, then a final byte 0x40-0x7E
+		for j := 2; j < len(runes); j++ {
+			if runes[j] >= 0x40 && runes[j] <= 0x7e {
+				return j + 1
+			}
+		}
+		return len(runes)
+	case ']', 'P', 'X', '^', '_': // OSC, DCS, SOS, PM, APC: until BEL or ST
+		for j := 2; j < len(runes); j++ {
+			if runes[j] == '\x07' {
+				return j + 1
+			}
+			if runes[j] == '\x1b' && j+1 < len(runes) && runes[j+1] == '\\' {
+				return j + 2
+			}
+		}
+		return len(runes)
+	default: // two-byte escape
+		return 2
+	}
 }
 
 // displayWidth measures cells, counting wide characters as two columns.

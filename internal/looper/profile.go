@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // ProfileVersion is the only supported saved-settings version.
@@ -70,6 +71,9 @@ func LoadProfile(path string) (*Profile, error) {
 		if !ok {
 			return nil
 		}
+		if isNull(v) {
+			return profileError(path, "%s must not be null; fix the value or remove the key", key)
+		}
 		if err := json.Unmarshal(v, into); err != nil {
 			return profileError(path, "%s must be a string; fix the value or remove the key", key)
 		}
@@ -97,19 +101,29 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, err
 	}
 	if v, ok := fields["version"]; ok {
+		if isNull(v) {
+			return nil, profileError(path, "version must be the number %d", ProfileVersion)
+		}
 		if err := json.Unmarshal(v, &p.Version); err != nil {
 			return nil, profileError(path, "version must be the number %d", ProfileVersion)
 		}
 	} else {
-		return nil, profileError(path, "the file has no version key; add \"version\": %d or remove the file", ProfileVersion)
+		// A missing version key uses the default; unsupported values reject.
+		p.Version = ProfileVersion
 	}
 	if v, ok := fields["jobs"]; ok {
+		if isNull(v) {
+			return nil, profileError(path, "jobs must not be null; use 0 for auto mode")
+		}
 		if err := json.Unmarshal(v, &p.Jobs); err != nil {
 			return nil, profileError(path, "jobs must be a nonnegative integer; use 0 for auto mode")
 		}
 	}
 	if v, ok := fields["review_every"]; ok {
 		var n int
+		if isNull(v) {
+			return nil, profileError(path, "review_every must not be null; use a nonnegative integer")
+		}
 		if err := json.Unmarshal(v, &n); err != nil {
 			return nil, profileError(path, "review_every must be a nonnegative integer")
 		}
@@ -123,6 +137,37 @@ func LoadProfile(path string) (*Profile, error) {
 
 func profileError(path, format string, args ...any) error {
 	return fmt.Errorf("profile %s: %s", path, fmt.Sprintf(format, args...))
+}
+
+// isNull reports whether a JSON value is the null literal, which silently
+// decodes into zero values otherwise.
+func isNull(v json.RawMessage) bool {
+	return strings.EqualFold(strings.TrimSpace(string(v)), "null")
+}
+
+// saveProfileExclusive writes a profile only when no file exists yet. The
+// link is atomic, so a crash cannot leave a partial file and a concurrent
+// first run can never replace another run's answers.
+func saveProfileExclusive(path string, p *Profile) (created bool, err error) {
+	if err = p.Validate(); err != nil {
+		return false, profileError(path, "%v", err)
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	tmp := path + ".new"
+	if err = atomicWrite(tmp, append(data, '\n'), 0600); err != nil {
+		return false, err
+	}
+	defer os.Remove(tmp)
+	if err = os.Link(tmp, path); err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // Validate rejects known keys with values this version cannot apply.

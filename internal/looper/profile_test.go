@@ -58,9 +58,11 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "version 2") {
 		t.Fatalf("unsupported version must fail: %v", err)
 	}
+	// A missing version key uses the default instead of failing.
 	writeProfileFile(t, path, `{"agent": "codex"}`)
-	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "version") {
-		t.Fatalf("missing version must fail: %v", err)
+	p, err := LoadProfile(path)
+	if err != nil || p == nil || p.Version != ProfileVersion || p.Agent != "codex" {
+		t.Fatalf("missing version must default: %v %+v", err, p)
 	}
 	writeProfileFile(t, path, `{"version": 1, "agent": "gemini"}`)
 	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "gemini") {
@@ -81,6 +83,20 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 	writeProfileFile(t, path, `{"version": 1, "review_every": -1}`)
 	if _, err := LoadProfile(path); err == nil {
 		t.Fatal("negative review_every accepted")
+	}
+	// Null never silently becomes a zero value: review_every null must not
+	// disable reviews, and jobs null must not become auto mode.
+	writeProfileFile(t, path, `{"version": 1, "review_every": null}`)
+	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "review_every") {
+		t.Fatalf("null review_every accepted: %v", err)
+	}
+	writeProfileFile(t, path, `{"version": 1, "jobs": null}`)
+	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "jobs") {
+		t.Fatalf("null jobs accepted: %v", err)
+	}
+	writeProfileFile(t, path, `{"version": null}`)
+	if _, err := LoadProfile(path); err == nil {
+		t.Fatal("null version accepted")
 	}
 	// The invalid file must still exist untouched.
 	if _, err := os.Stat(path); err != nil {
@@ -224,14 +240,45 @@ func TestInterleaveWithProfile(t *testing.T) {
 	if c.Agent != "claude" || c.ReviewAgent != "claude" {
 		t.Fatalf("interleave must respect the saved review agent: %s/%s", c.Agent, c.ReviewAgent)
 	}
-	// An explicitly empty environment review agent follows the coding agent.
+	// An empty review agent value receives the codex preset at the interleave
+	// position, exactly as the original parser did; only a later flag wins.
 	writeProfileFile(t, profilePath, `{"version":1}`)
 	t.Setenv("LOOPER_REVIEW_AGENT", "")
 	c, err = Parse([]string{"--interleave"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if c.ReviewAgent != "codex" {
+		t.Fatalf("empty review agent takes the codex preset: %s", c.ReviewAgent)
+	}
+	// A later explicit empty flag clears the preset and follows the agent.
+	c, err = Parse([]string{"--interleave", "--review-agent", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.ReviewAgent != "claude" {
-		t.Fatalf("present-empty env must follow the agent: %s", c.ReviewAgent)
+		t.Fatalf("later empty review agent must follow the agent: %s", c.ReviewAgent)
+	}
+}
+
+func TestSaveProfileExclusiveNeverReplaces(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.json")
+	first := &Profile{Version: 1, Agent: "codex"}
+	created, err := saveProfileExclusive(path, first)
+	if err != nil || !created {
+		t.Fatalf("first save failed: %v %v", created, err)
+	}
+	// A second racing first run keeps the earlier answers.
+	created, err = saveProfileExclusive(path, &Profile{Version: 1, Agent: "claude"})
+	if err != nil || created {
+		t.Fatalf("second save must not replace: %v %v", created, err)
+	}
+	kept, err := LoadProfile(path)
+	if err != nil || kept.Agent != "codex" {
+		t.Fatalf("earlier answers were lost: %v %+v", err, kept)
+	}
+	// No temporary file survives the attempt.
+	if _, err := os.Stat(path + ".new"); !os.IsNotExist(err) {
+		t.Fatal("temporary file survived")
 	}
 }

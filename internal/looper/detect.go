@@ -15,6 +15,7 @@ type Detection struct {
 	Source  string
 }
 
+// A Makefile test target is "test:" at line start.
 var makeTarget = regexp.MustCompile(`(?m)^test\s*:`)
 
 // DetectVerifyCommand inspects repository files without running commands. It
@@ -82,7 +83,14 @@ func makefileTest(root string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return "make test", makeTarget.Match(b)
+	for _, loc := range makeTarget.FindAllIndex(b, -1) {
+		// ":=" and "::=" assign a variable; they are not targets.
+		if loc[1] < len(b) && (b[loc[1]] == ':' || b[loc[1]] == '=') {
+			continue
+		}
+		return "make test", true
+	}
+	return "", false
 }
 
 // nodeTest requires a test script and one unambiguous package manager. The
