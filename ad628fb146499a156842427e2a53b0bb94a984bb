@@ -1,0 +1,5 @@
+# Context
+
+Re-rendered from the saved ANSI captures at font size 24 instead
+of 16; the source frames in /tmp are disposable, so re-record the
+tmux session if the figures ever need new content.
