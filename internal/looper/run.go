@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,10 @@ type checkRun struct {
 func (e *Engine) Run(parent context.Context) (int, error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer func() { cancel(); e.wg.Wait() }()
+	if e.controller != nil {
+		// Only this session's metadata is removed on any exit path.
+		defer removeController(e.Dir, e.controller.Session)
+	}
 	if err := e.initialize(ctx); err != nil {
 		return 1, err
 	}
@@ -51,6 +56,12 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 		}
 		if _, err := os.Stat(stopPath); err == nil {
 			draining = true
+		}
+		// Settings requests apply at loop boundaries, including idle polling.
+		// Synchronous planning and review above are never interrupted.
+		e.processSettingsRequests()
+		if e.err != nil {
+			return 1, e.err
 		}
 		// Consume all finished workers without waiting for unrelated tasks.
 		for more := true; more; {
@@ -171,8 +182,9 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 			checks = append(checks, entry)
 			e.event("check", "Checking "+a.Task.ID+" with integrated work...")
 			aCopy, pCopy := clone(*a), clone(*e.State.Plan)
+			op := e.capture()
 			e.wg.Add(1)
-			go func(c Candidate, ch chan Candidate) { defer e.wg.Done(); ch <- e.verify(ctx, aCopy, c, pCopy) }(candidate, entry.Done)
+			go func(c Candidate, ch chan Candidate) { defer e.wg.Done(); ch <- e.verify(ctx, op, aCopy, c, pCopy) }(candidate, entry.Done)
 		}
 		busy := len(active)+len(pending)+len(checks) > 0
 		if !busy {
@@ -211,11 +223,10 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 					e.event("waiting", message)
 					lastProgress = message
 				}
-				select {
-				case <-ctx.Done():
+				// Sleep out the poll interval, but watch the request queues
+				// cheaply so idle waiting still applies changes promptly.
+				if !e.idleWait(ctx, e.Config.Poll) {
 					return 130, ctx.Err()
-				case <-time.After(e.Config.Poll):
-					continue
 				}
 			}
 			if e.Config.Limit > 0 && attempted >= e.Config.Limit {
@@ -326,4 +337,39 @@ func (e *Engine) refreshIdle() error {
 	e.State.ReviewedTip = ""
 	e.event("refresh", "Imported changed project requirements or files.")
 	return e.save()
+}
+
+// idleWait sleeps for the poll interval unless a controller request arrives,
+// in which case it returns early so the loop boundary processes it. It
+// returns false when the context was cancelled.
+func (e *Engine) idleWait(ctx context.Context, poll time.Duration) bool {
+	deadline := time.Now().Add(poll)
+	for {
+		if requestsWaiting(e.Dir) {
+			return true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(min(remaining, 200*time.Millisecond)):
+		}
+	}
+}
+
+// requestsWaiting reports whether any request envelope sits in the queue.
+func requestsWaiting(dir string) bool {
+	entries, err := os.ReadDir(requestDir(dir))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			return true
+		}
+	}
+	return false
 }

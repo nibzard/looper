@@ -40,7 +40,7 @@ func (e *Engine) prepare(a *Attempt, base string) (Candidate, error) {
 	c.Worktree = work
 	return c, nil
 }
-func (e *Engine) verify(ctx context.Context, a Attempt, c Candidate, p Plan) Candidate {
+func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidate, p Plan) Candidate {
 	defer e.Repo.Remove(c.Worktree)
 	dir := filepath.Join(a.Directory, "checks", c.Commit)
 	if err := e.command(ctx, p.Setup, c.Worktree, dir, "setup"); err != nil {
@@ -63,8 +63,8 @@ func (e *Engine) verify(ctx context.Context, a Attempt, c Candidate, p Plan) Can
 		}
 		return c
 	}
-	if e.Config.Assess != "" {
-		e.assess(ctx, a, c, dir)
+	if op.config.Assess != "" {
+		e.assess(ctx, op, a, c, dir)
 		tree, err = e.Repo.Snapshot(c.Worktree)
 		if err != nil || tree != c.Tree {
 			c.OK = false
@@ -88,7 +88,7 @@ func logTail(path string) string {
 
 // A semantic report is advisory. Its exit status never substitutes for tests.
 // Reports and exact evidence references remain beside the candidate's checks.
-func (e *Engine) assess(ctx context.Context, a Attempt, c Candidate, dir string) {
+func (e *Engine) assess(ctx context.Context, op operation, a Attempt, c Candidate, dir string) {
 	patch, err := gitCommand(e.Repo.Root, nil, nil, "diff", "--no-ext-diff", "--no-textconv", c.Base, c.Commit, "--")
 	if err != nil {
 		return
@@ -101,7 +101,7 @@ func (e *Engine) assess(ctx context.Context, a Attempt, c Candidate, dir string)
 	extra := resourceEnv(dir)
 	extra["LOOPER_EVIDENCE_FILE"] = path
 	extra["LOOPER_ASSESS_REPORT"] = filepath.Join(dir, "assessment.json")
-	err = runProcess(ctx, c.Worktree, filepath.Join(dir, "assessment.log"), []string{"bash", "-lc", e.Config.Assess}, nil, extra)
+	err = runProcess(ctx, c.Worktree, filepath.Join(dir, "assessment.log"), []string{"bash", "-lc", op.config.Assess}, nil, extra)
 	if err != nil {
 		_ = writeJSON(filepath.Join(dir, "assessment-error.json"), map[string]string{"outcome": "error", "error": err.Error()})
 	}
@@ -228,6 +228,7 @@ func (e *Engine) review(ctx context.Context, final bool) error {
 	if final {
 		kind = "final"
 	}
+	op := e.capture()
 	e.event("review", "Checking "+kind+" product behavior against the project goal...")
 	var evidence []string
 	for _, a := range e.State.Attempts {
@@ -254,7 +255,7 @@ Duplicate findings already tracked in the backlog must not become new tasks.`, k
 	if len(evidence) > 0 {
 		prompt += "\nAdvisory semantic reports and their evidence packets are in these directories:\n" + strings.Join(evidence, "\n") + "\nThese reports are unvalidated signals. Independently reproduce suspected defects before adding tasks."
 	}
-	raw, err := e.Agent.Run(ctx, e.Config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
 	if err != nil {
 		return err
 	}

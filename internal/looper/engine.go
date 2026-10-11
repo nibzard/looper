@@ -28,10 +28,28 @@ type Engine struct {
 	Dir, Logs           string
 	Output              io.Writer
 	Render              *Presenter
+	controller          *ControllerInfo
+	acks                map[string]SettingsAck
 	checkSlots          chan struct{}
 	wg                  sync.WaitGroup
 	capacity, successes int
 	err                 error
+}
+
+// operation is the immutable execution configuration captured before each
+// worker, check, planning, or review operation starts. Retries within the
+// operation reuse the captured values; workers never read mutable engine
+// configuration after launch.
+type operation struct {
+	config Config
+	agent  Agent
+}
+
+// capture freezes the effective configuration and the agent runner built
+// from it. It runs on the owner goroutine before dispatching a goroutine.
+func (e *Engine) capture() operation {
+	c := e.Config
+	return operation{config: c, agent: Agent{c}}
 }
 
 func projectPaths(c Config) (string, string) {
@@ -77,7 +95,16 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 			}
 		}
 	}
-	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}
+	// Controller identity publishes under the repository lock. Settings files
+	// from earlier sessions clear here; plan-import requests survive.
+	clearSessionFiles(dir)
+	info, err := publishController(dir, ControllerModeForeground)
+	if err != nil {
+		s.Close()
+		lock.Close()
+		return nil, nil, err
+	}
+	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}
 	if !c.JSON {
 		width := func() int {
 			if f, ok := out.(*os.File); ok {
@@ -323,12 +350,13 @@ func (e *Engine) bootstrap(ctx context.Context) error {
 		return err
 	}
 	defer e.Repo.Remove(work)
+	op := e.capture()
 	e.event("bootstrap", "Reading project requirements and creating the first tasks...")
 	prompt := `Bootstrap a development backlog for Looper. Read repository instructions and project specifications.
 Return one JSON object: {"schema_version":1,"goal":"the existing project's intended outcome","source_files":["relative requirements files"],"tasks":[{"id":"T001","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":[]}]}.
 Only plan work grounded in the existing requirements. Include setup and executable verification where missing.
 Use dependencies. Separate external prerequisites from implementable work. Do not modify any files.`
-	raw, err := e.Agent.Run(ctx, e.Config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
 	if err != nil {
 		return err
 	}
@@ -367,8 +395,9 @@ func (e *Engine) plan(ctx context.Context) error {
 		return err
 	}
 	defer e.Repo.Remove(work)
+	op := e.capture()
 	e.event("plan", "Planning independent tasks and executable checks...")
-	raw, err := e.Agent.Run(ctx, e.Config.ReviewAgent, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog), false)
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog), false)
 	if err != nil {
 		return err
 	}
@@ -422,7 +451,7 @@ type resultReceipt struct {
 	Commit   string  `json:"commit"`
 }
 
-func (e *Engine) execute(ctx context.Context, a Attempt, b Backlog, p Plan) (r workerResult) {
+func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog, p Plan) (r workerResult) {
 	r.ID = a.ID
 	defer func() {
 		if r.Err == nil && r.Summary != nil {
@@ -438,7 +467,7 @@ func (e *Engine) execute(ctx context.Context, a Attempt, b Backlog, p Plan) (r w
 		}
 		feedback += "\nWorkspace setup failed. Diagnose and repair the setup before completing the task. If it requires an external prerequisite, report blocked.\nCommand: " + p.Setup + "\n" + logTail(filepath.Join(dir, "setup.log"))
 	}
-	raw, err := e.Agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, feedback), true)
+	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, feedback), true)
 	var summary Summary
 	if err == nil {
 		if err = json.Unmarshal(raw, &summary); err == nil {
@@ -457,7 +486,7 @@ func (e *Engine) execute(ctx context.Context, a Attempt, b Backlog, p Plan) (r w
 			return r
 		}
 		prompt := fmt.Sprintf("Recover the final task report for %s. Read the retained implementation and logs in %s. Do not change any files or repeat implementation. Return the task summary JSON contract from the original prompt. Report blocked if completion cannot be established.", a.Task.ID, dir)
-		raw, err = e.Agent.Run(ctx, a.Agent, a.Worktree, filepath.Join(dir, "report-recovery"), prompt, true)
+		raw, err = op.agent.Run(ctx, a.Agent, a.Worktree, filepath.Join(dir, "report-recovery"), prompt, true)
 		after, snapshotErr := e.Repo.Snapshot(a.Worktree)
 		if snapshotErr != nil {
 			r.Err = snapshotErr
@@ -646,16 +675,17 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult) {
 	e.event("start", a.Task.ID+"  "+a.Task.Title)
 	snapshot, backlog, plan := clone(*a), clone(e.State.Backlog), clone(*e.State.Plan)
+	op := e.capture()
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		workerCtx := ctx
 		cancel := func() {}
-		if e.Config.Timeout > 0 {
-			workerCtx, cancel = context.WithTimeout(ctx, e.Config.Timeout)
+		if op.config.Timeout > 0 {
+			workerCtx, cancel = context.WithTimeout(ctx, op.config.Timeout)
 		}
 		defer cancel()
-		result := e.execute(workerCtx, snapshot, backlog, plan)
+		result := e.execute(workerCtx, op, snapshot, backlog, plan)
 		select {
 		case out <- result:
 		case <-ctx.Done():
