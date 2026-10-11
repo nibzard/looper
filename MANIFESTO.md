@@ -11,9 +11,9 @@ hears: "You pass butter." The robot is small, complete, and sure of its job.
 That is the butter lesson: a tool should know its one purpose and serve it
 completely.
 
-- Looper passes butter: it keeps a local development loop running. It plans
-  tasks, runs coding agents in private worktrees, checks the combined
-  result, and publishes only checked work.
+- Looper passes butter: it keeps the development loop running on your
+  machine. It plans tasks, runs coding agents in private worktrees,
+  checks the combined result, and publishes only checked work.
 - Not our job: web interfaces, remote services, vendor SDKs, pull requests,
   model routing, chasing features that the agent CLIs will ship anyway.
 - Note the near name: Sutton's "Bitter Lesson" says scale beats hand-built
