@@ -211,6 +211,15 @@ func (r *Repository) Workspace(name, commit string, b Backlog) (string, error) {
 	if err := writeJSON(filepath.Join(p, r.Excluded[0]), b); err != nil {
 		return p, err
 	}
+	// Snapshot trees exclude control files, yet prompts name the task schema
+	// as a source file, so copy it beside the backlog or every reader pays a
+	// missing-file error. A project without one yet (first bootstrap) skips
+	// the copy.
+	if schema, err := os.ReadFile(filepath.Join(r.Root, r.Excluded[1])); err == nil {
+		if err = atomicWrite(filepath.Join(p, r.Excluded[1]), schema, 0600); err != nil {
+			return p, err
+		}
+	}
 	return p, nil
 }
 func (r *Repository) Remove(p string) {
