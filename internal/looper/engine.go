@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -169,6 +170,11 @@ func (e *Engine) initialize(ctx context.Context) error {
 			return err
 		}
 	}
+	if _, err := os.Stat(e.Config.SchemaPath()); errors.Is(err, os.ErrNotExist) {
+		if err = atomicWrite(e.Config.SchemaPath(), []byte(backlogSchema), 0644); err != nil {
+			return err
+		}
+	}
 	data, err := os.ReadFile(e.Config.Todo)
 	if err != nil {
 		return err
@@ -255,6 +261,7 @@ func (e *Engine) initialize(ctx context.Context) error {
 				}
 				if a.ResultCommit != "" {
 					a.Phase = "ready"
+					e.observeScope(a)
 				} else {
 					a.Phase = "resume"
 				}
@@ -510,6 +517,37 @@ func (e *Engine) compatible(t Task) bool {
 	}
 	return true
 }
+
+// A plan can understate what a worker touches. Observed files from its result
+// commit expand the task's write scope so later dispatch decisions see the
+// overlap, as observe_scope did in the earlier engine.
+func (e *Engine) observeScope(a *Attempt) {
+	if e.State.Plan == nil || a.Summary == nil {
+		return
+	}
+	var extra []string
+	seen := map[string]bool{}
+	for _, f := range a.Summary.Files {
+		p := filepath.ToSlash(filepath.Clean(f))
+		if p == "" || p == "." || filepath.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") || strings.ContainsAny(p, "*?[") || seen[p] || e.Repo.excluded(p) {
+			continue
+		}
+		seen[p] = true
+		if !overlaps(Scope{TaskID: a.Task.ID, Paths: []string{p}}, e.State.Plan.Scope(a.Task.ID)) {
+			extra = append(extra, p)
+		}
+	}
+	if len(extra) == 0 {
+		return
+	}
+	for i := range e.State.Plan.Tasks {
+		if e.State.Plan.Tasks[i].TaskID == a.Task.ID {
+			e.State.Plan.Tasks[i].Paths = append(e.State.Plan.Tasks[i].Paths, extra...)
+			e.event("scope", fmt.Sprintf("%s  Plan scope expanded with observed paths: %s", a.Task.ID, strings.Join(extra, ", ")))
+			return
+		}
+	}
+}
 func (e *Engine) attempt(id string) *Attempt {
 	for _, a := range e.State.Attempts {
 		if a.ID == id {
@@ -628,8 +666,10 @@ func (e *Engine) applyResult(a *Attempt) error {
 	t := e.State.Backlog.Task(a.Task.ID)
 	s := a.Summary
 	t.Status = s.Status
-	t.Files = s.Files
-	t.Blockers = s.Blockers
+	// History accumulates across attempts; the latest report never erases
+	// earlier evidence, and a hold keeps the files already recorded.
+	t.Files = mergeUnique(t.Files, s.Files)
+	t.Blockers = mergeUnique(t.Blockers, s.Blockers)
 	t.UnblockWhen = s.UnblockWhen
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if s.Status == "done" {
@@ -672,6 +712,18 @@ func (e *Engine) applyResult(a *Attempt) error {
 		}
 	}
 	return nil
+}
+func mergeUnique(old, fresh []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, l := range append(append([]string{}, old...), fresh...) {
+		if !seen[l] {
+			seen[l] = true
+			out = append(out, l)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 func (e *Engine) addFinding(f Finding) {
 	if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Details) == "" || strings.TrimSpace(f.Evidence) == "" {

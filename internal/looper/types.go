@@ -36,6 +36,58 @@ type Backlog struct {
 	Tasks   []Task          `json:"tasks"`
 }
 
+// backlogSchema must accept every field the engine itself writes, including
+// goal and unblock_when. Looper writes it beside the task file when no schema
+// exists so agents can validate its export. TestShippedSchemaMatchesDefault
+// keeps this copy and the repository's to-do.schema.json identical.
+const backlogSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Looper Todo",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_files", "tasks"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "goal": { "type": "string" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "root": { "type": "string" }
+      }
+    },
+    "source_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "priority", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string", "minLength": 1 },
+          "priority": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "status": { "type": "string", "enum": ["todo", "doing", "blocked", "done"] },
+          "details": { "type": "string" },
+          "steps": { "type": "array", "items": { "type": "string" } },
+          "blockers": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "unblock_when": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}
+`
+
 func (b Backlog) Validate() error {
 	if b.Version != 1 {
 		return fmt.Errorf("unsupported backlog version %d", b.Version)

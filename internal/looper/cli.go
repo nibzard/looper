@@ -37,11 +37,13 @@ Options:
   --review-every N      Check product behavior after N integrations (default: 5)
   --once                Exit when no runnable work remains after review
   --json                Emit machine-readable progress
+  --verbose             Show the run configuration at start
   --help                Show help
 
 Project commands can be supplied through LOOPER_SETUP_COMMAND,
 LOOPER_VERIFY_COMMAND, and optional LOOPER_ASSESS_COMMAND.
 Runtime records live in LOOPER_BASE_DIR (default: ~/.looper).
+Git commands time out after LOOPER_GIT_TIMEOUT_SECONDS (default: 600; 0 waits).
 `
 
 func Main(args []string, out, stderr io.Writer) int {

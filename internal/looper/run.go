@@ -20,6 +20,10 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 	if err := e.initialize(ctx); err != nil {
 		return 1, err
 	}
+	if e.Config.Verbose {
+		e.event("config", fmt.Sprintf("agents %s (review %s) | jobs %d | checks %d | poll %s | retry %d at %s | worker timeout %s | git timeout %s | task file %s",
+			e.Config.Agent, e.Config.ReviewAgent, e.Config.Jobs, e.Config.Checks, e.Config.Poll, e.Config.RetryLimit, e.Config.RetryDelay, e.Config.Timeout, gitTimeout, e.Config.Todo))
+	}
 	e.event("start", fmt.Sprintf("Looper | up to %d implementing | %d concurrent checks", e.capacity, e.Config.Checks))
 	stopPath := filepath.Join(e.Dir, "stop")
 	active := map[string]bool{}
@@ -35,6 +39,9 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 	draining := false
 	lastProgress := ""
 	reviewFailures := 0
+	// A head that conflicts while a check runs waits for the chain to move
+	// instead of repeating a full prepare on every loop tick.
+	deferred := ""
 	for {
 		if ctx.Err() != nil {
 			return 130, ctx.Err()
@@ -70,6 +77,7 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 						return 1, err
 					}
 				} else {
+					e.observeScope(a)
 					a.Phase = "ready"
 					pending = append(pending, a)
 					if err := e.save(); err != nil {
@@ -90,6 +98,7 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 			}
 			entry := checks[0]
 			checks = checks[1:]
+			deferred = ""
 			a := e.attempt(entry.AttemptID)
 			if err := e.Store.Check(a.ID, result.Commit, "executable", map[bool]string{true: "pass", false: "fail"}[result.OK], filepath.Join(a.Directory, "checks", result.Commit, "verify.log")); err != nil {
 				return 1, err
@@ -126,6 +135,9 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 		}
 	checked:
 		for len(pending) > 0 && len(checks) < e.Config.Checks {
+			if deferred == pending[0].ID {
+				break
+			}
 			a := pending[0]
 			base := e.State.Tip
 			if len(checks) > 0 {
@@ -137,6 +149,8 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 			}
 			if !candidate.OK {
 				if len(checks) > 0 {
+					deferred = a.ID
+					e.event("defer", a.Task.ID+" conflicts with the integrating chain; retrying after the running check.")
 					break
 				}
 				pending = pending[1:]
