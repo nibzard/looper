@@ -322,9 +322,9 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 		fmt.Fprintf(out, "Backlog: %d/%d complete | %d ready | %d blocked\n", done, total, len(s.Backlog.Ready()), blocked)
 		for _, t := range s.Backlog.Tasks {
 			if t.Status == "blocked" {
-				fmt.Fprintf(out, "%s  %s\n", t.ID, t.Title)
+				fmt.Fprintf(out, "%s  %s\n", t.ID, sanitize(t.Title))
 				for _, b := range t.Blockers {
-					fmt.Fprintln(out, "  "+b)
+					fmt.Fprintln(out, "  "+sanitize(b))
 				}
 			}
 		}
@@ -346,7 +346,7 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 			} else if follow.Mode == ModeInteractive {
 				follow.StoredEvent(e)
 			} else {
-				fmt.Fprintln(out, e.Message)
+				fmt.Fprintln(out, sanitize(e.Message))
 			}
 			after = e.ID
 		}

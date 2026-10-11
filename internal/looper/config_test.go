@@ -347,3 +347,27 @@ func TestParseVerifyAndSetupCommands(t *testing.T) {
 		t.Fatalf("command envs broken: %s/%s", c.Verify, c.Setup)
 	}
 }
+
+func TestCgroupHeadroomExcludesReclaimableCache(t *testing.T) {
+	dir := t.TempDir()
+	limit := filepath.Join(dir, "memory.max")
+	usage := filepath.Join(dir, "memory.current")
+	stat := filepath.Join(dir, "memory.stat")
+	writeFile := func(p, content string) {
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(limit, "4294967296")  // 4 GiB
+	writeFile(usage, "3019898880")  // 2.8 GiB used
+	writeFile(stat, "anon 314572800\ninactive_file 2415919104\n")
+	// Working set is 2.8 GiB minus 2.25 GiB cache, so the headroom is
+	// the limit minus that working set.
+	if got := cgroupHeadroom(limit, usage, stat); got != 4294967296-(3019898880-2415919104) {
+		t.Fatalf("cache not excluded: %d", got)
+	}
+	// A missing stat file keeps the raw usage bound.
+	if got := cgroupHeadroom(limit, usage, filepath.Join(dir, "none")); got != 4294967296-3019898880 {
+		t.Fatalf("missing stat changed the bound: %d", got)
+	}
+}

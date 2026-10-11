@@ -288,7 +288,9 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 				}
 			}
 		}
-		progress := fmt.Sprintf("%d implementing | %d checking | %d/%d complete", len(active), len(checks), completed, total)
+		// Live counts are session state; the completion fraction belongs to
+		// the whole project, so the label keeps them distinct.
+		progress := fmt.Sprintf("%d implementing | %d checking | project %d/%d complete", len(active), len(checks), completed, total)
 		if progress != lastProgress {
 			e.event("progress", progress)
 			lastProgress = progress

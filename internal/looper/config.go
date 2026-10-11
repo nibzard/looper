@@ -349,13 +349,12 @@ func Parse(args []string) (Config, error) {
 			n, _ := strconv.Atoi(app.value) // validated during parsing
 			settings.reviewEvery = intValue{n, SourceFlag}
 		case flagInterleave:
-			// At its command-line position: a later --agent or --all still
-			// wins, exactly as the original parser behaved. An explicit
-			// review agent from a flag, the environment, or a saved profile
-			// beats the codex preset; a present-but-empty environment value
-			// follows the coding agent.
+			// At its command-line position: a later --agent, --all, or
+			// --review-agent still wins, exactly as the original parser
+			// behaved. The preset fills an empty review agent from any layer,
+			// so a present-but-empty value keeps a second-opinion reviewer.
 			settings.agent = inputValue{"claude", SourceFlag}
-			if settings.reviewAgent.from == SourceDefault {
+			if settings.reviewAgent.value == "" {
 				settings.reviewAgent = inputValue{"codex", SourceFlag}
 			}
 		}
@@ -433,7 +432,10 @@ func availableMemory() int64 {
 	if n := memAvailable(); n > 0 {
 		bounds = append(bounds, n)
 	}
-	for _, n := range []int64{cgroupHeadroom("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"), cgroupHeadroom("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes")} {
+	for _, n := range []int64{
+		cgroupHeadroom("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.stat"),
+		cgroupHeadroom("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes", "/sys/fs/cgroup/memory/memory.stat"),
+	} {
 		if n > 0 {
 			bounds = append(bounds, n)
 		}
@@ -461,7 +463,7 @@ func memAvailable() int64 {
 	}
 	return 0
 }
-func cgroupHeadroom(limitPath, usagePath string) int64 {
+func cgroupHeadroom(limitPath, usagePath, statPath string) int64 {
 	limit, err := readCount(limitPath)
 	if err != nil || limit <= 0 || limit > 1<<40 { // "max" or a legacy unlimited value
 		return 0
@@ -470,7 +472,35 @@ func cgroupHeadroom(limitPath, usagePath string) int64 {
 	if err != nil {
 		return 0
 	}
+	// The usage counter includes reclaimable page cache, which the kernel
+	// reclaims before declaring memory pressure, so bound by the working
+	// set as container runtimes do.
+	if cache := statCount(statPath, "inactive_file", "total_inactive_file"); cache > 0 {
+		used -= min(used, cache)
+	}
 	return max(0, limit-used)
+}
+
+// statCount reads one memory-stat counter from a cgroup memory.stat file.
+func statCount(path string, keys ...string) int64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		for _, key := range keys {
+			if fields[0] == key {
+				if n, err := strconv.ParseInt(fields[1], 10, 64); err == nil && n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
 }
 func readCount(path string) (int64, error) {
 	b, err := os.ReadFile(path)

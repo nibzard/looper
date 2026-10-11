@@ -83,7 +83,8 @@ func repositoryOwned(c Config) bool {
 
 // maybeFirstRun asks the startup form when eligible, saves the answers, and
 // re-resolves the configuration. Cancellation exits without starting work or
-// saving answers. A profile created while the form was open is never replaced.
+// saving answers. A profile created while the form was open is never replaced;
+// answers are not saved when a controller took ownership in the meantime.
 func maybeFirstRun(args []string, c Config, in *os.File, out, stderr io.Writer) (Config, bool, error) {
 	decision := firstRunDecision(c, in, out)
 	if !decision.Ask {
@@ -101,11 +102,20 @@ func maybeFirstRun(args []string, c Config, in *os.File, out, stderr io.Writer) 
 		}
 		return c, false, err
 	}
+	// Recheck ownership after the form: a controller that started meanwhile
+	// keeps its own effective settings, so the answers are not saved.
+	if repositoryOwned(c) {
+		fmt.Fprintln(out, "A controller started while the form was open; the answers were not saved.")
+		fmt.Fprintln(out, "Another Looper controller owns this repository.")
+		return c, false, nil
+	}
 	profile := ProfileFromSettings(s)
-	if _, err := os.Stat(c.ProfilePath); err == nil {
-		fmt.Fprintln(out, "A profile was created while the form was open; using it.")
-	} else if err = SaveProfile(c.ProfilePath, profile); err != nil {
+	created, err := saveProfileExclusive(c.ProfilePath, profile)
+	if err != nil {
 		return c, false, err
+	}
+	if !created {
+		fmt.Fprintln(out, "A profile was created while the form was open; using it.")
 	} else if !c.JSON {
 		fmt.Fprintln(out, "Saved settings to", c.ProfilePath)
 		noticeVerifyCommand(out, profile.VerifyCommand, detection, false)
@@ -214,7 +224,12 @@ func runConfig(c Config, in *os.File, out, stderr io.Writer) int {
 	}
 	s := settingsFromProfile(profile)
 	detection := DetectVerifyCommand(c.Root)
+	// Detection pre-fills the candidate when nothing explicit exists, so
+	// clearing the field keeps planner selection instead of re-baking it.
 	edited := s.VerifyCommand != ""
+	if !edited {
+		s.VerifyCommand = detection.Command
+	}
 	if err = ui.RunEditorForm(&s); err != nil {
 		if errors.Is(err, ui.ErrAborted) {
 			fmt.Fprintln(out, "Cancelled. Nothing was saved.")
@@ -222,10 +237,6 @@ func runConfig(c Config, in *os.File, out, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stderr, "Error:", err)
 		return 1
-	}
-	if s.VerifyCommand == "" && detection.Command != "" && !edited {
-		// Detection supplies a candidate only when nothing explicit exists.
-		s.VerifyCommand = detection.Command
 	}
 	saved := ProfileFromSettings(s)
 	if profile != nil {
@@ -389,7 +400,9 @@ func claimNextRequest(dir, typ string) (*SettingsRequest, error) {
 		if err = os.MkdirAll(processingDir(dir), 0700); err != nil {
 			return nil, err
 		}
-		if err = os.Rename(filepath.Join(requestDir(dir), name), filepath.Join(processingDir(dir), name)); err != nil {
+		// Claim under the envelope identifier so the acknowledgement and the
+		// removal always target the same file, whatever the source name was.
+		if err = os.Rename(filepath.Join(requestDir(dir), name), filepath.Join(processingDir(dir), req.ID+".json")); err != nil {
 			return nil, err
 		}
 		return req, nil
@@ -534,10 +547,15 @@ func (e *Engine) applySettingsRequest(req *SettingsRequest) SettingsAck {
 		base.Message = "the request changes no fields"
 		return base
 	}
-	for key := range req.Fields {
+	for key, value := range req.Fields {
 		if !settingFieldKeys[key] {
 			base.Status = AckError
 			base.Message = "unknown settings field " + key
+			return base
+		}
+		if isNull(value) {
+			base.Status = AckError
+			base.Message = key + " must not be null"
 			return base
 		}
 	}

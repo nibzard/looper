@@ -250,3 +250,17 @@ The source entry point is `cmd/looper/main.go`. The controller lives in
 `internal/looper`. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for state
 invariants and failure behavior. See [the validation record](docs/VALIDATION.md)
 for the automated checks and live Codex run.
+
+### UI dependencies
+
+The interface layer adds these direct dependencies. Versions are pinned to the
+newest releases that build with Go 1.22:
+
+- `charmbracelet/huh` v0.6.0, `bubbletea` v1.1.0, `bubbles` v0.20.0, and
+  `lipgloss` v0.13.0 for forms, the dashboard, and text layout.
+- `mattn/go-isatty` for terminal detection.
+- `mattn/go-runewidth` for display-width text wrapping.
+
+`internal/ui` never imports `internal/looper`. The pinned set keeps the
+toolchain local; Glamour was not added because Markdown rendering is not
+needed yet.

@@ -188,3 +188,20 @@ func TestProgressShowsElapsed(t *testing.T) {
 		t.Fatalf("elapsed missing: %q", got)
 	}
 }
+
+func TestSanitizeConsumesStringSequences(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"\x1b]0;owned-title\x07next", "next"},
+		{"\x1b]8;;http://example\x1b\\link text", "link text"},
+		{"\x1bP$q;payload\x1b\\rest", "rest"},
+		{"\x1b_alert\x07after", "after"},
+		{"\x1b[2Jcleared", "cleared"},
+		{"lone\x1b", "lone?"},
+		{"unclosed\x1b]0;title", "unclosed"},
+	}
+	for _, c := range cases {
+		if got := sanitize(c.in); got != c.want {
+			t.Fatalf("sanitize(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

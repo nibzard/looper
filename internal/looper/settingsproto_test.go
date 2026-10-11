@@ -343,3 +343,39 @@ func TestCaptureIsImmutableUnderLiveChanges(t *testing.T) {
 		t.Fatal("captured operation mutated")
 	}
 }
+
+func TestClaimUsesEnvelopeIDForProcessingFile(t *testing.T) {
+	e := protocolEngine(t)
+	if err := SaveProfile(e.Config.ProfilePath, &Profile{Version: 1, Agent: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	// The file name and the envelope identifier disagree; the claim and the
+	// removal must still target the same file.
+	req := &SettingsRequest{
+		Version: SettingsRequestVersion, ID: "settings-mismatch",
+		Session: e.controller.Session, ProfileDigest: profileDigest(e.Config.ProfilePath),
+		Fields: map[string]json.RawMessage{"agent": json.RawMessage(`"claude"`)},
+	}
+	if err := writeJSON(filepath.Join(requestDir(e.Dir), "settings-aaa.json"), req); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := claimNextRequest(e.Dir, RequestTypeSettings)
+	if err != nil || claimed == nil || claimed.ID != "settings-mismatch" {
+		t.Fatalf("claim failed: %v %+v", err, claimed)
+	}
+	if ack := e.applySettingsRequest(claimed); ack.Status != AckApplied {
+		t.Fatalf("status %s: %s", ack.Status, ack.Message)
+	}
+	if err = writeJSON(filepath.Join(ackDir(e.Dir), claimed.ID+".json"), ackFor(e, claimed.ID)); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(processingDir(e.Dir), claimed.ID+".json"))
+	entries, _ := os.ReadDir(processingDir(e.Dir))
+	if len(entries) != 0 {
+		t.Fatalf("stale processing files: %v", entries)
+	}
+}
+
+func ackFor(e *Engine, id string) SettingsAck {
+	return SettingsAck{Version: SettingsRequestVersion, ID: id, Session: e.controller.Session, Status: AckApplied}
+}
