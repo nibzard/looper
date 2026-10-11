@@ -78,6 +78,7 @@ Letter shortcuts accept lowercase and uppercase keys. You do not need Shift.
 | `H` | In the events view, toggle recent history from all runs. |
 | `J` / `K`, arrows | Select workers; scroll at the ends of the list. |
 | Page Up / Page Down | Scroll the board or current view. |
+| `V` | Toggle full board details on small screens. |
 | `D` | Show the selected task’s diff. |
 | `A` / `S` | Add a plan / open settings when controls are available. |
 | `X` | Request a drain: stop new dispatch and finish current work. |
@@ -104,6 +105,9 @@ without running builds, tests, benchmarks, or dataset generators. Planning has n
 timeout. Press Ctrl+C to interrupt and retain work.
 
 In mobile terminals and tmux panes, the header and controls wrap to fit the pane.
+Below 80 columns or 24 rows, the board uses single-line task titles and blocker reasons.
+It shows two recent events. Press `v` to show full details, then scroll to read them.
+The board lists active work, blocked tasks, and ready tasks before planner output.
 Use `j` and `k`, arrow keys, or Page Up and Page Down to scroll the board.
 The header and controls stay visible when the keyboard reduces the pane height.
 The footer shows common controls. Press `?` for settings, plan imports, drain,
