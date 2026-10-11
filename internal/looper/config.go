@@ -86,8 +86,7 @@ type settingSources struct {
 // the same last-flag-wins semantics the original parser had. An explicit
 // empty value ("--model \"\"") is a real override, not an absent flag.
 type flagOptions struct {
-	apps       []flagApplication
-	interleave bool
+	apps []flagApplication
 }
 
 const (
@@ -98,6 +97,7 @@ const (
 	flagEffort
 	flagJobs
 	flagReviewEvery
+	flagInterleave
 )
 
 type flagApplication struct {
@@ -179,6 +179,13 @@ func Parse(args []string) (Config, error) {
 		}
 		*p = time.Duration(v) * time.Second
 	}
+	// Environment validation keeps its original precedence: an invalid
+	// numeric environment value fails before any argument is examined.
+	if v, ok := os.LookupEnv("LOOPER_REVIEW_EVERY"); ok {
+		if n, e := strconv.Atoi(v); e != nil || n < 0 {
+			return c, fmt.Errorf("LOOPER_REVIEW_EVERY must be a nonnegative integer")
+		}
+	}
 	// Parsing: collect every option before touching the setting layers.
 	flags := flagOptions{}
 	checks := env("LOOPER_CHECK_JOBS", "1")
@@ -220,7 +227,7 @@ func Parse(args []string) (Config, error) {
 		case "--smart", "-s":
 			c.Smart = true
 		case "--interleave":
-			flags.interleave = true
+			flags.apply(flagInterleave, "")
 		case "--jobs", "--check-jobs", "--agent", "--all", "--review-agent", "--model", "--effort", "--max-iterations", "--review-every", "--ls":
 			v, err = value()
 			if err != nil {
@@ -272,7 +279,9 @@ func Parse(args []string) (Config, error) {
 	// Layer 2: the saved profile, below any environment variable or flag.
 	c.ProfilePath = ProfilePath(c)
 	var profile *Profile
-	if usesProfile(c.Command) {
+	// A corrupt profile blocks every command that applies settings, but
+	// `config --reset` must still be able to remove it.
+	if usesProfile(c.Command) && !(c.Command == "config" && c.Reset) {
 		if profile, err = LoadProfile(c.ProfilePath); err != nil {
 			return c, err
 		}
@@ -294,10 +303,7 @@ func Parse(args []string) (Config, error) {
 		settings.jobs = inputValue{v, SourceEnv}
 	}
 	if v, ok := os.LookupEnv("LOOPER_REVIEW_EVERY"); ok {
-		n, e := strconv.Atoi(v)
-		if e != nil || n < 0 {
-			return c, fmt.Errorf("LOOPER_REVIEW_EVERY must be a nonnegative integer")
-		}
+		n, _ := strconv.Atoi(v) // validated before parsing
 		settings.reviewEvery = intValue{n, SourceEnv}
 	}
 	// Layer 4: explicit flags, replayed in command-line order so the last
@@ -321,20 +327,17 @@ func Parse(args []string) (Config, error) {
 		case flagReviewEvery:
 			n, _ := strconv.Atoi(app.value) // validated during parsing
 			settings.reviewEvery = intValue{n, SourceFlag}
+		case flagInterleave:
+			// At its command-line position: a later --agent or --all still
+			// wins, exactly as the original parser behaved. An explicit
+			// review agent from a flag, the environment, or a saved profile
+			// beats the codex preset; a present-but-empty environment value
+			// follows the coding agent.
+			settings.agent = inputValue{"claude", SourceFlag}
+			if settings.reviewAgent.from == SourceDefault {
+				settings.reviewAgent = inputValue{"codex", SourceFlag}
+			}
 		}
-	}
-	if flags.interleave {
-		settings.agent = inputValue{"claude", SourceFlag}
-		if settings.reviewAgent.from == SourceDefault {
-			// --interleave requests claude coding with codex review. An
-			// explicit review agent from a flag, the environment, or a saved
-			// profile wins.
-			settings.reviewAgent = inputValue{"codex", SourceFlag}
-		}
-	}
-	c.Checks, err = strconv.Atoi(checks)
-	if err != nil || c.Checks < 1 {
-		return c, fmt.Errorf("check-jobs must be positive")
 	}
 	if settings.jobs.value == "auto" {
 		c.JobsAuto = true
@@ -347,6 +350,10 @@ func Parse(args []string) (Config, error) {
 		if err != nil || c.Jobs < 1 {
 			return c, fmt.Errorf("jobs must be auto or a positive integer")
 		}
+	}
+	c.Checks, err = strconv.Atoi(checks)
+	if err != nil || c.Checks < 1 {
+		return c, fmt.Errorf("check-jobs must be positive")
 	}
 	if c.Smart {
 		settings.model = inputValue{env("CODEX_SMART_MODEL", "gpt-6-astra"), SourceFlag}

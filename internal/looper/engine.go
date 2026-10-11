@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nibzard/looper/internal/ui"
 )
 
 // Engine has one owner goroutine. Workers return values; they never mutate state.
@@ -30,6 +32,9 @@ type Engine struct {
 	Render              *Presenter
 	controller          *ControllerInfo
 	acks                map[string]SettingsAck
+	viewNotify          chan ui.ViewSnapshot
+	eventCursor         int64
+	viewDirty           bool
 	checkSlots          chan struct{}
 	wg                  sync.WaitGroup
 	capacity, successes int
@@ -104,7 +109,7 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 		lock.Close()
 		return nil, nil, err
 	}
-	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}
+	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, viewNotify: make(chan ui.ViewSnapshot, 1), checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}
 	if !c.JSON {
 		width := func() int {
 			if f, ok := out.(*os.File); ok {
@@ -120,10 +125,13 @@ func (e *Engine) event(kind, message string) {
 	if e.err != nil {
 		return
 	}
-	if err := e.Store.Event(kind, message, nil); err != nil {
+	id, err := e.Store.Event(kind, message, nil)
+	if err != nil {
 		e.err = err
 		return
 	}
+	e.eventCursor = id
+	e.viewDirty = true
 	if e.Config.JSON {
 		b, _ := json.Marshal(Event{Time: time.Now().UTC().Format(time.RFC3339), Kind: kind, Message: message})
 		fmt.Fprintln(e.Output, string(b))

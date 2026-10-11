@@ -21,6 +21,7 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 	if e.controller != nil {
 		// Only this session's metadata is removed on any exit path.
 		defer removeController(e.Dir, e.controller.Session)
+		defer clearView(e.Dir)
 	}
 	if err := e.initialize(ctx); err != nil {
 		return 1, err
@@ -62,6 +63,10 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 		e.processSettingsRequests()
 		if e.err != nil {
 			return 1, e.err
+		}
+		if e.viewDirty {
+			e.publishView(draining)
+			e.viewDirty = false
 		}
 		// Consume all finished workers without waiting for unrelated tasks.
 		for more := true; more; {

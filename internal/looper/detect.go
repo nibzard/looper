@@ -29,15 +29,52 @@ func DetectVerifyCommand(root string) Detection {
 		return Detection{command, "Makefile test target"}
 	}
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+		if nestedProject(root, "go.mod") {
+			return Detection{}
+		}
 		return Detection{"go test ./...", "go.mod"}
 	}
 	if command, source, ok := nodeTest(root); ok {
+		if nestedProject(root, "package.json") {
+			return Detection{}
+		}
 		return Detection{command, source}
 	}
 	if _, err := os.Stat(filepath.Join(root, "Cargo.toml")); err == nil {
+		if nestedProject(root, "Cargo.toml") {
+			return Detection{}
+		}
 		return Detection{"cargo test", "Cargo.toml"}
 	}
 	return Detection{}
+}
+
+// nestedProject reports whether a different project root hides below the
+// repository root, which makes root evidence ambiguous for whole-product
+// checks. Only one shallow, non-ignored level is inspected.
+func nestedProject(root, rootMarker string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		switch entry.Name() {
+		case "node_modules", "vendor", "target", "tmp", "dist", "build":
+			continue
+		}
+		for _, marker := range []string{"go.mod", "package.json", "Cargo.toml"} {
+			if marker == rootMarker {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, entry.Name(), marker)); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func makefileTest(root string) (string, bool) {

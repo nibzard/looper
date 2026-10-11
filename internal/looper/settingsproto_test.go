@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nibzard/looper/internal/ui"
 )
 
 func protocolEngine(t *testing.T) *Engine {
@@ -25,6 +27,7 @@ func protocolEngine(t *testing.T) *Engine {
 		Config:     Config{ProfilePath: filepath.Join(dir, "profile.json"), Jobs: 4, ReviewEvery: 5},
 		controller: &ControllerInfo{Version: 1, Session: "run-test", PID: os.Getpid(), Mode: ControllerModeForeground},
 		acks:       map[string]SettingsAck{},
+		viewNotify: make(chan ui.ViewSnapshot, 1),
 		capacity:   4,
 	}
 	return e

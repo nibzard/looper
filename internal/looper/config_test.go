@@ -138,6 +138,21 @@ func TestParseInterleave(t *testing.T) {
 	if c.ReviewAgent != "claude" {
 		t.Fatalf("interleave overrode earlier review agent: %s", c.ReviewAgent)
 	}
+	// A later --agent or --all still wins over --interleave, in order.
+	c, err = parseAt(t, "--interleave", "--agent", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Agent != "codex" || c.ReviewAgent != "codex" {
+		t.Fatalf("interleave must not override a later agent flag: %s/%s", c.Agent, c.ReviewAgent)
+	}
+	c, err = parseAt(t, "--interleave", "--all", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Agent != "codex" || c.ReviewAgent != "codex" {
+		t.Fatalf("interleave must not override a later all flag: %s/%s", c.Agent, c.ReviewAgent)
+	}
 }
 
 func TestParseModels(t *testing.T) {
