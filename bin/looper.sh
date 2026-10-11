@@ -4,8 +4,8 @@
 Codex RALF Loop (looper.sh)
 ---------------------------
 Purpose:
-  Run Codex CLI in a deterministic, autonomous loop that processes one task
-  per iteration from a JSON backlog (to-do.json), with fresh context each run.
+  Run Codex CLI in an autonomous loop with one task per agent session and
+  automatic parallel execution in Git worktrees when available.
   The loop bootstraps tasks when missing, validates schema, repairs invalid
   task files, logs JSONL output, and applies deterministic status
   updates based on the model's final JSON summary.
@@ -47,6 +47,7 @@ Environment variables:
   NO_COLOR                 Disable terminal colors when nonempty
   CODEX_ENFORCE_OUTPUT_SCHEMA  Validate final summary via JSON Schema (default: 1)
   LOOPER_VERIFY_COMMAND    Optional command that gates a done status
+  LOOPER_JOBS              Worker limit (default: auto; 1 runs sequentially)
   CLAUDE_BIN                claude CLI binary (default: claude)
   CLAUDE_MODEL              claude model (default: empty)
   LOOPER_ITER_SCHEDULE     Iteration schedule (codex|claude|odd-even|round-robin)
@@ -112,6 +113,7 @@ LOOPER_VERBOSE=${LOOPER_VERBOSE:-0}
 CODEX_PROFILE=${CODEX_PROFILE:-}
 CODEX_ENFORCE_OUTPUT_SCHEMA=${CODEX_ENFORCE_OUTPUT_SCHEMA:-1}
 LOOPER_VERIFY_COMMAND=${LOOPER_VERIFY_COMMAND:-}
+LOOPER_JOBS=${LOOPER_JOBS:-auto}
 CODEX_YOLO=${CODEX_YOLO:-1}
 CODEX_FULL_AUTO=${CODEX_FULL_AUTO:-0}
 LOOPER_ITER_SCHEDULE=${LOOPER_ITER_SCHEDULE:-codex}
@@ -154,6 +156,7 @@ usage() {
     echo "       looper.sh --doctor [to-do.json]"
     echo "       looper.sh --check [to-do.json]"
     echo "Options: --all <claude|codex>, --interleave, --smart|-s, --verbose|-v"
+    echo "         --jobs <auto|N> (default: auto; 1 runs sequentially)"
     echo "         --iter-schedule <codex|claude|odd-even|round-robin>"
     echo "         --odd-agent <codex|claude>, --even-agent <codex|claude>"
     echo "         --rr-agents <claude,codex>, --repair-agent <codex|claude>"
@@ -165,7 +168,7 @@ usage() {
     echo "Env: LOOPER_ITER_EVEN_AGENT, LOOPER_ITER_RR_AGENTS, LOOPER_REPAIR_AGENT, LOOPER_REVIEW_AGENT"
     echo "Env: LOOPER_INTERLEAVE"
     echo "Env: LOOPER_APPLY_SUMMARY, LOOPER_GIT_INIT, LOOPER_HOOK, LOOP_DELAY_SECONDS"
-    echo "Env: LOOPER_VERIFY_COMMAND"
+    echo "Env: LOOPER_VERIFY_COMMAND, LOOPER_JOBS"
     echo "Env: LOOPER_VERBOSE, NO_COLOR"
     echo "Env: LOOPER_RATE_LIMIT_RETRY, LOOPER_RATE_LIMIT_MAX, LOOPER_RATE_LIMIT_DELAY, LOOPER_RATE_LIMIT_CAP"
 }
@@ -259,6 +262,7 @@ run_doctor() {
     fi
 
     doctor_check_cmd jsonschema "jsonschema (optional)" 0 || true
+    doctor_check_cmd python3 "python3 (parallel execution)" 0 || true
 
     if [ "$LOOPER_GIT_INIT" -eq 1 ]; then
         doctor_check_cmd git "git (optional)" 0 || true
@@ -483,6 +487,14 @@ parse_args() {
     local positional=()
     while [ $# -gt 0 ]; do
         case "$1" in
+            --jobs)
+                LOOPER_JOBS="${2:-}"
+                if [[ ! "$LOOPER_JOBS" =~ ^(auto|[1-9][0-9]*)$ ]]; then
+                    echo "Error: --jobs requires auto or a positive integer." >&2
+                    exit 1
+                fi
+                shift 2
+                ;;
             --verbose|-v)
                 LOOPER_VERBOSE=1
                 shift
@@ -1371,7 +1383,9 @@ extract_last_agent_message() {
             | sub("\"$"; "")
             | sub("^'\''"; "")
             | sub("'\''$"; "");
-        if (.type == "item.completed" and .item.type == "agent_message") then
+        if .looper_parallel == true then
+            "parallel_message\t-1\t" + clean(.message.content[0].text)
+        elif (.type == "item.completed" and .item.type == "agent_message") then
             "agent_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.item.text)
         elif (.type == "assistant_message" or .type == "assistant_response" or .type == "assistant") then
             "assistant_message\t" + ((.looper_iteration // -1) | tostring) + "\t" + clean(.message.content[0].text // .content[0].text // .text // .output_text)
@@ -1429,6 +1443,12 @@ format_tail_message() {
     rest=${tagged#*$'\t'}
     iteration=${rest%%$'\t'*}
     message=${rest#*$'\t'}
+
+    if [ "$label" = parallel_message ]; then
+        shorten "$message" 240
+        printf '\n'
+        return 0
+    fi
 
     local task_id=""
     local task_status=""
@@ -2088,7 +2108,71 @@ EOF
     ensure_valid_todo
 }
 
+configure_agent_flags() {
+    CODEX_FLAGS=(exec -m "$CODEX_MODEL" -c "model_reasoning_effort=$CODEX_REASONING_EFFORT" --cd "$WORKDIR")
+    if [ "$CODEX_YOLO" -eq 1 ]; then
+        CODEX_FLAGS+=(--yolo)
+    elif [ "$CODEX_FULL_AUTO" -eq 1 ]; then
+        CODEX_FLAGS+=(--full-auto)
+    fi
+    [ -z "$CODEX_PROFILE" ] || CODEX_FLAGS+=(--profile "$CODEX_PROFILE")
+    CLAUDE_FLAGS=(--output-format json --dangerously-skip-permissions --add-dir "$WORKDIR")
+    [ -z "$CLAUDE_MODEL" ] || CLAUDE_FLAGS+=(--model "$CLAUDE_MODEL")
+}
+
+# Private process boundary. Each invocation has its own output and summary files.
+agent_request() {
+    local request="$LOOPER_AGENT_REQUEST" result status=0
+    WORKDIR=$(jq -r .cwd "$request")
+    cd "$WORKDIR" || return 1
+    CODEX_PROGRESS=0
+    LOOPER_VERBOSE=0
+    CODEX_JSON_LOG=1
+    LOOPER_LOG_DIR=$(jq -r .directory "$request")
+    RUN_ID=agent
+    LOG_FILE="$LOOPER_LOG_DIR/events.jsonl"
+    SUMMARY_SCHEMA_FILE="$LOOPER_LOG_DIR/summary.schema.json"
+    CAPTURE_LAST_MESSAGE=1
+    configure_agent_flags
+    run_with_agent "$(jq -r .agent "$request")" result "$(jq -r .summary "$request")" 0 1 \
+        < "$(jq -r .prompt "$request")" || status=$?
+    result=$(jq -r .result "$request")
+    if [ -f "$LAST_MESSAGE_FILE" ]; then
+        cp "$LAST_MESSAGE_FILE" "$result" || return 1
+    fi
+    return "$status"
+}
+
+parallel_runtime() {
+    local runtime="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/looper_parallel.py"
+    # Installed copies keep the runtime beside the shell entrypoint.
+    [ -f "$runtime" ] || runtime="$(dirname "${BASH_SOURCE[0]}")/looper_parallel.py"
+    printf '%s\n' "$runtime"
+}
+
+parallel_python_available() {
+    command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'
+}
+
 main() {
+    if [ "${1:-}" = --validate-backlog ]; then
+        set_todo_file "$2"
+        validate_todo
+        return $?
+    fi
+    if [ -n "${LOOPER_AGENT_REQUEST:-}" ]; then
+        agent_request
+        return $?
+    fi
+    # Hold one process lock across bootstrap, sequential work, and parallel work.
+    case "${1:-}" in
+        -h|--help|--ls|--tail|--doctor|--check) ;;
+        *)
+            if [ -z "${LOOPER_LOCK_HELD:-}" ] && parallel_python_available && [ -f "$(parallel_runtime)" ]; then
+                exec python3 "$(parallel_runtime)" guard "${BASH_SOURCE[0]}" "$@"
+            fi
+            ;;
+    esac
     if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
         usage
         exit 0
@@ -2156,6 +2240,11 @@ main() {
     apply_interleave_defaults
     apply_all_agent
 
+    if [[ ! "$LOOPER_JOBS" =~ ^(auto|[1-9][0-9]*)$ ]]; then
+        echo "Error: LOOPER_JOBS must be auto or a positive integer." >&2
+        return 1
+    fi
+
     if [ "$LOOPER_APPLY_SUMMARY" -ne 1 ]; then
         echo "Error: LOOPER_APPLY_SUMMARY=0 is no longer supported; Looper owns task status." >&2
         exit 1
@@ -2184,35 +2273,10 @@ main() {
     trap 'RUN_STOP_REASON="Received Ctrl-C."; exit 130' INT
     trap 'RUN_STOP_REASON="Received termination signal."; exit 130' TERM
 
-    CODEX_FLAGS=(
-        exec
-        -m "$CODEX_MODEL"
-        -c "model_reasoning_effort=$CODEX_REASONING_EFFORT"
-        --cd "$WORKDIR"
-    )
-
-    if [ "$CODEX_YOLO" -eq 1 ]; then
-        CODEX_FLAGS+=(--yolo)
-    elif [ "$CODEX_FULL_AUTO" -eq 1 ]; then
-        CODEX_FLAGS+=(--full-auto)
-    fi
-
-    if [ -n "$CODEX_PROFILE" ]; then
-        CODEX_FLAGS+=(--profile "$CODEX_PROFILE")
-    fi
+    configure_agent_flags
 
     if should_use_codex && ! ensure_git_repo; then
         CODEX_FLAGS+=(--skip-git-repo-check)
-    fi
-
-    CLAUDE_FLAGS=(
-        --output-format json
-        --dangerously-skip-permissions
-        --add-dir "$WORKDIR"
-    )
-
-    if [ -n "$CLAUDE_MODEL" ]; then
-        CLAUDE_FLAGS+=(--model "$CLAUDE_MODEL")
     fi
 
     CAPTURE_LAST_MESSAGE=1
@@ -2222,6 +2286,30 @@ main() {
     write_summary_schema_if_missing
     bootstrap_todo
     ensure_valid_todo
+
+    if [ "$LOOPER_JOBS" != 1 ] && parallel_python_available && [ -f "$(parallel_runtime)" ]; then
+        # Keep the established CLI and agent flags in one place.
+        export CODEX_BIN CODEX_MODEL CODEX_REASONING_EFFORT CODEX_YOLO CODEX_FULL_AUTO CODEX_PROFILE
+        export CLAUDE_BIN CLAUDE_MODEL CODEX_ENFORCE_OUTPUT_SCHEMA CODEX_JSON_LOG CODEX_PROGRESS
+        export LOOPER_ITER_SCHEDULE LOOPER_ITER_ODD_AGENT LOOPER_ITER_EVEN_AGENT LOOPER_ITER_RR_AGENTS
+        export LOOPER_REPAIR_AGENT LOOPER_REVIEW_AGENT LOOPER_BASE_DIR LOOPER_HOOK LOOPER_VERIFY_COMMAND
+        export LOOPER_JOBS MAX_ITERATIONS TODO_FILE SCHEMA_FILE LOOPER_VERBOSE
+        export LOOPER_RUN_ID="$RUN_ID" LOOPER_RUN_LOG="$LOG_FILE"
+        export LOOPER_RATE_LIMIT_RETRY LOOPER_RATE_LIMIT_MAX LOOPER_RATE_LIMIT_DELAY LOOPER_RATE_LIMIT_CAP
+        local parallel_status=0
+        python3 "$(parallel_runtime)" eligible || parallel_status=$?
+        if [ "$parallel_status" -eq 0 ]; then
+            # Keep the lock and signal target in one process for the whole run.
+            exec python3 "$(parallel_runtime)" run "${BASH_SOURCE[0]}"
+        fi
+        # 75 means this workspace cannot use worktrees; retain the sequential path.
+        if [ "$parallel_status" -ne 75 ]; then
+            return "$parallel_status"
+        fi
+    elif [ "$LOOPER_JOBS" != auto ] && [ "$LOOPER_JOBS" != 1 ]; then
+        echo "Error: parallel execution requires Python 3.9 or later and the Looper runtime." >&2
+        return 1
+    fi
 
     RUN_ACTIVE=1
     print_run_info

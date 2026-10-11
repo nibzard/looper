@@ -14,4 +14,5 @@ smoke:
 
 test: smoke
 	./scripts/regression.sh
+	python3 scripts/parallel-test.py
 	./scripts/package-smoke.sh

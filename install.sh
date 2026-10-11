@@ -107,11 +107,13 @@ fi
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR="$SCRIPT_DIR"
 SRC_BIN="$ROOT_DIR/bin/looper.sh"
+SRC_RUNTIME="$ROOT_DIR/lib/looper_parallel.py"
 SRC_SKILLS="$ROOT_DIR/skills"
 
 # Homebrew installs the commands in bin and the skills in share/looper.
 if [ ! -f "$SRC_BIN" ] && [ -f "$SCRIPT_DIR/looper.sh" ]; then
     SRC_BIN="$SCRIPT_DIR/looper.sh"
+    SRC_RUNTIME="$SCRIPT_DIR/looper_parallel.py"
 fi
 if [ ! -d "$SRC_SKILLS" ] && [ -d "$SCRIPT_DIR/../share/looper/skills" ]; then
     SRC_SKILLS="$SCRIPT_DIR/../share/looper/skills"
@@ -119,6 +121,10 @@ fi
 
 if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_BIN" ]; then
     echo "Error: missing $SRC_BIN" >&2
+    exit 1
+fi
+if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_RUNTIME" ]; then
+    echo "Error: missing $SRC_RUNTIME" >&2
     exit 1
 fi
 
@@ -145,6 +151,7 @@ warn_missing() {
 if [ "$INSTALL_BIN" -eq 1 ]; then
     run install -d "$BIN_DIR"
     run install -m 0755 "$SRC_BIN" "$BIN_DIR/looper.sh"
+    run install -m 0644 "$SRC_RUNTIME" "$BIN_DIR/looper_parallel.py"
 fi
 
 if [ "$INSTALL_SKILLS" -eq 1 ]; then
@@ -162,6 +169,7 @@ if [ "$INSTALL_BIN" -eq 1 ]; then
 fi
 
 warn_missing jq
+warn_missing python3
 warn_missing codex
 
 echo "Install complete."
