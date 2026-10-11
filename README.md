@@ -1,26 +1,12 @@
 # Looper
 
-Looper is the loop around your coding agents. It runs on the machine
-that holds your repository: a laptop, a server, or a headless VM. It
-drives Codex or Claude Code, unmodified, through one repeating cycle:
-plan tasks from your requirements, implement each in a private
-worktree, check the combined result, publish what passes, and wait for
-your next edit.
+Give Looper a repository and written requirements. It runs your coding
+agents, checks their work, and applies what passes.
 
-Looper adds no cloud service of its own. It has no opinions about your
-code, your models, or your process. It has strong opinions about the
-loop: fresh context per task, verification before publication, and no
-unchecked work marked done. When the agents improve, the loop improves
-with them.
+Leave it overnight. Come back to the terminal to see what finished and
+what needs you.
 
-Best fit: a new project with written requirements. Start the loop at
-commit one, hand off the backlog, and come back to checked work. Run
-it unattended on a server and observe from any terminal.
-
-The controller is one Go binary. SQLite stores execution state. Git stores
-code snapshots. Looper uses Codex, Claude Code, or zcode through their installed
-commands. Pull requests and remote services are optional parts of your
-project, not requirements of Looper.
+When the goal is complete, it waits for your next edit.
 
 ![A recorded run: parallel workers, the events view, and one blocked task
 with its reason](docs/assets/loop.gif)
@@ -29,8 +15,8 @@ with its reason](docs/assets/loop.gif)
 
 You need Go 1.22 or later, Git, Bash, and an authenticated `codex`,
 `claude`, or `zcode` command. Linux and macOS are supported. The binary needs
-no Python, Node, or SQLite command at runtime. Python is used by the repository tests.
-Node is optional for Measuretwice.
+no Python, Node, or SQLite command at runtime. Repository tests use Python.
+The optional Measuretwice adapter uses Node.
 
 1. Install the command:
 
@@ -54,9 +40,8 @@ If `to-do.json` is absent, Looper asks the planning agent to create tasks
 from the existing requirements. A project without Git gets a local repository
 unless `LOOPER_GIT_INIT=0` is set.
 
-Looper waits for new work after completing the current goal. Edit the task
-file or the project requirements while it is idle. Looper reads the changes
-and continues. Use `--once` when you want a finite run.
+Edit the task file or project requirements while Looper is idle. It reads
+the changes and continues. Use `--once` when you want a finite run.
 
 ```sh
 looper --once
@@ -74,24 +59,26 @@ stops child processes and retains partial work. Run `looper` again to resume.
 
 ## How it works
 
+Each task starts with fresh agent context.
+
 1. Read the goal, task dependencies, and acceptance criteria.
 2. Plan independent write scopes, shared resources, setup, and verification.
 3. Implement ready tasks in private worktrees.
 4. Combine each result with the current integration revision and run checks.
 5. Publish only the exact checked tree, then mark its task complete.
 6. Review complete product workflows at milestones and at the end.
-7. Add evidence-backed findings to the backlog and continue.
+7. Add tasks with evidence from review and continue.
 
 A task dependency becomes ready only after integration. Work on unrelated
 tasks continues during repairs. Repeated failures trigger a fresh diagnosis.
 A task that still fails becomes blocked; its code and logs remain available.
 
-The default worker limit is automatic, up to four workers. Setup and checks
-share one execution slot by default. Declared write scopes and resources
-prevent known collisions. Actual Git changes control integration. Unexpected
-conflicts return to a worker for repair. With multiple check slots,
-speculative checks overlap; a result can publish only when its checked base
-is still current.
+Looper chooses a worker limit automatically, up to four workers. Setup and
+checks share one execution slot by default. The plan identifies files and
+resources that tasks can change to avoid conflicts. Looper checks the actual
+Git changes during integration and sends conflicts back to a worker for
+repair. If you enable multiple check slots, checks can overlap. A result
+can publish only while the revision it was checked against remains current.
 
 Each process receives a unique `LOOPER_RESOURCE_PREFIX`, a private `TMPDIR`,
 and `LOOPER_ARTIFACT_DIR`. Use these for databases and other test resources.
@@ -112,7 +99,8 @@ controller or attaches to the active run. The overview shows the goal,
 controller activity, snapshot age, progress, attention items, and active
 workers. Recent outcomes stay visible even when worker events fill the log.
 Integration counts cover the current session, the last hour, and the last
-24 hours. These counts come from the journal, not the viewer's event buffer.
+24 hours. Looper reads these counts from the journal, so they survive the
+viewer's event buffer limit.
 
 For an unattended run, use `looper start`, then attach with `looper tui`.
 Keep the viewer in tmux or reconnect later. In attached mode, `q` detaches
@@ -177,10 +165,10 @@ then press `r` in its inspector and confirm with `y`. The controller rejects
 changed tasks and requests from earlier sessions. Retained work stays
 available for reuse. A read-only observer cannot requeue tasks.
 
-There is no command to pause execution. A drain waits for current planning or agent work
-to finish. To stop immediately, choose **interrupt; retain work** in the exit
-dialog. Restarting retains task progress, but unfinished planning runs
-again.
+There is no command to pause execution. A drain waits for current planning
+or agent work to finish. To stop immediately, choose **interrupt; retain
+work** in the exit dialog. Restarting retains task progress, but unfinished
+planning runs again.
 
 The dashboard shows `PLANNING` before implementation starts. Its timer
 continues while the agent runs. Press `l` to read the planner log and `t` to
@@ -251,9 +239,9 @@ worker's branch.
 Reviews run after five integrations by default. They compare the product
 against requirements, exercise workflows, and report missing capabilities.
 Worker reports can also propose follow-up tasks with acceptance criteria and
-observed evidence. These findings must stay within the project goal. This
-remains model judgment; executable acceptance checks provide stronger
-evidence where available.
+observed evidence. These findings must stay within the project goal. Agents
+can miss defects or report problems that do not exist. Use executable
+acceptance checks where you can.
 
 When an external prerequisite is missing, a blocked task records the reason
 and an unblock condition. Resolve it, then change the task to `todo` while
@@ -263,9 +251,8 @@ requirements starts a fresh attempt.
 
 ## Models
 
-The default agent is Codex. Looper uses each installed agent's configured
-model unless you select one explicitly. This preserves your provider
-configuration and avoids treating an alias as proof of a particular model.
+The default agent is Codex. Looper uses the model configured in each agent
+unless you select one explicitly.
 
 ```sh
 looper --model YOUR_MODEL --effort high
@@ -296,10 +283,10 @@ Looper uses the worker agent. zcode uses its own configured model;
 Looper's Codex and Claude model options do not select a zcode model.
 
 Looper invokes zcode with `--output-format stream-json` and `--mode yolo`.
-It parses the response from the final `result` event. Intermediate responses,
-missing final results, invalid JSON objects, and failed processes do not
-become successful task reports. One JSON object inside a Markdown code
-fence is also accepted.
+It reads the response from the final `result` event. The command must exit
+successfully, and the response must contain a valid JSON object. Looper
+rejects intermediate responses and streams with no final result. It also
+accepts one JSON object inside a Markdown code fence.
 
 zcode has no schema flag. Looper states the output contract in the prompt
 and validates the returned task report. Planning uses the same full-access
@@ -307,10 +294,8 @@ mode because zcode's plan mode returns prose instead of the required JSON.
 The inspection-only prompt limits planning behavior; it does not enforce
 read-only access to tools.
 
-There is no token budget in the controller. The dispatch limit is unlimited
-by default. Spend more computation on independent review, diagnosis, and
-acceptance checks. Increasing worker count alone can increase conflicts and
-resource use.
+The controller does not set a token budget. Task dispatch is unlimited by
+default. If you add workers, account for extra resource use and conflicts.
 
 ## State and recovery
 
@@ -326,10 +311,10 @@ The default state directory is:
   review-*/
 ```
 
-SQLite owns execution state. `to-do.json` is its editable projection. A
-journal protects task-file exports and code publication. A restart
-recognizes an operation before or after publication and resumes it without
-marking unchecked work done. Completed worker receipts avoid repeating
+SQLite stores execution state. Edit `to-do.json` to change the backlog;
+Looper imports those edits. A journal tracks task-file exports and code
+publication. After a restart, Looper recognizes whether an operation was
+published and resumes it without marking unchecked work done. Completed worker receipts avoid repeating
 implementation after a controller crash. Invalid final reports get a
 separate report recovery attempt with code changes prohibited.
 
@@ -351,7 +336,8 @@ or a dispatch limit, 1 for a controller failure, and 130 for interruption.
 
 ## Configuration
 
-Most projects need only `looper`. These settings cover exceptional cases:
+Start with `looper`. Use these settings to change concurrency, timeouts,
+and other controller behavior:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -371,8 +357,8 @@ Most projects need only `looper`. These settings cover exceptional cases:
 | `LOOPER_HOOK` | unset | Optional executable called after a result |
 
 The hook receives task ID, status, summary path, and attempt ID. It has a
-30-second timeout. It is best effort and is not a transactional delivery
-mechanism.
+30-second timeout. Hook failures do not roll back task results, and delivery
+is not guaranteed.
 
 ## Measuretwice
 
@@ -415,46 +401,8 @@ See [the practices report](docs/research/PRACTICES-REPORT-2026-10-11.md)
 for a dated comparison with native agent capabilities and other local
 orchestrators.
 
-The interface layer adds these direct dependencies. Versions are pinned to
-the newest releases that build with Go 1.22:
-
-- `charmbracelet/huh` v0.6.0, `bubbletea` v1.1.0, `bubbles` v0.20.0, and
-  `lipgloss` v0.13.0 for forms, the dashboard, and text layout.
-- `mattn/go-isatty` for terminal detection.
-- `mattn/go-runewidth` for display-width text wrapping.
-
-`internal/ui` never imports `internal/looper`. The pinned set keeps the
-toolchain local; Glamour was not added because Markdown rendering is not
-needed yet.
-
-<details>
-<summary>Migrate from earlier versions</summary>
-
-**Go is the only implementation.** The Bash runner and its `looper.sh`
-compatibility launcher are gone; scripts must call the `looper` binary.
-
-Existing version 1 task files remain supported. The Go controller imports
-an unfinished Python parallel journal from the same project directory. It
-preserves the original journal and refs, converts the plan, and resumes
-retained work. Completed legacy runs need only their existing task file.
-Migration tests cover publication after files were applied but before
-status was saved.
-
-Run `make build`, then use the new launcher. Stop an old runner before
-switching. Do not run an old runner against state after the Go controller
-has imported it. Older sequential logs remain on disk but are not imported
-into SQLite.
-
-The default run is now continuous. Add `--once` to scripts that expect
-completion. `--all`, `--interleave`, `--smart`, `--doctor`, `--tail`, and
-`--ls` remain aliases. Odd/even and round-robin agent schedules are replaced
-by explicit coding and review agents. Submodules and unresolved index
-conflicts are not supported.
-
-The Homebrew stable formula builds the Go release. Both stable and `--HEAD`
-install the `looper` binary.
-
-</details>
+See [interface dependencies](docs/dependencies.md) for the pinned packages.
+See [migration instructions](docs/migration.md) before upgrading an older runner.
 
 ## Observe runs from a coding agent
 
@@ -471,20 +419,22 @@ These commands read saved runtime records. They do not start workers or
 change task status. Stopping an event observer does not drain the
 controller.
 
-- **Status:** Existing state fields remain available. The new `observation`
-  object has `schema_version: 1`, controller ownership, the published view,
-  session matching, and observations for active attempts.
-- **Events:** Each line is one JSON event. Save its `id` and reconnect with
-  `looper events --json --follow --after 123`. Without `--follow`, the
-  command replays saved events. Worker activity includes the session, task,
-  attempt, phase, and log path in `data`. Older events can omit `data`.
-- **Inspect:** Returns a task's blockers, retained attempts, repair
-  feedback, verification records, and local log paths. Unknown task IDs
-  return an error.
-- **Doctor:** Returns structured findings and suggested actions. Warnings
-  include blocked tasks and missing worker processes. Quiet output is
-  informational. Exit code 1 means a diagnostic error; warnings return 0.
-  The plain command retains its installation and backlog checks.
+`status --json` includes the saved state and an `observation` object with
+`schema_version: 1`. It reports controller ownership, the published view,
+session matching, and observations for active attempts.
+
+`events --json` prints one JSON event per line. Save its `id` and reconnect
+with `looper events --json --follow --after 123`. Without `--follow`, the
+command replays saved events. Worker activity includes the session, task,
+attempt, phase, and log path in `data`. Older events can omit `data`.
+
+`inspect` returns a task's blockers, retained attempts, repair feedback,
+verification records, and local log paths. Unknown task IDs return an error.
+
+`doctor --json` returns findings and suggested actions. It warns about
+blocked tasks and missing worker processes. Quiet output is informational.
+Exit code 1 means a diagnostic error; warnings return 0. The plain command
+also checks installation dependencies and the backlog.
 
 Controller ownership, process presence, and output activity are separate
 observations. `progress: "unknown"` means that output alone cannot prove
