@@ -1,0 +1,29 @@
+Context
+
+Looper needs to finish independent tasks concurrently without requiring
+project-specific configuration or exposing worktree management to users.
+
+Decision
+
+Keep the Bash command interface and agent adapters. Use a Python standard
+library coordinator for task planning, isolated worktrees, process control,
+verification, and durable state. Publish verified changes as unstaged edits
+from internal Git snapshots so the user's branch and index stay intact.
+
+Verify speculative integration candidates concurrently and publish them in
+order only when the tested base is still current. Retain failed work for
+repair or recovery. Keep --jobs 1 as the sequential fallback.
+
+Alternatives
+
+Shared-directory workers risk concurrent edits. Independent branches with
+manual integration add user work. A full command rewrite increases the
+scope without improving the existing agent adapters.
+
+Consequences and validation
+
+Parallel execution requires Python 3.9 or later and a supported Git root.
+The coordinator owns backlog updates and uses repository locks and a
+publication journal. Existing checks and 31 new tests cover scheduling,
+Git integration, preservation of local edits, and recovery. Tests use local
+agent stubs; real-project speed improvements remain unmeasured.
