@@ -1,8 +1,21 @@
 # Looper
 
-Looper keeps a local development process running. It plans tasks from your
-requirements, runs coding agents in parallel private worktrees, checks the
-combined changes, and publishes the work that passes.
+Looper is the loop around your coding agents. It runs on the machine
+that holds your repository: a laptop, a server, or a headless VM. It
+drives Codex or Claude Code, unmodified, through one repeating cycle:
+plan tasks from your requirements, implement each in a private
+worktree, check the combined result, publish what passes, and wait for
+your next edit.
+
+Looper adds no cloud service of its own. It has no opinions about your
+code, your models, or your process. It has strong opinions about the
+loop: fresh context per task, verification before publication, and no
+unchecked work marked done. When the agents improve, the loop improves
+with them.
+
+Best fit: a new project with written requirements. Start the loop at
+commit one, hand off the backlog, and come back to checked work. Run
+it unattended on a server and observe from any terminal.
 
 The controller is one Go binary. SQLite stores execution state. Git stores
 code snapshots. Looper uses Codex or Claude Code through their installed
