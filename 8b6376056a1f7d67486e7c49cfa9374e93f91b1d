@@ -1,0 +1,11 @@
+Mobile tmux trials exposed a frozen planning timer, clipped controls,
+ambiguous activity messages, expensive planning commands, and planner
+responses wrapped in prose. The dashboard now separates controller state
+from observed agent activity and keeps controls visible in small panes.
+Claude planning exposes only inspection tools. Planning has no timeout,
+as requested. Go is the default; the Bash file only launches Go.
+
+Validation: make test, make race, and the four Measuretwice adapter tests
+using the documented local module path. Earlier tmux checks covered
+58x24, 40x18, and 30x12 panes. The actual failed planner response was
+replayed through parsing and plan validation without modifying Margin.
