@@ -112,3 +112,52 @@ func TestZcodeMissingSummaryFails(t *testing.T) {
 		t.Fatalf("want invalid_result, got %v", err)
 	}
 }
+
+func TestZcodeRequiresFinalResultEvent(t *testing.T) {
+	for _, event := range []string{
+		`{"type":"turn.completed","response":"{}"}`,
+		`{"response":"{}"}`,
+		`{"type":"turn.completed","payload":{"response":"{}"}}`,
+	} {
+		t.Run(event, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "agent.sh")
+			t.Setenv("ZCODE_TEST_EVENT", event)
+			if err := os.WriteFile(bin, []byte("#!/bin/bash\nprintf '%s\\n' \"$ZCODE_TEST_EVENT\"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Agent{Config{ZcodeBin: bin, RetryLimit: 1}}.Run(context.Background(), "zcode", t.TempDir(), filepath.Join(dir, "run"), "prompt", true)
+			agentErr, ok := err.(*AgentError)
+			if !ok || agentErr.Kind != "invalid_result" {
+				t.Fatalf("want invalid_result without a final result event, got %v", err)
+			}
+		})
+	}
+}
+
+func TestZcodeRejectsInvalidFinalResponses(t *testing.T) {
+	for _, response := range []string{`null`, `""`, `42`, `"{broken}"`} {
+		t.Run(response, func(t *testing.T) {
+			bin, _ := zcodeStub(t, response)
+			_, err := Agent{Config{ZcodeBin: bin, RetryLimit: 1}}.Run(context.Background(), "zcode", t.TempDir(), filepath.Join(t.TempDir(), "run"), "prompt", true)
+			agentErr, ok := err.(*AgentError)
+			if !ok || agentErr.Kind != "invalid_result" {
+				t.Fatalf("want invalid_result, got %v", err)
+			}
+		})
+	}
+}
+
+func TestZcodeProcessFailureRejectsResponse(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "agent.sh")
+	script := "#!/bin/bash\nprintf '%s\\n' '{\"type\":\"result\",\"response\":\"{}\"}'\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Agent{Config{ZcodeBin: bin, RetryLimit: 1}}.Run(context.Background(), "zcode", t.TempDir(), filepath.Join(dir, "run"), "prompt", true)
+	agentErr, ok := err.(*AgentError)
+	if !ok || agentErr.Kind != "execution" {
+		t.Fatalf("want execution failure, got %v", err)
+	}
+}

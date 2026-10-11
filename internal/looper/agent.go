@@ -160,13 +160,18 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		}
 		var wrapper map[string]json.RawMessage
 		if kind == "claude" || kind == "zcode" {
-			// Both agents answer with one JSON line on stdout: Claude a
-			// result or structured_output event, zcode a summary object
-			// whose response field holds the final text.
-			final := map[string]string{"claude": "result", "zcode": "response"}[kind]
+			// Only the zcode result terminator carries the final response.
+			// Claude can return either text or structured output.
 			for _, line := range bytes.Split(raw, []byte{'\n'}) {
 				var o map[string]json.RawMessage
-				if json.Unmarshal(line, &o) == nil && o[final] != nil || o["structured_output"] != nil {
+				if json.Unmarshal(line, &o) != nil {
+					continue
+				}
+				if kind == "zcode" {
+					if string(o["type"]) == `"result"` {
+						wrapper = o
+					}
+				} else if o["result"] != nil || o["structured_output"] != nil {
 					wrapper = o
 				}
 			}
