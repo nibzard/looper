@@ -90,6 +90,7 @@ type model struct {
 	logAttempt  string
 	logTask     string
 	showHistory bool
+	showDetails bool
 }
 
 func RunDashboard(c Controls) (ExitAction, error) {
@@ -279,6 +280,12 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeTail
 		m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.eventText()))
 		m.tailView.GotoBottom()
+		return m, nil
+	case "v":
+		if m.mode == ModeBoard {
+			m.showDetails = !m.showDetails
+			m.scroll = 0
+		}
 		return m, nil
 	case "b":
 		m.mode = ModeBoard
@@ -651,32 +658,38 @@ func elapsed(v *ViewSnapshot) string {
 
 func (m model) boardScreen() string { return m.fitBoard(m.boardContent()) }
 
+// Small windows prioritize a summary. Full text remains available with V.
+func (m model) compactBoard() bool {
+	return !m.showDetails && (m.width < 80 || m.height < 24)
+}
+
+func (m model) boardText(text string) string {
+	text = plainText(text)
+	if m.compactBoard() {
+		return "  " + truncate(text, m.width-2)
+	}
+	return indentText(text, m.width)
+}
+
 func (m model) boardContent() string {
 	var b strings.Builder
+	compact := m.compactBoard()
+	gap := "\n"
+	if compact {
+		gap = ""
+	}
 	b.WriteString(m.header())
 	b.WriteString("\n\n")
 	if m.snap == nil {
 		b.WriteString(dimStyle.Render("No snapshot yet. Waiting for the controller...\n"))
 		return b.String()
 	}
-	if m.snap.State == "planning" {
-		b.WriteString(busyStyle.Render("Latest: "+m.snap.ActivityDetail) + "\n")
-		b.WriteString(dimStyle.Render("Planning task scopes and checks.") + "\n\n")
-	}
 	if len(m.snap.Attempts) > 0 || m.staleView {
 		b.WriteString(sectionStyle.Render("Working") + "\n")
 		for _, a := range m.snap.Attempts {
 			b.WriteString(m.attemptRow(a) + "\n")
 		}
-		b.WriteString("\n")
-	}
-	if len(m.snap.Ready) > 0 {
-		b.WriteString(sectionStyle.Render("Ready · " + countLabel(len(m.snap.Ready), "task")))
-		b.WriteString("\n")
-		for _, t := range m.snap.Ready {
-			b.WriteString(indentText(plainText(t.ID+" "+t.Title), m.width) + "\n")
-		}
-		b.WriteString("\n")
+		b.WriteString(gap)
 	}
 	if len(m.snap.Blocked) > 0 {
 		b.WriteString(blockedStyle.Render("Blocked · " + countLabel(len(m.snap.Blocked), "task")))
@@ -686,14 +699,36 @@ func (m model) boardContent() string {
 			if len(t.Reasons) > 0 {
 				reason = strings.Join(t.Reasons, "; ")
 			}
-			b.WriteString(blockedStyle.Render(indentText(plainText(t.ID+" "+t.Title), m.width)) + "\n")
-			b.WriteString(blockedStyle.Render(indentText("Reason: "+plainText(reason), m.width)) + "\n")
+			b.WriteString(blockedStyle.Render(m.boardText(t.ID+" "+t.Title)) + "\n")
+			b.WriteString(blockedStyle.Render(m.boardText("Reason: "+reason)) + "\n")
 		}
+		b.WriteString(gap)
+	}
+	if len(m.snap.Ready) > 0 {
+		b.WriteString(sectionStyle.Render("Ready · " + countLabel(len(m.snap.Ready), "task")))
 		b.WriteString("\n")
+		for _, t := range m.snap.Ready {
+			b.WriteString(m.boardText(t.ID+" "+t.Title) + "\n")
+		}
+		b.WriteString(gap)
+	}
+	if m.snap.State == "planning" {
+		latest := "Latest: " + plainText(m.snap.ActivityDetail)
+		if compact {
+			latest = truncate(latest, m.width)
+		}
+		b.WriteString(busyStyle.Render(latest) + "\n")
+		if !compact {
+			b.WriteString(dimStyle.Render("Planning task scopes and checks.") + "\n\n")
+		}
 	}
 	b.WriteString(sectionStyle.Render("Recent activity"))
 	b.WriteString("\n")
-	b.WriteString(m.eventTail(5))
+	eventCount := 5
+	if compact {
+		eventCount = 2
+	}
+	b.WriteString(m.eventTail(eventCount))
 	b.WriteString("\n")
 	if m.err != "" {
 		b.WriteString(errorStyle.Render("! "+truncate(m.err, m.width-2)) + "\n")
@@ -730,7 +765,11 @@ func (m model) attemptRow(a AttemptView) string {
 		first += fmt.Sprintf(" · repair %d", a.Repairs)
 	}
 	first = lipgloss.NewStyle().Width(m.width).Render(first)
-	title := lipgloss.NewStyle().Width(max(1, m.width-2)).Render(plainText(a.Title))
+	title := plainText(a.Title)
+	if m.compactBoard() {
+		title = truncate(title, m.width-2)
+	}
+	title = lipgloss.NewStyle().Width(max(1, m.width-2)).Render(title)
 	var lines []string
 	lines = append(lines, strings.Split(first, "\n")...)
 	for _, line := range strings.Split(title, "\n") {
@@ -834,7 +873,15 @@ func (m model) footer() string {
 	if m.selectedAttempt() != "" {
 		nav = "[J/K] Select"
 	}
-	keys = append(keys, "[T] Events", nav, "[?] Help")
+	keys = append(keys, "[T] Events", nav)
+	if m.width < 80 || m.height < 24 || m.showDetails {
+		details := "[V] Details"
+		if m.showDetails {
+			details = "[V] Summary"
+		}
+		keys = append(keys, details)
+	}
+	keys = append(keys, "[?] Help")
 	exit := "[Q] Detach"
 	if m.ctrl.Snapshot != nil && !m.ctrl.ReadOnly {
 		exit = "[Q] Exit"
@@ -868,6 +915,7 @@ RUNNING confirms the controller is active. It does not prove agent progress.
 
 Keys (letters work in either case)
   [J/K], arrows     select workers; scroll at the ends
+  [V]               toggle full board details on small screens
   [PgUp/PgDn]       scroll the board or current view
   [D]               diff of the selected attempt's worktree
   [T/B]             current-run events and board views

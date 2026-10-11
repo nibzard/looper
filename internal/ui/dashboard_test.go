@@ -265,7 +265,7 @@ func TestCapitalShortcutsPreservePlanPathCase(t *testing.T) {
 }
 
 func TestBlockedTaskScrollHintsOnPhone(t *testing.T) {
-	m := model{width: 44, height: 18, snap: &ViewSnapshot{
+	m := model{width: 44, height: 18, showDetails: true, snap: &ViewSnapshot{
 		Blocked: []BlockedView{{ID: "T050", Title: "Add expiry cases", Reasons: []string{
 			strings.Repeat("Expiry needs a configuration decision. ", 12),
 		}}},
@@ -300,5 +300,62 @@ func TestControllerViewReloadsAfterSettings(t *testing.T) {
 	m = next.(model)
 	if m.snap == nil || m.snap.Counters.Done != 64 || m.staleView {
 		t.Fatal("controller snapshot did not reload")
+	}
+}
+
+func TestCompactBoardPrioritizesTasksAndPreservesDetails(t *testing.T) {
+	longTitle := "Audit every route for tenant and workspace isolation including public endpoints"
+	longReason := strings.Repeat("Expiry needs a configuration decision. ", 12) + "END OF REASON"
+	m := model{width: 58, height: 22, snap: &ViewSnapshot{
+		State: "planning", ActivityDetail: "Read " + strings.Repeat("/runtime/worktrees/plan", 8) + "/fixture.ts",
+		ActivityLog: "planner.log", ActivityUpdated: time.Now().Format(time.RFC3339),
+		Counters: ViewCounters{Done: 65, Total: 93, Ready: 5, Blocked: 1},
+		Blocked:  []BlockedView{{ID: "T050", Title: "Add review and expiry cases", Reasons: []string{longReason}}},
+	}}
+	for i := 0; i < 5; i++ {
+		m.snap.Ready = append(m.snap.Ready, TaskView{ID: fmt.Sprintf("T%03d", 55+i), Title: longTitle})
+		m.events = append(m.events, JournalEvent{Message: fmt.Sprintf("Activity %d", i)})
+	}
+	view := m.View()
+	for _, want := range []string{"Blocked · 1 task", "Ready · 5 tasks", "T059", "Latest:", "Activity 4", "[V] Details", "[Q] Detach"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("summary missing %q: %s", want, view)
+		}
+	}
+	if m.maxBoardScroll() != 0 || lipgloss.Width(view) > 58 || lipgloss.Height(view) > 22 {
+		t.Fatalf("summary does not fit: %s", view)
+	}
+	if strings.Contains(view, longTitle) || strings.Contains(view, "END OF REASON") || strings.Contains(view, "Activity 2") {
+		t.Fatalf("summary contains expanded content: %s", view)
+	}
+	if strings.Index(view, "Blocked ·") > strings.Index(view, "Ready ·") || strings.Index(view, "Ready ·") > strings.Index(view, "Latest:") {
+		t.Fatalf("tasks do not precede planner output: %s", view)
+	}
+	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = next.(model)
+	if m.maxBoardScroll() == 0 || !strings.Contains(m.boardContent(), "END OF REASON") || !strings.Contains(m.footer(), "[V] Summary") {
+		t.Fatal("full details are not accessible")
+	}
+	m.scroll = m.maxBoardScroll()
+	next, _ = m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = next.(model)
+	if m.scroll != 0 || m.showDetails {
+		t.Fatal("summary toggle did not reset scrolling")
+	}
+	m.snap.Attempts = []AttemptView{{ID: "attempt", TaskID: "T001", Title: longTitle, Phase: "running"}}
+	content := m.boardContent()
+	if strings.Index(content, "Working") > strings.Index(content, "Blocked ·") {
+		t.Fatal("active work must precede blocked tasks")
+	}
+	for _, size := range [][2]int{{40, 18}, {30, 14}, {100, 20}, {100, 40}, {58, 24}} {
+		next, _ = m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = next.(model)
+		view = m.View()
+		if lipgloss.Width(view) > size[0] || lipgloss.Height(view) > size[1] {
+			t.Fatalf("%v: overflow: %s", size, view)
+		}
+		if size == [2]int{100, 40} && !strings.Contains(m.boardContent(), "END OF REASON") {
+			t.Fatal("large window did not restore full details")
+		}
 	}
 }
