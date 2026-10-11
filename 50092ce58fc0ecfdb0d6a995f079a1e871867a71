@@ -1,0 +1,22 @@
+# Context
+
+## Why This Way
+Observation had to be read-only so a coding agent can watch a run
+without draining it or changing task status. `inspect` therefore
+opens the store with OpenStoreReadonly, and stopping an event
+observer only stops the observer.
+
+## Gotchas
+- Worker log views resolve paths only from the published attempt
+  (LogDir and fixed patterns), never from a path the viewer
+  supplies. This keeps the dashboard from reading arbitrary files.
+- The stream-json output switch applies to new Claude attempts.
+  Existing runs keep their old executable and output mode until
+  restarted normally.
+- Event `data` is absent on older records; consumers must treat it
+  as optional. `progress: "unknown"` means output alone proves
+  nothing, not that the worker failed.
+
+## Related
+- README section "Observe runs from a coding agent"
+- skills/looper-diagnose/SKILL.md closes the feedback loop
