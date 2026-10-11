@@ -365,6 +365,43 @@ type Attempt struct {
 	Diagnosed    bool       `json:"diagnosed,omitempty"`
 	Worktrees    []string   `json:"worktrees"`
 }
+
+// ImportRecord is the durable receipt for one plan import. Receipts are
+// optional state fields: projects without imports serialize exactly as
+// before, and older records load with empty import lists.
+type ImportRecord struct {
+	RequestID        string       `json:"request_id"`
+	Digests          []string     `json:"digests"`
+	Artifacts        []string     `json:"artifacts"`
+	SourcePaths      []string     `json:"source_paths,omitempty"`
+	Status           string       `json:"status"`
+	AddedTasks       []string     `json:"added_tasks,omitempty"`
+	Covered          []CoveredRef `json:"covered,omitempty"`
+	Conflicts        []string     `json:"conflicts,omitempty"`
+	Evidence         string       `json:"evidence,omitempty"`
+	AcceptedRevision string       `json:"accepted_revision,omitempty"`
+	BacklogDigest    string       `json:"backlog_digest,omitempty"`
+	Error            string       `json:"error,omitempty"`
+	Enqueued         string       `json:"enqueued"`
+	Applied          string       `json:"applied,omitempty"`
+}
+
+// CoveredRef records a requirement already satisfied by existing work.
+type CoveredRef struct {
+	Requirement string `json:"requirement"`
+	TaskID      string `json:"task_id,omitempty"`
+	Evidence    string `json:"evidence,omitempty"`
+}
+
+// Import statuses across the durable receipt lifecycle.
+const (
+	ImportQueued   = "queued"
+	ImportWaiting  = "waiting"
+	ImportPlanning = "planning"
+	ImportApplied  = "applied"
+	ImportFailed   = "failed"
+)
+
 type Candidate struct {
 	Base      string `json:"base"`
 	Commit    string `json:"commit"`
@@ -376,27 +413,28 @@ type Candidate struct {
 	Feedback  string `json:"feedback,omitempty"`
 }
 type State struct {
-	Version       int        `json:"version"`
-	Root          string     `json:"root"`
-	Todo          string     `json:"todo"`
-	Head          string     `json:"head"`
-	Branch        string     `json:"branch"`
-	Ref           string     `json:"ref"`
-	Tip           string     `json:"tip"`
-	Published     string     `json:"published"`
-	Backlog       Backlog    `json:"backlog"`
-	ExportHash    string     `json:"export_hash"`
-	ExportBefore  string     `json:"export_before,omitempty"`
-	ExportPending bool       `json:"export_pending,omitempty"`
-	Attempts      []*Attempt `json:"attempts"`
-	Plan          *Plan      `json:"plan,omitempty"`
-	PlanSignature string     `json:"plan_signature,omitempty"`
-	Publication   *Candidate `json:"publication,omitempty"`
-	Finished      bool       `json:"finished"`
-	Integrated    int        `json:"integrated"`
-	ReviewedAt    int        `json:"reviewed_at"`
-	ReviewedTip   string     `json:"reviewed_tip,omitempty"`
-	ReviewPending bool       `json:"review_pending,omitempty"`
+	Version       int             `json:"version"`
+	Root          string          `json:"root"`
+	Todo          string          `json:"todo"`
+	Head          string          `json:"head"`
+	Branch        string          `json:"branch"`
+	Ref           string          `json:"ref"`
+	Tip           string          `json:"tip"`
+	Published     string          `json:"published"`
+	Backlog       Backlog         `json:"backlog"`
+	ExportHash    string          `json:"export_hash"`
+	ExportBefore  string          `json:"export_before,omitempty"`
+	ExportPending bool            `json:"export_pending,omitempty"`
+	Attempts      []*Attempt      `json:"attempts"`
+	Plan          *Plan           `json:"plan,omitempty"`
+	PlanSignature string          `json:"plan_signature,omitempty"`
+	Publication   *Candidate      `json:"publication,omitempty"`
+	Imports       []*ImportRecord `json:"imports,omitempty"`
+	Finished      bool            `json:"finished"`
+	Integrated    int             `json:"integrated"`
+	ReviewedAt    int             `json:"reviewed_at"`
+	ReviewedTip   string          `json:"reviewed_tip,omitempty"`
+	ReviewPending bool            `json:"review_pending,omitempty"`
 }
 
 // Reject unknown plan fields instead of silently dropping user requirements.

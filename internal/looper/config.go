@@ -19,6 +19,7 @@ type Config struct {
 	Plain, Yes, Reset, Detached                                                                                           bool
 	Sources                                                                                                               Sources
 	ProfilePath                                                                                                           string
+	Plans                                                                                                                 []string
 }
 
 // Source records where a setting's effective value came from. Higher values
@@ -228,6 +229,16 @@ func Parse(args []string) (Config, error) {
 			c.Smart = true
 		case "--interleave":
 			flags.apply(flagInterleave, "")
+		case "--plan":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			path, err := filepath.Abs(v)
+			if err != nil {
+				return c, err
+			}
+			c.Plans = append(c.Plans, filepath.Clean(path))
 		case "--jobs", "--check-jobs", "--agent", "--all", "--review-agent", "--model", "--effort", "--max-iterations", "--review-every", "--ls":
 			v, err = value()
 			if err != nil {
@@ -265,6 +276,16 @@ func Parse(args []string) (Config, error) {
 		default:
 			if strings.HasPrefix(a, "-") {
 				return c, fmt.Errorf("unknown option %s", a)
+			}
+			if c.Command == "add-plan" {
+				// The positional argument of add-plan is a plan path, never
+				// a task file, so Markdown cannot be mistaken for a backlog.
+				path, e := filepath.Abs(a)
+				if e != nil {
+					return c, e
+				}
+				c.Plans = append(c.Plans, filepath.Clean(path))
+				continue
 			}
 			c.Todo = a
 		}

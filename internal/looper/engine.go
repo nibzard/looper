@@ -213,8 +213,16 @@ func retained(s *State) bool {
 	return false
 }
 func (e *Engine) initialize(ctx context.Context) error {
+	var bootstrapPlans []capturedPlan
 	if _, err := os.Stat(e.Config.Todo); errors.Is(err, os.ErrNotExist) {
-		if err = e.bootstrap(ctx); err != nil {
+		// A fresh project reads project context and all explicitly supplied
+		// plans together, with a recoverable staging record.
+		if len(e.Config.Plans) > 0 {
+			if bootstrapPlans, err = e.bootstrapStartupPlans(identifier("import")); err != nil {
+				return err
+			}
+		}
+		if err = e.bootstrap(ctx, bootstrapPlans); err != nil {
 			return err
 		}
 	}
@@ -338,10 +346,17 @@ func (e *Engine) initialize(ctx context.Context) error {
 		return err
 	}
 	e.State = &State{Version: 2, Root: e.Config.Root, Todo: e.Config.Todo, Head: head, Branch: branch, Ref: ref, Tip: seed, Published: tree, Backlog: b, ExportHash: digest(data), Attempts: []*Attempt{}}
-	return e.save()
+	// Fresh state adopts staged bootstrap imports so restarts never import
+	// them twice.
+	e.adoptStagedImports()
+	if err := e.save(); err != nil {
+		return err
+	}
+	e.startupImportPlans()
+	return nil
 }
 
-func (e *Engine) bootstrap(ctx context.Context) error {
+func (e *Engine) bootstrap(ctx context.Context, plans []capturedPlan) error {
 	head, _ := e.Repo.Head()
 	tree, err := e.Repo.Snapshot(e.Config.Root)
 	if err != nil {
@@ -364,6 +379,13 @@ func (e *Engine) bootstrap(ctx context.Context) error {
 Return one JSON object: {"schema_version":1,"goal":"the existing project's intended outcome","source_files":["relative requirements files"],"tasks":[{"id":"T001","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":[]}]}.
 Only plan work grounded in the existing requirements. Include setup and executable verification where missing.
 Use dependencies. Separate external prerequisites from implementable work. Do not modify any files.`
+	supplied := ""
+	for _, p := range plans {
+		supplied += "\n--- Explicitly supplied plan document (" + p.Path + ") ---\n" + p.Text
+	}
+	if supplied != "" {
+		prompt += "\nThese plan documents are part of the project requirements and must be covered exactly once:" + supplied
+	}
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
 	if err != nil {
 		return err
@@ -405,7 +427,7 @@ func (e *Engine) plan(ctx context.Context) error {
 	defer e.Repo.Remove(work)
 	op := e.capture()
 	e.event("plan", "Planning independent tasks and executable checks...")
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog), false)
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog, e.importedScope()), false)
 	if err != nil {
 		return err
 	}
@@ -459,7 +481,7 @@ type resultReceipt struct {
 	Commit   string  `json:"commit"`
 }
 
-func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog, p Plan) (r workerResult) {
+func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog, p Plan, importedScope string) (r workerResult) {
 	r.ID = a.ID
 	defer func() {
 		if r.Err == nil && r.Summary != nil {
@@ -475,7 +497,7 @@ func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog
 		}
 		feedback += "\nWorkspace setup failed. Diagnose and repair the setup before completing the task. If it requires an external prerequisite, report blocked.\nCommand: " + p.Setup + "\n" + logTail(filepath.Join(dir, "setup.log"))
 	}
-	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, feedback), true)
+	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, feedback, importedScope), true)
 	var summary Summary
 	if err == nil {
 		if err = json.Unmarshal(raw, &summary); err == nil {
@@ -683,6 +705,7 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult) {
 	e.event("start", a.Task.ID+"  "+a.Task.Title)
 	snapshot, backlog, plan := clone(*a), clone(e.State.Backlog), clone(*e.State.Plan)
+	scope := e.importedScope()
 	op := e.capture()
 	e.wg.Add(1)
 	go func() {
@@ -693,7 +716,7 @@ func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult
 			workerCtx, cancel = context.WithTimeout(ctx, op.config.Timeout)
 		}
 		defer cancel()
-		result := e.execute(workerCtx, op, snapshot, backlog, plan)
+		result := e.execute(workerCtx, op, snapshot, backlog, plan, scope)
 		select {
 		case out <- result:
 		case <-ctx.Done():

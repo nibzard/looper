@@ -287,7 +287,9 @@ type SettingsRequest struct {
 	ProfileDigest string                     `json:"profile_digest,omitempty"`
 	Fields        map[string]json.RawMessage `json:"fields,omitempty"`
 	Reset         bool                       `json:"reset,omitempty"`
-	CreatedAt     string                     `json:"created_at,omitempty"`
+	// Paths carries plan-import payloads on the same typed transport.
+	Paths     []string `json:"paths,omitempty"`
+	CreatedAt string   `json:"created_at,omitempty"`
 }
 
 // SettingsAck reports a processed request. Clients read their own

@@ -185,7 +185,7 @@ func resourceEnv(dir string) map[string]string {
 	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir, "TMPDIR": tmp}
 }
 
-func workerPrompt(b Backlog, t Task, feedback string) string {
+func workerPrompt(b Backlog, t Task, feedback, importedScope string) string {
 	data, _ := json.MarshalIndent(t, "", "  ")
 	sources, _ := json.Marshal(b.Sources)
 	p := fmt.Sprintf(`Complete task %s: %s.
@@ -202,15 +202,18 @@ Return JSON: task_id, status (done or blocked), summary, files (array), blockers
 followups (array of title, details, evidence, depends_on, priority), and unblock_when (string).
 Capture concrete missing work in followups; do not invent unrelated product goals.
 `, t.ID, t.Title, sources, b.Goal, data)
+	if importedScope != "" {
+		p += "\nImported requirements in scope for this product:\n" + importedScope
+	}
 	if feedback != "" {
 		p += "\nRepair the task using the retained code and this evidence. Inspect existing edits before changing them.\n" + feedback
 	}
 	return p
 }
 
-func planPrompt(b Backlog) string {
+func planPrompt(b Backlog, importedScope string) string {
 	data, _ := json.Marshal(b)
-	return `Plan execution for Looper. Read repository instructions and the source_files in this backlog:
+	p := `Plan execution for Looper. Read repository instructions and the source_files in this backlog:
 ` + string(data) + `
 Do not change any files. Return JSON with setup (shell command or empty string), verify (shell command),
 and tasks [{task_id, write_paths: [relative file or directory prefixes], resources: [shared interface names]}].
@@ -220,4 +223,8 @@ Checks must execute meaningful acceptance checks for the combined product; a no-
 Commands receive LOOPER_RESOURCE_PREFIX and TMPDIR unique to the operation. Isolate databases and bind free ports.
 Tasks sharing public interfaces or migration ordering need the same resource name, even if files differ.
 Do not create tasks or change requirements. Use existing commands and lockfiles where available.`
+	if importedScope != "" {
+		p += "\nImported requirements in scope for this product:\n" + importedScope
+	}
+	return p
 }

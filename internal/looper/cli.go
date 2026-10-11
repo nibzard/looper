@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,10 @@ var Version = "dev"
 const help = `Looper — continuous local development
 
 Usage: looper [run] [task-file] [options]
+       looper start [--plan <path>...]
+       looper tui [--plan <path>...]
+       looper attach
+       looper add-plan <path> [...]
        looper status [--json]
        looper stop
        looper tail [--follow]
@@ -28,6 +33,7 @@ The first interactive run in a project asks three setup questions and saves the
 answers to runtime/profile.json; looper config edits that profile.
 
 Options:
+  --plan <path>          Add Markdown requirements at startup; repeatable
   --jobs auto|N          Maximum concurrent workers (default: auto)
   --check-jobs N         Concurrent setup and checks (default: 1)
   --agent codex|claude   Coding agent (default: codex)
@@ -80,11 +86,14 @@ func Main(args []string, out, stderr io.Writer) int {
 	}
 	switch c.Command {
 	case "add-plan":
-		fmt.Fprintln(stderr, c.Command+" is not available in this build yet.")
-		return 2
+		return runAddPlan(c, out, stderr)
 	case "tui":
 		return runTUI(c, out, stderr)
 	case "attach":
+		if len(c.Plans) > 0 {
+			fmt.Fprintln(stderr, "read-only attach does not accept --plan; use looper tui or looper add-plan")
+			return 2
+		}
 		return runAttach(c, out, stderr, false)
 	}
 	// SIGTERM drains like `looper stop`; SIGINT cancels with retained work.
@@ -131,6 +140,11 @@ func Main(args []string, out, stderr io.Writer) int {
 	if c.Command == "start" {
 		return StartDetached(c, out, stderr)
 	}
+	if len(c.Plans) > 0 && repositoryOwned(c) {
+		fmt.Fprintln(stderr, "A controller already owns this repository.")
+		fmt.Fprintln(stderr, "Submit the plans with: looper add-plan <path>")
+		return 1
+	}
 	profileAtStart := profileDigest(c.ProfilePath)
 	e, lock, err := NewEngine(c, out)
 	if err != nil {
@@ -153,6 +167,69 @@ func Main(args []string, out, stderr io.Writer) int {
 		}
 	}
 	return code
+}
+
+// runAddPlan submits additional requirements to the active controller.
+// Without a controller it suggests the startup path.
+func runAddPlan(c Config, out, stderr io.Writer) int {
+	if len(c.Plans) == 0 {
+		fmt.Fprintln(stderr, "usage: looper add-plan <plan-file> [...]")
+		return 2
+	}
+	if !repositoryOwned(c) {
+		fmt.Fprintln(stderr, "No active run. Start one with: looper")
+		fmt.Fprintln(stderr, "Or add the plan at startup: looper --plan <path>")
+		return 1
+	}
+	_, dir := projectPaths(c)
+	info, err := readController(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, "A controller owns this repository, but its metadata cannot be verified:", err)
+		return 1
+	}
+	id, err := submitPlanImport(dir, info.Session, c.Plans)
+	if err != nil {
+		fmt.Fprintln(stderr, "Error:", err)
+		return 1
+	}
+	if c.JSON {
+		ack, err := waitForPlanImport(dir, id, 60*time.Second)
+		if err != nil {
+			json.NewEncoder(out).Encode(planImportAck{ID: id, Status: ImportQueued, Error: err.Error()})
+			return 0
+		}
+		json.NewEncoder(out).Encode(*ack)
+		if ack.Status == ImportApplied {
+			return 0
+		}
+		return 1
+	}
+	fmt.Fprintln(out, "Queued", strings.Join(c.Plans, ", "))
+	fmt.Fprintln(out, "Request:", id)
+	ack, err := waitForPlanImport(dir, id, 10*time.Minute)
+	if err != nil {
+		fmt.Fprintln(out, err)
+		return 0
+	}
+	switch ack.Status {
+	case ImportApplied:
+		fmt.Fprintf(out, "Applied: %d task(s) added", len(ack.AddedTasks))
+		if len(ack.AddedTasks) > 0 {
+			fmt.Fprintln(out, ":", strings.Join(ack.AddedTasks, ", "))
+		} else {
+			fmt.Fprintln(out)
+		}
+		for _, ref := range ack.Covered {
+			fmt.Fprintf(out, "Covered: %s -> %s %s\n", ref.Requirement, ref.TaskID, ref.Evidence)
+		}
+		return 0
+	default:
+		fmt.Fprintln(stderr, "Import", ack.Status+":", ack.Error)
+		for _, conflict := range ack.Conflicts {
+			fmt.Fprintln(stderr, " conflict:", conflict)
+		}
+		return 1
+	}
 }
 func doctor(c Config, out io.Writer) int {
 	mode := DetectMode(os.Stdin, out, c.Plain)
