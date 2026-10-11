@@ -1,0 +1,10 @@
+# Context
+
+## Why This Way
+availableMemory() can drop dispatch capacity to one worker on
+a busy machine, which would make "exactly one attempt
+running" pass for the wrong reason. Pinning --jobs 2 keeps the
+fixture's meaning independent of machine state.
+
+## Related
+- Fix under test: cee2201
