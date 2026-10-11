@@ -1,0 +1,25 @@
+# Design: product positioning
+
+## Problem
+The README opened with mechanism ("keeps a local development
+process running"). The phrase carried a laptop picture, did not say
+who the tool is for, and did not say what it refuses.
+
+## Approach
+Claim the loop, not the orchestrator category. The practices report
+(2026-10-11) documents the orchestrator category churning out and
+dying when harnesses absorb it. The README names the machines
+(laptop, server, headless VM) because unattended loops belong on
+servers; the dev machine runs Looper controllers exactly that way.
+PRODUCT.md now records target, wedge, and refusals.
+
+Named-tool comparison sections ("Looper vs X") were deliberately
+rejected: capability claims age, comparative claims rot, and the
+dated research report already owns the comparison.
+
+## Key Trade-offs
+- "No opinions" is stated as a split: none about code, models, or
+  process; strong ones about the loop. The unqualified claim is
+  false (JSON task schema, publish gate, review cadence).
+- Greenfield is named as best fit, not only fit; mature repos keep
+  pull requests as their own choice.
