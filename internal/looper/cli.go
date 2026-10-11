@@ -130,14 +130,29 @@ func Main(args []string, out, stderr io.Writer) int {
 	return code
 }
 func doctor(c Config, out io.Writer) int {
+	p := NewPresenter(DetectMode(os.Stdin, out, c.Plain), out, func() int {
+		if f, ok := out.(*os.File); ok {
+			return terminalWidth(f)
+		}
+		return 0
+	})
 	code := 0
-	for _, name := range []string{"git", "bash", map[string]string{"codex": c.CodexBin, "claude": c.ClaudeBin}[c.Agent], map[string]string{"codex": c.CodexBin, "claude": c.ClaudeBin}[c.ReviewAgent]} {
-		path, err := exec.LookPath(name)
+	agentBin := map[string]string{"codex": c.CodexBin, "claude": c.ClaudeBin}
+	checks := []struct{ name, hint string }{
+		{"git", "install Git and make sure git is on PATH"},
+		{"bash", "install Bash or point LOOPER_* commands at another shell"},
+		{agentBin[c.Agent], "install " + c.Agent + " or set " + map[string]string{"codex": "CODEX_BIN", "claude": "CLAUDE_BIN"}[c.Agent]},
+	}
+	if c.ReviewAgent != c.Agent {
+		checks = append(checks, struct{ name, hint string }{agentBin[c.ReviewAgent], "install " + c.ReviewAgent + " or set " + map[string]string{"codex": "CODEX_BIN", "claude": "CLAUDE_BIN"}[c.ReviewAgent]})
+	}
+	for _, check := range checks {
+		path, err := exec.LookPath(check.name)
 		if err != nil {
-			fmt.Fprintln(out, "Missing:", name)
+			p.DoctorLine(false, check.name, check.hint)
 			code = 1
 		} else {
-			fmt.Fprintln(out, "Found:", path)
+			p.DoctorLine(true, path, check.hint)
 		}
 	}
 	var b Backlog
@@ -145,9 +160,11 @@ func doctor(c Config, out io.Writer) int {
 		fmt.Fprintln(out, "Backlog: created from project requirements on first run")
 	} else if err != nil {
 		fmt.Fprintln(out, "Backlog:", err)
+		fmt.Fprintln(out, "  Fix: repair the task file or remove it to plan from requirements")
 		code = 1
 	} else if err = b.Validate(); err != nil {
 		fmt.Fprintln(out, "Backlog:", err)
+		fmt.Fprintln(out, "  Fix: repair the reported task or dependency in", c.Todo)
 		code = 1
 	} else {
 		fmt.Fprintf(out, "Backlog: %d tasks, %d ready\n", len(b.Tasks), len(b.Ready()))
@@ -192,6 +209,10 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 				fmt.Fprintf(out, "%s  %s  %s\n", t.ID, t.Status, t.Title)
 			}
 		}
+		if DetectMode(os.Stdin, out, c.Plain) == ModeInteractive {
+			NewPresenter(ModeInteractive, out, func() int { return terminalWidth(fileOf(out)) }).StatusBoard(s, path)
+			return nil
+		}
 		fmt.Fprintf(out, "Backlog: %d/%d complete | %d ready | %d blocked\n", done, total, len(s.Backlog.Ready()), blocked)
 		for _, t := range s.Backlog.Tasks {
 			if t.Status == "blocked" {
@@ -205,6 +226,7 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 		return nil
 	}
 	var after int64
+	follow := NewPresenter(DetectMode(os.Stdin, out, c.Plain), out, func() int { return terminalWidth(fileOf(out)) })
 	for {
 		events, err := store.Events(after)
 		if err != nil {
@@ -215,6 +237,8 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 				if err = json.NewEncoder(out).Encode(e); err != nil {
 					return err
 				}
+			} else if follow.Mode == ModeInteractive {
+				follow.StoredEvent(e)
 			} else {
 				fmt.Fprintln(out, e.Message)
 			}

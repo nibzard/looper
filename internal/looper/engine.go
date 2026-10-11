@@ -27,6 +27,7 @@ type Engine struct {
 	Agent               Agent
 	Dir, Logs           string
 	Output              io.Writer
+	Render              *Presenter
 	checkSlots          chan struct{}
 	wg                  sync.WaitGroup
 	capacity, successes int
@@ -76,7 +77,17 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 			}
 		}
 	}
-	return &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}, lock, nil
+	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}
+	if !c.JSON {
+		width := func() int {
+			if f, ok := out.(*os.File); ok {
+				return terminalWidth(f)
+			}
+			return 0
+		}
+		engine.Render = NewPresenter(DetectMode(os.Stdin, out, c.Plain), out, width)
+	}
+	return engine, lock, nil
 }
 func (e *Engine) event(kind, message string) {
 	if e.err != nil {
@@ -89,6 +100,8 @@ func (e *Engine) event(kind, message string) {
 	if e.Config.JSON {
 		b, _ := json.Marshal(Event{Time: time.Now().UTC().Format(time.RFC3339), Kind: kind, Message: message})
 		fmt.Fprintln(e.Output, string(b))
+	} else if e.Render != nil {
+		e.Render.Event(kind, message)
 	} else {
 		fmt.Fprintln(e.Output, message)
 	}
