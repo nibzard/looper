@@ -59,7 +59,7 @@ Where Looper exceeds its own needs:
 
 - The recovery, settings, and import machinery goes beyond the ecosystem
   norm. The code map found dead generality: an attempt phase that is compared
-  in eight places but never assigned, import fields that are written but
+  in nine places but never assigned, import fields that are written but
   never read, a flag-replay layer, and legacy aliases carried from the Bash
   era. Section 7 lists them.
 - The strategic risk is absorption, not competition. Native runtimes now
@@ -289,27 +289,37 @@ where the implementation carries more than it uses.
 
 | Item | Location | Finding | Suggested action |
 |---|---|---|---|
-| `abandoned` attempt phase | `run.go:269,331`; `engine.go:213,303,597`; `imports.go:328`; `view.go:50,68`; `observe.go:49` | Compared in eight places, never assigned | Remove the phase or implement it; removal is simpler |
-| `ImportRecord.Evidence`, `AcceptedRevision`, `BacklogDigest` | `types.go:381-383`; `imports.go:375-377` | Written, never read | Wire them into the "inputs still match" check or stop persisting |
+| `abandoned` attempt phase | `run.go:269,331`; `engine.go:213,303,597`; `imports.go:328`; `view.go:50,68`; `observe.go:49` | Compared in nine places, never assigned | Normalize legacy phase values at load, then remove the comparisons |
+| `ImportRecord.Evidence`, `AcceptedRevision`, `BacklogDigest` | `types.go:381-383`; `imports.go:375-377` | Receipt fields written, never read; the drift check itself exists inline (`imports.go:355,365`) | Drop the fields or read them in replay and doctor output |
 | `Backlog.Project`, `Task.Steps` | `types.go:21,32` | Accepted by the schema, never read by the engine | Remove from the schema or use them |
 | Flag replay layer | `config.go:91-113,349-379` | Exists only to preserve last-flag-wins ordering | Replace with a simple map |
 | Double check limiting | `engine.go:40,468-479`; `run.go:159` | Semaphore plus a length check bound the same thing | Keep the semaphore, delete the length check |
 | Legacy aliases | `--smart`, `--interleave`, `--all`, `--ls` | Bash-era compatibility, documented as aliases | Time-box to a removal release |
-| Live-settings protocol | `settings.go:281-703` | 422 lines of request, claim, validate, ack files | Consider: controller reads the profile at loop boundaries and reports outcomes as events; keep ack files only if concurrent editors are a real case |
+| Live-settings protocol | `settings.go:281-703` | 423 lines of request, claim, validate, ack files | Consider: controller reads the profile at loop boundaries and reports outcomes as events; keep ack files only if concurrent editors are a real case |
 | Legacy migration | `migration.go` (120 lines) | One-shot import of the Python controller's state | Time-box to a removal release |
 | Measuretwice adapter | `adapters/measuretwice` | Optional, advisory, unvalidated | Freeze until the pilot runs; cut if the core claim stands without it |
 | Toolchain pin | `go.mod` | go1.22 pins huh v0.6.0 and bubbletea v1.1.0; newer Charm releases need go1.23 | Either plan the toolchain bump or freeze UI feature work |
 
 None of these break behavior. All of them add surface that a future
-maintainer must understand. The manifestos' rule applies: remove them or
+maintainer must understand. The manifesto's rule applies: remove them or
 wire them.
+
+Actions on 2026-10-11: row one is removed (the dead phase, with the phase
+set documented on the `Attempt` type); row two is removed (the unread
+receipt fields; the refreshed-baseline regression test keeps its assertion
+on the state tip); row four is replaced by inline replay functions with
+identical ordering semantics. Row five is not a duplicate: the semaphore
+bounds concurrent shell commands across workers and checks together, while
+the chain bound limits speculative checks. A comment now records that at
+`Engine.command`. Row three stays, because `steps` and `project` are
+documented task-file fields. Rows six and later remain open decisions.
 
 The think-heavy surface, measured against Krug's rule (see `MANIFESTO.md`):
 
 - Good: one default command; a three-question first-run form; plain output
   when piped; color never the only signal; case-insensitive letter keys; a
   doctor command with fix hints.
-- Heavy: 25 flags, about 27 environment variables, and 15 subcommands; four
+- Heavy: 25 flags, about 27 environment variables, and 14 subcommands; four
   settings states (saved, applied, overridden, restart); four import states;
   `Q` semantics that depend on mode. Documentation covers all of it, but
   each state a user must hold in mind is a cost. The lever is fewer states,
