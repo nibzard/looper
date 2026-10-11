@@ -32,6 +32,8 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 	}
 	v := ui.ViewSnapshot{
 		Version: ui.ViewVersion, Goal: e.State.Backlog.Goal,
+		Project: filepath.Base(e.Config.Root), Tasks: make([]ui.TaskView, 0),
+		WorkerLimit: e.capacity, CheckLimit: e.Config.Checks,
 		Now:         time.Now().UTC().Format(time.RFC3339),
 		EventCursor: e.eventCursor,
 		State:       e.activity, ActivityDetail: e.activityDetail, ActivityLog: e.activityLog, ActivityUpdated: e.activityUpdated,
@@ -50,10 +52,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 			case "done", "blocked":
 				continue
 			}
-			v.Attempts = append(v.Attempts, ui.AttemptView{
-				ID: a.ID, TaskID: a.Task.ID, Title: a.Task.Title, Phase: a.Phase,
-				Agent: a.Agent, Repairs: a.Repairs, Base: a.Base, Worktree: a.Worktree, LogDir: a.Directory,
-			})
+			v.Attempts = append(v.Attempts, attemptView(a))
 			switch a.Phase {
 			case "verifying":
 				v.Counters.Checking++
@@ -74,10 +73,40 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 			}
 		}
 		for _, t := range e.State.Backlog.Tasks {
+			if t.Marker() {
+				continue
+			}
+			tv := taskView(t, e.State.Backlog)
+			// Full acceptance text is loaded only when the inspector opens.
+			tv.Details = ""
+			for i := len(e.State.Attempts) - 1; i >= 0; i-- {
+				if a := e.State.Attempts[i]; a.Task.ID == t.ID {
+					av := attemptView(a)
+					tv.Attempt = &av
+					break
+				}
+			}
+			v.Tasks = append(v.Tasks, tv)
 			if t.Status != "blocked" {
 				continue
 			}
-			v.Blocked = append(v.Blocked, ui.BlockedView{ID: t.ID, Title: t.Title, Reasons: t.Blockers})
+			v.Blocked = append(v.Blocked, ui.BlockedView{ID: t.ID, Title: t.Title, Reasons: append([]string(nil), t.Blockers...), UnblockWhen: t.UnblockWhen})
+		}
+	}
+	return v
+}
+
+func attemptView(a *Attempt) ui.AttemptView {
+	return ui.AttemptView{ID: a.ID, TaskID: a.Task.ID, Title: a.Task.Title, Phase: a.Phase,
+		Agent: a.Agent, Repairs: a.Repairs, Repeats: a.Repeats, Base: a.Base, Worktree: a.Worktree, LogDir: a.Directory}
+}
+
+func taskView(t Task, b Backlog) ui.TaskView {
+	v := ui.TaskView{ID: t.ID, Title: t.Title, Status: t.Status, Revision: hashJSON(t), Details: t.Details,
+		DependsOn: append([]string(nil), t.DependsOn...), Blockers: append([]string(nil), t.Blockers...), UnblockWhen: t.UnblockWhen}
+	for _, id := range t.DependsOn {
+		if dep := b.Task(id); dep == nil || dep.Status != "done" {
+			v.WaitingOn = append(v.WaitingOn, id)
 		}
 	}
 	return v

@@ -286,6 +286,7 @@ const SettingsRequestVersion = 1
 const (
 	RequestTypeSettings   = "settings"
 	RequestTypePlanImport = "plan-import"
+	RequestTypeRequeue    = "requeue"
 )
 
 // SettingsRequest is a typed controller request written atomically to
@@ -299,8 +300,10 @@ type SettingsRequest struct {
 	Fields        map[string]json.RawMessage `json:"fields,omitempty"`
 	Reset         bool                       `json:"reset,omitempty"`
 	// Paths carries plan-import payloads on the same typed transport.
-	Paths     []string `json:"paths,omitempty"`
-	CreatedAt string   `json:"created_at,omitempty"`
+	Paths        []string `json:"paths,omitempty"`
+	CreatedAt    string   `json:"created_at,omitempty"`
+	TaskID       string   `json:"task_id,omitempty"`
+	TaskRevision string   `json:"task_revision,omitempty"`
 }
 
 // SettingsAck reports a processed request. Clients read their own

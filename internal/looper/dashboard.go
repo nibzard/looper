@@ -72,10 +72,11 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	}
 	defer observer.Close()
 	controls := ui.Controls{
+		Inspect:   observer.inspect,
 		WorkerLog: func(id string) (string, string, error) { return workerLog(dir, id) },
 		Log:       func(path string) (string, error) { return plannerLog(dir, path) },
 		Snapshot:  e.viewNotify,
-		Poll:      func() *ui.ViewSnapshot { return LoadView(dir) },
+		Poll:      func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
 		Events:    observer.events,
 		Diff:      func(id string) (string, error) { return attemptDiff(dir, id) },
 		Done: func() bool {
@@ -92,6 +93,7 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 		return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
 	}
 	controls.Drain = drain
+	controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }
 	controls.AddPlan = func(path string) error {
 		planPath, err := filepath.Abs(path)
 		if err != nil {
@@ -211,35 +213,58 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	}
 	defer observer.Close()
 	controls := ui.Controls{
+		Inspect:   observer.inspect,
 		WorkerLog: func(id string) (string, string, error) { return workerLog(dir, id) },
 		Log:       func(path string) (string, error) { return plannerLog(dir, path) },
-		Poll: func() *ui.ViewSnapshot {
-			v := LoadView(dir)
-			if v == nil || v.Session != info.Session {
-				return nil
-			}
-			return v
-		},
-		Events:   observer.events,
-		ReadOnly: !withControls,
-		Diff:     func(id string) (string, error) { return attemptDiff(dir, id) },
+		Poll:      func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
+		Events:    observer.events,
+		ReadOnly:  !withControls,
+		Diff:      func(id string) (string, error) { return attemptDiff(dir, id) },
 	}
 	if withControls {
+		controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }
 		controls.Drain = func() error {
+			current, err := readController(dir)
+			if err != nil || current.Session != info.Session || !dashboardControllerAlive(current) {
+				return fmt.Errorf("The controller session changed. Detach and reconnect before requesting a drain.")
+			}
 			return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
 		}
+		controls.AddPlan = func(path string) error {
+			absolute, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			_, err = submitPlanImport(dir, info.Session, []string{absolute})
+			return err
+		}
 	}
-	_, err = ui.RunDashboard(controls)
-	if err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+	for {
+		action, err := ui.RunDashboard(controls)
+		if err != nil {
+			fmt.Fprintln(stderr, "Error:", err)
+			return 1
+		}
+		if action.Kind != "settings" {
+			break
+		}
+		notice, err := submitSettingsFromForm(c, dir, info.Session, os.Stdin)
+		if err != nil {
+			controls.Notice = "settings: " + err.Error()
+		} else {
+			controls.Notice = notice
+		}
 	}
 	return 0
 }
 
 // observer pages the event journal through a read-only store connection.
 type observer struct {
-	store *Store
+	store       *Store
+	pace        *ui.PaceView
+	paceAt      time.Time
+	paceSession string
+	outcomes    []ui.JournalEvent
 }
 
 func openObserver(dir string) (*observer, error) {
@@ -272,7 +297,7 @@ func attemptDiff(dir, attemptID string) (string, error) {
 	if v == nil {
 		return "", fmt.Errorf("no published dashboard state")
 	}
-	for _, a := range v.Attempts {
+	for _, a := range dashboardAttempts(v) {
 		if a.ID != attemptID {
 			continue
 		}
@@ -351,14 +376,15 @@ func workerLog(dir, id string) (string, string, error) {
 		return "", "", fmt.Errorf("No active run. Return to the board for status.")
 	}
 	var attempt *ui.AttemptView
-	for i := range view.Attempts {
-		if view.Attempts[i].ID == id {
-			attempt = &view.Attempts[i]
+	attempts := dashboardAttempts(view)
+	for i := range attempts {
+		if attempts[i].ID == id {
+			attempt = &attempts[i]
 			break
 		}
 	}
 	if attempt == nil {
-		return "", "", fmt.Errorf("This task is no longer active. Return to the board for its result.")
+		return "", "", fmt.Errorf("No retained logs for this attempt. Inspect the task for its result.")
 	}
 	root := attempt.LogDir
 	if root == "" {
@@ -370,6 +396,9 @@ func workerLog(dir, id string) (string, string, error) {
 	patterns := []string{"work-*/setup.log", "work-*/events-*.jsonl", "work-*/report-recovery/events-*.jsonl"}
 	if attempt.Phase == "verifying" {
 		patterns = []string{"checks/*/setup.log", "checks/*/verify.log"}
+	}
+	if attempt.Phase == "done" || attempt.Phase == "blocked" {
+		patterns = append(patterns, "checks/*/setup.log", "checks/*/verify.log")
 	}
 	var newest string
 	var stamp time.Time

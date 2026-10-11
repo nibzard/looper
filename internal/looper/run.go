@@ -65,6 +65,10 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 		if e.err != nil {
 			return 1, e.err
 		}
+		e.processRequeueRequests()
+		if e.err != nil {
+			return 1, e.err
+		}
 		e.processPlanImports(ctx)
 		if e.err != nil {
 			return 1, e.err
