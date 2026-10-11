@@ -71,27 +71,20 @@ func (s *Store) Check(attempt, revision, kind, result, artifact string) error {
 	return err
 }
 func (s *Store) Events(after int64) ([]Event, error) {
-	rows, err := s.db.Query("SELECT id,time,kind,message FROM events WHERE id>? ORDER BY id", after)
+	rows, err := s.db.Query("SELECT id,time,kind,message,data FROM events WHERE id>? ORDER BY id", after)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Event
-	for rows.Next() {
-		var e Event
-		if err = rows.Scan(&e.ID, &e.Time, &e.Kind, &e.Message); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return scanEvents(rows)
 }
 
 type Event struct {
-	ID      int64  `json:"id"`
-	Time    string `json:"time"`
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	ID      int64           `json:"id"`
+	Time    string          `json:"time"`
+	Kind    string          `json:"kind"`
+	Message string          `json:"message"`
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

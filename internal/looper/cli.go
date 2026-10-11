@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -24,7 +26,9 @@ Usage: looper [run] [task-file] [options]
        looper status [--json]
        looper stop
        looper tail [--follow]
-       looper doctor
+       looper events [--json] [--follow] [--after <event-id>]
+       looper inspect <task-id> [--json]
+       looper doctor [--json]
        looper config [--reset]
 
 Run again to resume retained work. The default run waits for new work when idle.
@@ -99,8 +103,17 @@ func Main(args []string, out, stderr io.Writer) int {
 	// SIGTERM drains like `looper stop`; SIGINT cancels with retained work.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	installControllerSignals(c, cancel)
+	if controllerStart(c.Command) {
+		installControllerSignals(c, cancel)
+	} else {
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+	}
 	if c.Command == "doctor" {
+		if c.JSON {
+			return doctorJSON(c, out)
+		}
 		return doctor(c, out)
 	}
 	if c.Command == "config" {
@@ -119,7 +132,7 @@ func Main(args []string, out, stderr io.Writer) int {
 		fmt.Fprintln(out, "Stop requested. Active work will drain.")
 		return 0
 	}
-	if c.Command == "status" || c.Command == "tail" {
+	if c.Command == "status" || c.Command == "tail" || c.Command == "events" || c.Command == "inspect" {
 		if err = inspect(ctx, c, out); err != nil {
 			fmt.Fprintln(stderr, "Error:", err)
 			return 1
@@ -283,11 +296,14 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("no saved run; start looper first")
 	}
-	store, err := OpenStore(path)
+	store, err := OpenStoreReadonly(path)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	if c.Command == "inspect" {
+		return inspectTask(c, store, out)
+	}
 	if c.Command == "status" {
 		s, err := store.Load()
 		if err != nil {
@@ -297,7 +313,7 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 			return fmt.Errorf("no saved run")
 		}
 		if c.JSON {
-			return json.NewEncoder(out).Encode(s)
+			return json.NewEncoder(out).Encode(statusReport(c, s))
 		}
 		done, blocked, total := 0, 0, 0
 		for _, t := range s.Backlog.Tasks {
@@ -331,10 +347,10 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 		fmt.Fprintln(out, "State:", path)
 		return nil
 	}
-	var after int64
+	after := c.After
 	follow := NewPresenter(DetectMode(os.Stdin, out, c.Plain), out, func() int { return terminalWidth(fileOf(out)) })
 	for {
-		events, err := store.Events(after)
+		events, err := store.RecentEvents(after, 500)
 		if err != nil {
 			return err
 		}
@@ -349,6 +365,9 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 				fmt.Fprintln(out, sanitize(e.Message))
 			}
 			after = e.ID
+		}
+		if len(events) == 500 {
+			continue
 		}
 		if !c.Follow {
 			return nil

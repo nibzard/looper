@@ -35,6 +35,8 @@ type Engine struct {
 	viewNotify          chan ui.ViewSnapshot
 	eventCursor         int64
 	viewDirty           bool
+	workerReaders       map[string]*plannerActivityReader
+	lastObservation     time.Time
 	checkSlots          chan struct{}
 	wg                  sync.WaitGroup
 	capacity, successes int

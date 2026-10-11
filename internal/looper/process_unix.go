@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -118,6 +119,14 @@ func runProcess(ctx context.Context, cwd, logfile string, args []string, input i
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	identity, _ := runIdentityCommand(cmd.Process.Pid)
+	record := ProcessObservation{PID: cmd.Process.Pid, Identity: identity, Started: time.Now().UTC().Format(time.RFC3339Nano), Running: true}
+	_ = writeJSON(logfile+".process.json", record)
+	defer func() {
+		record.Running = false
+		record.Ended = time.Now().UTC().Format(time.RFC3339Nano)
+		_ = writeJSON(logfile+".process.json", record)
+	}()
 	read.Close()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()

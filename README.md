@@ -52,8 +52,10 @@ child processes and retains partial work. Run `looper` again to resume.
 ## Dashboard and mobile terminals
 
 Start the terminal user interface (TUI) with `looper tui`. It starts a controller
-or attaches to the active run. The header separates run state from current
-activity, for example `RUNNING · PLANNING`.
+or attaches to the active run. The header shows run state, elapsed time,
+completion, and active worker counts.
+Each worker has a separate row for its task ID, phase, and wrapped title.
+Planning and review activity appear when no workers are active.
 
 | State | Color | Meaning |
 | --- | --- | --- |
@@ -66,15 +68,20 @@ activity, for example `RUNNING · PLANNING`.
 
 Text labels remain visible without color. There is no pause command.
 
+Shortcut labels use brackets, such as **[L] Logs** and **[Q] Exit**.
+Letter shortcuts accept lowercase and uppercase keys. You do not need Shift.
+
 | Key | Action |
 | --- | --- |
-| `l` or `L` | Open the planner activity log. The footer shows `[L] logs`. |
-| `t` / `b` | Open events / return to the board. |
-| `j` / `k`, arrows | Scroll; on the board, also move the task selection. |
-| `d` | Show the selected task’s diff. |
-| `a` / `s` | Add a plan / open settings when controls are available. |
-| `x` | Request a drain: stop new dispatch and finish current work. |
-| `q` | Detach an observer or open the controller exit choices. |
+| `L` | Open the selected worker’s log, or the planner log while planning. |
+| `T` / `B` | Open current-run events / return to the board. |
+| `H` | In the events view, toggle recent history from all runs. |
+| `J` / `K`, arrows | Select workers; scroll at the ends of the list. |
+| Page Up / Page Down | Scroll the board or current view. |
+| `D` | Show the selected task’s diff. |
+| `A` / `S` | Add a plan / open settings when controls are available. |
+| `X` | Request a drain: stop new dispatch and finish current work. |
+| `Q` | Detach an observer or open the controller exit choices. |
 | `Ctrl+C` | Interrupt a controller and retain work, or detach an observer. |
 | `?` | Show help. |
 
@@ -84,6 +91,9 @@ progress, but unfinished planning runs again.
 
 The dashboard shows `PLANNING` before implementation starts. Its timer continues
 while the agent runs. Press `l` to read the planner log and `t` to read events.
+During implementation, `l` opens the selected worker’s latest output. During
+verification, it opens that worker’s check output. Empty logs explain that the
+agent can buffer its response. The log view refreshes each second.
 Agent attempts, tool activity, and retry delays appear in the event history.
 The header reports time since the last observed agent output. Controller waiting
 messages do not count as agent output. Claude planning streams file reads and
@@ -96,7 +106,10 @@ timeout. Press Ctrl+C to interrupt and retain work.
 In mobile terminals and tmux panes, the header and controls wrap to fit the pane.
 Use `j` and `k`, arrow keys, or Page Up and Page Down to scroll the board.
 The header and controls stay visible when the keyboard reduces the pane height.
-Press `?` for the complete list of controls.
+The footer shows common controls. Press `?` for settings, plan imports, drain,
+and the complete list of controls. The board shows only the current run’s events.
+Information uses neutral text; green marks successful results, yellow marks
+waiting or blocked work, and red marks errors.
 
 ## The development loop
 
@@ -319,3 +332,56 @@ newest releases that build with Go 1.22:
 `internal/ui` never imports `internal/looper`. The pinned set keeps the
 toolchain local; Glamour was not added because Markdown rendering is not
 needed yet.
+
+
+## Observe runs from a coding agent
+
+Run these commands inside the project directory:
+
+```sh
+looper status --json
+looper events --json --follow
+looper inspect T054 --json
+looper doctor --json
+```
+
+These commands read saved runtime records. They do not start workers or change
+task status. Stopping an event observer does not drain the controller.
+
+- **Status:** Existing state fields remain available. The new `observation`
+  object has `schema_version: 1`, controller ownership, the published view,
+  session matching, and observations for active attempts.
+- **Events:** Each line is one JSON event. Save its `id` and reconnect with
+  `looper events --json --follow --after 123`. Without `--follow`, the command
+  replays saved events. Worker activity includes the session, task, attempt,
+  phase, and log path in `data`. Older events can omit `data`.
+- **Inspect:** Returns a task's blockers, retained attempts, repair feedback,
+  verification records, and local log paths. Unknown task IDs return an error.
+- **Doctor:** Returns structured findings and suggested actions. Warnings
+  include blocked tasks and missing worker processes. Quiet output is
+  informational. Exit code 1 means a diagnostic error; warnings return 0.
+  The plain command retains its installation and backlog checks.
+
+Controller ownership, process presence, and output activity are separate
+observations. `progress: "unknown"` means that output alone cannot prove useful
+progress. Log modification times measure output, including diagnostic output.
+A quiet test command is not evidence of a stalled worker. Missing process
+metadata means the process state is unknown, which is expected for older runs.
+
+New Claude workers stream output into Looper-owned logs. Worker activity
+summaries omit command arguments, tool output, and private reasoning. Raw logs
+remain local and can contain sensitive project data. Inspect them only when
+needed. Existing runs keep their current executable and output mode until you
+restart them normally.
+
+Use this feedback procedure to improve Looper:
+
+1. Capture status, task inspection, diagnostics, and relevant event IDs.
+2. Reproduce the failure in an isolated regression test.
+3. Change Looper and run its tests.
+4. Install the fix for subsequent runs.
+5. Observe the same case and confirm the result.
+
+Diagnostics do not automatically change code, restart workers, or clear blockers.
+The event journal provides evidence for this procedure; it is not an execution
+replay engine.

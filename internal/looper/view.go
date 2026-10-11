@@ -52,7 +52,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 			}
 			v.Attempts = append(v.Attempts, ui.AttemptView{
 				ID: a.ID, TaskID: a.Task.ID, Title: a.Task.Title, Phase: a.Phase,
-				Agent: a.Agent, Repairs: a.Repairs, Base: a.Base, Worktree: a.Worktree,
+				Agent: a.Agent, Repairs: a.Repairs, Base: a.Base, Worktree: a.Worktree, LogDir: a.Directory,
 			})
 			switch a.Phase {
 			case "verifying":
@@ -155,14 +155,14 @@ func (s *Store) RecentEvents(after int64, limit int) ([]Event, error) {
 		limit = 40
 	}
 	if after < 0 {
-		rows, err := s.db.Query("SELECT id,time,kind,message FROM (SELECT id,time,kind,message FROM events ORDER BY id DESC LIMIT ?) ORDER BY id", limit)
+		rows, err := s.db.Query("SELECT id,time,kind,message,data FROM (SELECT id,time,kind,message,data FROM events ORDER BY id DESC LIMIT ?) ORDER BY id", limit)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
 		return scanEvents(rows)
 	}
-	rows, err := s.db.Query("SELECT id,time,kind,message FROM events WHERE id>? ORDER BY id LIMIT ?", after, limit)
+	rows, err := s.db.Query("SELECT id,time,kind,message,data FROM events WHERE id>? ORDER BY id LIMIT ?", after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +174,12 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 	var out []Event
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.Time, &e.Kind, &e.Message); err != nil {
+		var data string
+		if err := rows.Scan(&e.ID, &e.Time, &e.Kind, &e.Message, &data); err != nil {
 			return nil, err
+		}
+		if data != "null" && json.Valid([]byte(data)) {
+			e.Data = json.RawMessage(data)
 		}
 		out = append(out, e)
 	}

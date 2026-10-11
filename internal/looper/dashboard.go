@@ -72,10 +72,12 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	}
 	defer observer.Close()
 	controls := ui.Controls{
-		Log:      func(path string) (string, error) { return plannerLog(dir, path) },
-		Snapshot: e.viewNotify,
-		Events:   observer.events,
-		Diff:     func(id string) (string, error) { return attemptDiff(dir, id) },
+		WorkerLog: func(id string) (string, string, error) { return workerLog(dir, id) },
+		Log:       func(path string) (string, error) { return plannerLog(dir, path) },
+		Snapshot:  e.viewNotify,
+		Poll:      func() *ui.ViewSnapshot { return LoadView(dir) },
+		Events:    observer.events,
+		Diff:      func(id string) (string, error) { return attemptDiff(dir, id) },
 		Done: func() bool {
 			select {
 			case <-done:
@@ -209,7 +211,8 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	}
 	defer observer.Close()
 	controls := ui.Controls{
-		Log: func(path string) (string, error) { return plannerLog(dir, path) },
+		WorkerLog: func(id string) (string, string, error) { return workerLog(dir, id) },
+		Log:       func(path string) (string, error) { return plannerLog(dir, path) },
 		Poll: func() *ui.ViewSnapshot {
 			v := LoadView(dir)
 			if v == nil || v.Session != info.Session {
@@ -306,6 +309,10 @@ func plannerLog(dir, path string) (string, error) {
 		!strings.HasPrefix(parts[1], "events-") || !strings.HasSuffix(parts[1], ".jsonl") {
 		return "", fmt.Errorf("invalid planner log path")
 	}
+	return readDashboardLog(path)
+}
+
+func readDashboardLog(path string) (string, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "", nil
 	} else if err != nil {
@@ -334,4 +341,53 @@ func plannerLog(dir, path string) (string, error) {
 		return strings.Join(readable, "\n"), err
 	}
 	return sanitize(string(data)), err
+}
+
+// workerLog resolves logs from the published attempt, never from an arbitrary
+// path supplied by the viewer. Only known output locations are searched.
+func workerLog(dir, id string) (string, string, error) {
+	view := LoadView(dir)
+	if view == nil {
+		return "", "", fmt.Errorf("No active run. Return to the board for status.")
+	}
+	var attempt *ui.AttemptView
+	for i := range view.Attempts {
+		if view.Attempts[i].ID == id {
+			attempt = &view.Attempts[i]
+			break
+		}
+	}
+	if attempt == nil {
+		return "", "", fmt.Errorf("This task is no longer active. Return to the board for its result.")
+	}
+	root := attempt.LogDir
+	if root == "" {
+		if filepath.Base(id) != id || !strings.HasPrefix(id, "task-") {
+			return "", "", fmt.Errorf("No log directory for this attempt.")
+		}
+		root = filepath.Join(dir, id)
+	}
+	patterns := []string{"work-*/setup.log", "work-*/events-*.jsonl", "work-*/report-recovery/events-*.jsonl"}
+	if attempt.Phase == "verifying" {
+		patterns = []string{"checks/*/setup.log", "checks/*/verify.log"}
+	}
+	var newest string
+	var stamp time.Time
+	for _, pattern := range patterns {
+		paths, _ := filepath.Glob(filepath.Join(root, pattern))
+		for _, path := range paths {
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			if newest == "" || info.ModTime().After(stamp) || (info.ModTime().Equal(stamp) && path > newest) {
+				newest, stamp = path, info.ModTime()
+			}
+		}
+	}
+	if newest == "" {
+		return "", "Waiting for worker output. This view refreshes each second.", nil
+	}
+	text, err := readDashboardLog(newest)
+	return newest, text, err
 }
