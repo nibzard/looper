@@ -1,0 +1,8 @@
+# Context
+
+## Why This Way
+Patch release 0.6.1 ships the resume dispatch fix (cee2201).
+VERSION is the single source; make build injects it through
+ldflags into internal/looper.Version. The Homebrew formula
+stays on v0.6.0 until the v0.6.1 tag exists; the release
+runbook updates it after publication.
