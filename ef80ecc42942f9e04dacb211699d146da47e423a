@@ -1,0 +1,30 @@
+# Design: zcode agent adapter
+
+## Problem
+Looper speaks two fixed agent protocols (codex exec with
+--output-last-message; claude -p with stream-json). The zcode CLI
+converges on the Claude Code headless conventions but answers with
+a different result contract.
+
+## Approach
+Invoke zcode -p with --cwd, --output-format json, and an explicit
+permission mode. Parse the one-line summary object, take its
+response field, and feed the shared extractor. Planning uses
+--mode plan: verified in the zcode source (permission/service.ts)
+that plan mode allows read-only tools and denies writes, matching
+the codex read-only sandbox role. Workers state --mode yolo
+explicitly even though headless defaults to it, so invocation
+records show the trust posture.
+
+## Key Trade-offs
+- zcode has no structured-output flag: the shape is prompt-borne
+  and fenced JSON is tolerated. Weaker than codex/claude flag
+  enforcement; this is the known gap the September report flagged.
+- No streaming activity interpretation; the dashboard shows the
+  log tail, same as codex.
+- zcode has no model flag; it uses its own configured model and
+  the invocation record stores an empty model.
+
+## References
+- docs/research/PRACTICES-REPORT-2026-10-11.md, absorption thesis:
+  headless contracts are converging across harnesses.
