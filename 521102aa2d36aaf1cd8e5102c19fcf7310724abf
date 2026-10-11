@@ -1,0 +1,1 @@
+Apply the requested humanizer and editorial cuts. Keep commands, reference tables, recovery guidance, and zcode constraints. Move dependency and migration details into linked files. Validation: code examples and tables remain unchanged, local README links resolve, and git diff --check passes.
