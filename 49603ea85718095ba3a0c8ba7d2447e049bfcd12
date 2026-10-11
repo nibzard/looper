@@ -1,0 +1,1 @@
+Document zcode setup, binary overrides, worker and review selection, model configuration, final stream result handling, and the prompt-only planning restriction. Reviewed against Looper config and the local ZCode CLI source.
