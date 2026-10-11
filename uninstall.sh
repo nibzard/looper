@@ -123,6 +123,9 @@ if [ "$REMOVE_BIN" -eq 1 ]; then
     if [ -f "$BIN_DIR/looper.sh" ]; then
         run rm -f "$BIN_DIR/looper.sh"
     fi
+    if [ -f "$BIN_DIR/looper_parallel.py" ]; then
+        run rm -f "$BIN_DIR/looper_parallel.py"
+    fi
 fi
 
 if [ "$REMOVE_SKILLS" -eq 1 ]; then

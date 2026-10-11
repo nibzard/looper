@@ -8,6 +8,7 @@ class Looper < Formula
 
   def install
     bin.install "bin/looper.sh"
+    bin.install "lib/looper_parallel.py"
     bin.install "install.sh" => "looper-install"
     bin.install "uninstall.sh" => "looper-uninstall"
     pkgshare.install "skills"

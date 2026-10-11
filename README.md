@@ -1,11 +1,12 @@
 # Looper
 
-A deterministic, autonomous loop runner for the Codex CLI with optional Claude Code CLI (`claude`)
-interleaving. It processes exactly
-one task per iteration from a JSON backlog, with fresh context each run, and
-keeps a JSONL audit log for traceability.
+A task runner for the Codex CLI with optional Claude Code CLI (`claude`)
+interleaving. Looper finds independent work in a JSON backlog and runs it in
+separate Git worktrees. Each task gets fresh context. Looper checks combined
+changes before it updates your project and marks tasks done.
 
-The active implementation is `bin/looper.sh`.
+The entrypoint is `bin/looper.sh`. The parallel coordinator is
+`lib/looper_parallel.py` and uses the Python standard library.
 
 ## Quick Start
 ```bash
@@ -16,11 +17,17 @@ looper.sh
 If `to-do.json` is missing, Looper bootstraps it from project docs, validates it
 against `to-do.schema.json`, and repairs it if needed.
 
+No parallel setup is required. Run from the Git repository root with Python
+3.9 or later available. Use `looper.sh --jobs 1` for the sequential runner.
+
 ## What It Does
 - Bootstraps `to-do.json` and `to-do.schema.json` if missing.
 - Validates `to-do.json` (jsonschema if available, jq fallback).
 - Repairs invalid task files via Codex or `claude`.
-- Runs one task per iteration (doing > runnable todo).
+- Plans independent tasks and project checks from the repository itself.
+- Runs ready tasks in isolated worktrees, with one task per agent session.
+- Gives priority to tasks that unblock longer dependency chains.
+- Tests combined changes before it publishes them and releases dependent tasks.
 - When tasks are exhausted, runs a review pass; it must append a final
   `project-done` marker task if no new work is found.
 - Supports interleaving `claude` for iterations and a configurable review agent.
@@ -58,6 +65,8 @@ looper.sh --tail --follow
 looper.sh --doctor [to-do.json]
 looper.sh --interleave
 looper.sh --smart
+looper.sh --jobs 3
+looper.sh --jobs 1
 looper.sh --iter-schedule odd-even
 looper.sh --iter-schedule round-robin --rr-agents claude,codex
 ```
@@ -120,10 +129,15 @@ The final review pass uses Codex by default. Set `--review-agent claude` to use 
 
 ## Task File (to-do.json)
 `to-do.json` is the source of truth for the loop and must match
-`to-do.schema.json`. The loop chooses a single task each iteration:
+`to-do.schema.json`. Each worker receives one task. The coordinator selects:
 
-1. Any task in `doing` (lowest id wins).
-2. Otherwise, the highest priority `todo` task whose `depends_on` tasks are done.
+1. Unfinished work retained from an earlier run.
+2. Ready tasks whose dependencies are integrated and done, ordered by priority.
+3. Within one priority, tasks on longer remaining dependency chains, then task ID.
+
+The sequential runner keeps its original order: `doing` first, then ready
+`todo` tasks by priority and task ID. You do not need new backlog fields for
+parallel execution.
 
 Looper does not retry blocked tasks automatically. If no task can run, it exits
 with code 2. Resolve a blocker and change its status to `todo` to retry it.
@@ -146,9 +160,84 @@ Minimal example:
 }
 ```
 
+## Parallel execution
+
+`--jobs auto` is the default. Looper starts with a limit of up to four workers,
+based on available processors and memory. It reduces dispatch under resource
+pressure, when checks accumulate, or after integration failures. Successful
+integrations gradually restore the initial limit. `--jobs N` sets the maximum;
+the coordinator can still use fewer workers. `LOOPER_JOBS` sets the same default.
+
+Before work starts, a planning agent reads the backlog, code, and repository
+instructions. It identifies file scopes, shared interfaces, dependency setup,
+and integration checks. Tasks with overlapping scopes or shared resources run
+sequentially. Missing scopes are treated as project-wide. This internal plan
+does not change your backlog or require manual file ownership rules.
+
+Each task runs in a separate worktree. Looper captures its changes in an internal
+commit. A separate worktree combines the result with integrated work and runs
+the planned checks. `LOOPER_VERIFY_COMMAND`, when set, overrides the planned
+integration check. Setup and verification have a separate concurrency limit.
+Checks invoked directly by agents still follow the repository's instructions.
+
+Checks can run concurrently on a chain of candidate commits. Each candidate
+includes the changes ahead of it. Publication follows that order.
+Only a result tested against the current integration base can be published.
+If that base changes, Looper rebuilds and rechecks the candidate. Conflicts and
+failed checks return to the task worker for up to two repair attempts. Failed
+work stays isolated. Dependent tasks start as soon as their prerequisites
+integrate; they do not wait for unrelated workers.
+
+`MAX_ITERATIONS` limits task dispatches in a run. Integration repairs do not
+consume additional dispatches. At the limit, Looper drains running tasks and
+checks. It performs final review when all tasks finish. Review can add tasks;
+only a successful review can add the `project-done` marker. Automatic dispatch
+does not use the sequential runner's `LOOP_DELAY_SECONDS` pause.
+
+One process lock covers a repository and its linked worktrees, including
+sequential runs. A second Looper invocation exits without claiming tasks.
+
+## Recovery and project files
+
+Parallel mode leaves your branch and staged changes intact. It snapshots
+tracked and nonignored untracked project files into an internal Git reference.
+Workers start from that snapshot, including uncommitted edits. Repositories
+without an initial commit are supported. Verified changes
+return to your working directory as unstaged edits. Looper does not push them.
+Ignored dependencies and build output are recreated by the planned setup command.
+
+Only the coordinator writes your task file. It stores attempt records, summaries,
+check logs, and a publication journal under
+`~/.looper/<project>-<hash>/parallel/`. These records remain available even when
+`CODEX_JSON_LOG=0` disables the consolidated activity log.
+
+Run the same command after interruption. Looper stops surviving attempt
+processes, resumes partial work, rechecks pending results, and completes any
+recorded publication before it releases dependencies. It retains failed and
+blocked worktrees for inspection. Successful worktrees are removed; their
+commits remain reachable through internal `refs/looper` and `refs/looper-tasks`
+references.
+
+If you change project files, the branch, or an active task's requirements while
+unintegrated work is retained, Looper stops and retains its work. It does not overwrite
+those changes or apply a result to changed acceptance criteria. Avoid editing
+the project while Looper is running. After a run drains all attempts, the next
+run can start from a new snapshot of your edited project.
+
+Automatic mode uses the sequential runner when worktrees are unavailable:
+outside a repository root, with submodules, or with
+unresolved index conflicts. Explicit `--jobs N` values above one report these
+conditions as errors. Without Python, automatic mode also uses the sequential
+runner; repository locking and durable worktree recovery require Python.
+
+
 ## Logs and output
 
-The terminal shows a compact run header, task results, and a final report:
+Parallel runs show running tasks, verification, completed counts, and task results.
+Use `--tail --follow` for the latest activity. Detailed agent output and check
+logs remain in each attempt directory.
+
+The sequential runner shows the following output:
 
 ```text
 Looper
@@ -250,7 +339,7 @@ Set `LOOPER_VERIFY_COMMAND='make test'` to check a completed task before Looper
 marks it done. Use a command that works in the target project. Looper runs it
 from the project directory.
 
-An iteration stops with an error if the agent fails, returns an invalid summary,
+In sequential mode, an iteration stops with an error if the agent fails, returns an invalid summary,
 or fails verification. Looper restores the task file to its prior state. Code
 edits and commits remain for inspection. A failed review never marks the
 project done. Reaching the iteration limit with open tasks returns exit code 2.
@@ -287,8 +376,11 @@ make smoke
 make test
 ```
 
-The runner is in `bin/looper.sh`; read its docstring for its behavior.
+The shell runner is in `bin/looper.sh`. The worktree scheduler and recovery
+logic are in `lib/looper_parallel.py`. `scripts/parallel-test.py` exercises
+real Git repositories with local agent stubs, including process interruption,
+speculative verification, conflict repair, and preservation of staged files.
 See [the comparison pilot](EXPERIMENT-PLAN.md) for the remaining product test.
 The dated [research report](docs/research/LOOPER-RESEARCH-REPORT.md) records the
-decision to keep a smaller Bash controller. The [Go proposal](docs/archive/MIGRATION.md)
+earlier decision to keep a smaller Bash controller. The [Go proposal](docs/archive/MIGRATION.md)
 is archived.
