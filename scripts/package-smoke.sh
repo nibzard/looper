@@ -33,6 +33,8 @@ test -x "$PREFIX_DIR/bin/looper.sh"
 test -x "$PREFIX_DIR/bin/looper"
 "$PREFIX_DIR/bin/looper" --help >/dev/null
 "$PREFIX_DIR/bin/looper.sh" --help >/dev/null
+test "$("$PREFIX_DIR/bin/looper" --version)" = "$("$ROOT_DIR/build/looper" --version)"
+test "$("$PREFIX_DIR/bin/looper.sh" --version)" = "$("$ROOT_DIR/build/looper" --version)"
 test -f "$PREFIX_DIR/share/looper/skills/release-runbook/SKILL.md"
 "$BREW_DIR/bin/looper-uninstall" --prefix "$PREFIX_DIR"
 test ! -e "$PREFIX_DIR/bin/looper.sh"

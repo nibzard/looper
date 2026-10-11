@@ -23,7 +23,59 @@ func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
 
 const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"}}}}}}`
 
+const planSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "setup",
+    "verify",
+    "tasks"
+  ],
+  "properties": {
+    "setup": {
+      "type": "string"
+    },
+    "verify": {
+      "type": "string"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "write_paths",
+          "resources"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "write_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
 func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary bool) (json.RawMessage, error) {
+	return a.run(ctx, kind, cwd, dir, prompt, summary, nil)
+}
+
+// run reports process starts and retry delays on the caller's goroutine.
+func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary bool, progress func(string, string)) (json.RawMessage, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -32,8 +84,14 @@ func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 	}
 	resultPath := filepath.Join(dir, "result.json")
 	schema := filepath.Join(dir, "schema.json")
+	outputSchema := ""
 	if summary {
-		if err := atomicWrite(schema, []byte(summarySchema), 0600); err != nil {
+		outputSchema = summarySchema
+	} else if progress != nil {
+		outputSchema = planSchema
+	}
+	if outputSchema != "" {
+		if err := atomicWrite(schema, []byte(outputSchema), 0600); err != nil {
 			return nil, err
 		}
 	}
@@ -46,22 +104,30 @@ func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		if a.Config.Effort != "" {
 			args = append(args, "-c", "model_reasoning_effort="+fmt.Sprintf("%q", a.Config.Effort))
 		}
-		if env("CODEX_YOLO", "1") != "0" {
+		if progress != nil {
+			args = append(args, "--sandbox", "read-only")
+		} else if env("CODEX_YOLO", "1") != "0" {
 			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 		} else {
 			args = append(args, "--sandbox", "workspace-write")
 		}
-		if summary {
+		if outputSchema != "" {
 			args = append(args, "--output-schema", schema)
 		}
 		args = append(args, "-")
 	} else {
 		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--add-dir", cwd}
+		if progress != nil {
+			// Planning can inspect files but cannot invoke a shell or delegate work.
+			args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose",
+				"--dangerously-skip-permissions", "--add-dir", cwd, "--tools", "Read,Glob,Grep",
+				"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--disable-slash-commands"}
+		}
 		if a.Config.ClaudeModel != "" {
 			args = append(args, "--model", a.Config.ClaudeModel)
 		}
-		if summary {
-			args = append(args, "--json-schema", summarySchema)
+		if outputSchema != "" {
+			args = append(args, "--json-schema", outputSchema)
 		}
 	}
 	if err := writeJSON(filepath.Join(dir, "invocation.json"), map[string]any{"agent": kind, "model": map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], "effort": a.Config.Effort, "cwd": cwd}); err != nil {
@@ -70,6 +136,9 @@ func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 	for retry := 0; retry < a.Config.RetryLimit; retry++ {
 		os.Remove(resultPath)
 		log := filepath.Join(dir, fmt.Sprintf("events-%02d.jsonl", retry))
+		if progress != nil {
+			progress(fmt.Sprintf("%s attempt %d/%d", kind, retry+1, a.Config.RetryLimit), log)
+		}
 		input := strings.NewReader(prompt)
 		err := runProcess(ctx, cwd, log, args, input, resourceEnv(dir))
 		if ctx.Err() != nil {
@@ -95,6 +164,9 @@ func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			failure := classifyFailure(err.Error() + "\n" + string(tail(raw, 8<<10)))
 			if failure == "transient" && retry+1 < a.Config.RetryLimit {
 				delay := min(10*time.Minute, a.Config.RetryDelay*time.Duration(1<<min(retry, 8)))
+				if progress != nil {
+					progress(fmt.Sprintf("%s retry in %s after a transient failure", kind, delay), log)
+				}
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
@@ -144,14 +216,36 @@ func extractObject(b []byte) (json.RawMessage, error) {
 	if json.Unmarshal(b, &v) == nil && v != nil {
 		return b, nil
 	}
-	if bytes.HasPrefix(b, []byte("```")) {
-		if i := bytes.IndexByte(b, '\n'); i >= 0 {
-			b = bytes.TrimSpace(b[i+1:])
-			b = bytes.TrimSpace(bytes.TrimSuffix(b, []byte("```")))
-			if json.Unmarshal(b, &v) == nil && v != nil {
-				return b, nil
+	// Accept one complete JSON fence surrounded by prose. Never choose
+	// between multiple blocks or salvage a fragment of malformed JSON.
+	var candidate []byte
+	var block bytes.Buffer
+	inside, blocks, validFence := false, 0, false
+	for _, line := range bytes.Split(b, []byte{'\n'}) {
+		trimmed := strings.TrimSpace(string(line))
+		if strings.HasPrefix(trimmed, "```") {
+			if !inside {
+				blocks++
+				inside = true
+				validFence = trimmed == "```" || strings.EqualFold(trimmed, "```json")
+				block.Reset()
+			} else if trimmed == "```" {
+				inside = false
+				if validFence {
+					candidate = bytes.TrimSpace(append([]byte(nil), block.Bytes()...))
+				}
+			} else {
+				return nil, fmt.Errorf("final output contains malformed code fences")
 			}
+			continue
 		}
+		if inside {
+			block.Write(line)
+			block.WriteByte('\n')
+		}
+	}
+	if blocks == 1 && !inside && len(candidate) > 0 && json.Unmarshal(candidate, &v) == nil && v != nil {
+		return candidate, nil
 	}
 	return nil, fmt.Errorf("final output must contain one JSON object")
 }
@@ -215,7 +309,12 @@ func planPrompt(b Backlog, importedScope string) string {
 	data, _ := json.Marshal(b)
 	p := `Plan execution for Looper. Read repository instructions and the source_files in this backlog:
 ` + string(data) + `
-Do not change any files. Return JSON with setup (shell command or empty string), verify (shell command),
+This is an inspection-only planning step. Read files and search existing code and configuration.
+Do not run builds, tests, benchmarks, dataset or corpus generators, package installation, or application commands.
+Do not delegate work. Identify setup and verification commands from existing documentation, manifests, and scripts;
+return those commands for later execution by workers and checks. Do not execute them to validate this plan.
+Focus on unfinished tasks; completed tasks provide context only. Do not change any files.
+Return JSON with setup (shell command or empty string), verify (shell command),
 and tasks [{task_id, write_paths: [relative file or directory prefixes], resources: [shared interface names]}].
 Include each unfinished task. Use ["."] when the write scope is uncertain. Include generated files and wiring.
 Setup must recreate ignored dependencies in each worktree. Never share mutable build output between worktrees.

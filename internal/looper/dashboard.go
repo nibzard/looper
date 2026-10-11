@@ -72,6 +72,7 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	}
 	defer observer.Close()
 	controls := ui.Controls{
+		Log:      func(path string) (string, error) { return plannerLog(dir, path) },
 		Snapshot: e.viewNotify,
 		Events:   observer.events,
 		Diff:     func(id string) (string, error) { return attemptDiff(dir, id) },
@@ -208,6 +209,7 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	}
 	defer observer.Close()
 	controls := ui.Controls{
+		Log: func(path string) (string, error) { return plannerLog(dir, path) },
 		Poll: func() *ui.ViewSnapshot {
 			v := LoadView(dir)
 			if v == nil || v.Session != info.Session {
@@ -291,4 +293,45 @@ func attemptDiff(dir, attemptID string) (string, error) {
 		return string(patch), nil
 	}
 	return "", fmt.Errorf("unknown attempt %s", attemptID)
+}
+
+// plannerLog accepts only planner output files within this runtime directory.
+func plannerLog(dir, path string) (string, error) {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) != 2 || !strings.HasPrefix(parts[0], "plan-") ||
+		!strings.HasPrefix(parts[1], "events-") || !strings.HasSuffix(parts[1], ".jsonl") {
+		return "", fmt.Errorf("invalid planner log path")
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	if _, err = f.Seek(max(0, info.Size()-16000), io.SeekStart); err != nil {
+		return "", err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 16000))
+	var readable []string
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		if actions := plannerActivity(line); len(actions) > 0 {
+			readable = append(readable, actions...)
+		}
+	}
+	if len(readable) > 0 {
+		return strings.Join(readable, "\n"), err
+	}
+	return sanitize(string(data)), err
 }
