@@ -238,6 +238,7 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 				if !e.idleWait(ctx, e.Config.Poll) {
 					return 130, ctx.Err()
 				}
+				continue
 			}
 			if e.Config.Limit > 0 && attempted >= e.Config.Limit {
 				e.event("limit", "Dispatch limit reached; all active work is retained or integrated.")
@@ -357,7 +358,7 @@ func (e *Engine) refreshIdle() error {
 func (e *Engine) idleWait(ctx context.Context, poll time.Duration) bool {
 	deadline := time.Now().Add(poll)
 	for {
-		if requestsWaiting(e.Dir) {
+		if requestsWaiting(e.Dir) || e.drainingNow() {
 			return true
 		}
 		remaining := time.Until(deadline)

@@ -453,6 +453,8 @@ func (m model) boardScreen() string {
 	b.WriteString("\n\n")
 	if m.snap == nil {
 		b.WriteString(dimStyle.Render("No snapshot yet. Waiting for the controller...\n"))
+		b.WriteString(m.footer())
+		return b.String()
 	}
 	compact := m.height < 18
 	if len(m.snap.Attempts) > 0 || m.staleView {

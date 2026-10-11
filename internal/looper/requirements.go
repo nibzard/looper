@@ -94,8 +94,8 @@ func (e *Engine) startupImportPlans() {
 		e.event("import-error", err.Error())
 		return
 	}
-	if applied := e.appliedByDigest(plans); applied != nil {
-		e.event("import", fmt.Sprintf("Plans already applied by import %s.", applied.RequestID))
+	if prior := e.matchingImport(plans, ImportApplied, ImportQueued, ImportWaiting, ImportPlanning); prior != nil {
+		e.event("import", fmt.Sprintf("Plans already recorded by import %s (%s).", prior.RequestID, prior.Status))
 		return
 	}
 	record := &ImportRecord{RequestID: requestID, Status: ImportQueued, Enqueued: time.Now().UTC().Format(time.RFC3339Nano)}

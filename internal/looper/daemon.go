@@ -93,11 +93,9 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 	defer readyRead.Close()
 	ready := make(chan daemonReady, 1)
 	go func() {
-		raw, _ := io.ReadAll(readyRead)
 		var msg daemonReady
-		json.Unmarshal(raw, &msg)
-		if msg.Status == "" && len(raw) > 0 {
-			msg = daemonReady{Status: "error", Error: strings.TrimSpace(string(raw)), Log: daemonLogPath(dir)}
+		if err := json.NewDecoder(readyRead).Decode(&msg); err != nil {
+			msg = daemonReady{Status: "error", Error: err.Error(), Log: daemonLogPath(dir)}
 		}
 		ready <- msg
 	}()

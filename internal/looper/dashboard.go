@@ -36,6 +36,10 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		}
 		return runAttach(c, out, stderr, true)
 	}
+	return runDashboardController(c, out, stderr, ui.RunDashboard)
+}
+
+func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(ui.Controls) (ui.ExitAction, error)) int {
 	_, dir := projectPaths(c)
 	var engineOut bytes.Buffer
 	e, lock, err := NewEngine(c, &engineOut)
@@ -50,12 +54,14 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		code int
 		err  error
 	}
-	done := make(chan result, 1)
+	var finish result
+	done := make(chan struct{})
 	go func() {
 		code, err := e.Run(ctx)
 		lock.Close()
 		e.Store.Close()
-		done <- result{code, err}
+		finish = result{code, err}
+		close(done)
 	}()
 	observer, err := openObserver(dir)
 	if err != nil {
@@ -96,7 +102,7 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		return nil
 	}
 	for {
-		action, err := ui.RunDashboard(controls)
+		action, err := runDashboard(controls)
 		if err != nil {
 			fmt.Fprintln(stderr, "Error:", err)
 			cancel()
@@ -115,7 +121,7 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		}
 		break
 	}
-	finish := <-done
+	<-done
 	if finish.err != nil && ctx.Err() == nil {
 		fmt.Fprintln(stderr, "Error:", finish.err)
 	}

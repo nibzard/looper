@@ -227,3 +227,42 @@ func TestStartDetachedDoubleStart(t *testing.T) {
 		t.Fatalf("readiness error missing: %q", stderr.String())
 	}
 }
+
+func TestStartDetachedWhileControllerStaysRunning(t *testing.T) {
+	bin := detachedBinary(t)
+	c := preparedRepo(t, "start")
+	c.Poll = 10 * time.Millisecond
+	c.CodexBin, c.ClaudeBin = "/bin/false", "/bin/false"
+	orig := startExecutable
+	startExecutable = func() (string, error) { return bin, nil }
+	defer func() { startExecutable = orig }()
+	_, dir := projectPaths(c)
+	t.Cleanup(func() {
+		if info, err := readController(dir); err == nil {
+			syscall.Kill(info.PID, syscall.SIGINT)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(controllerPath(dir)); os.IsNotExist(err) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("detached controller did not stop")
+	})
+	var out, stderr bytes.Buffer
+	started := time.Now()
+	if code := StartDetached(c, &out, &stderr); code != 0 {
+		t.Fatalf("start failed: %s", stderr.String())
+	}
+	if time.Since(started) > 5*time.Second {
+		t.Fatal("readiness waited for controller exit")
+	}
+	info, err := readController(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(info.PID, 0); err != nil {
+		t.Fatalf("controller exited with its parent: %v", err)
+	}
+}

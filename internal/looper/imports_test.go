@@ -339,3 +339,112 @@ func TestAddPlanNeedsActiveController(t *testing.T) {
 		t.Fatalf("suggestion missing: %q", stderr.String())
 	}
 }
+
+func TestImportMultipleAdditionsResolveDependencies(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	added, _, err := e.applyProposal(&importProposal{Additions: []Task{
+		{ID: "P1", Title: "First", Details: "First acceptance", Priority: 1},
+		{ID: "P2", Title: "Second", Details: "Second acceptance", Priority: 1, DependsOn: []string{"P1", "T001"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 2 || added[0] == added[1] {
+		t.Fatalf("identifiers: %v", added)
+	}
+	task := e.State.Backlog.Task(added[1])
+	if len(task.DependsOn) != 2 || task.DependsOn[0] != added[0] || task.DependsOn[1] != "T001" {
+		t.Fatalf("dependencies: %v", task.DependsOn)
+	}
+}
+
+func TestStartupPlansOnSavedState(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		name := "idle"
+		if retained {
+			name = "retained"
+		}
+		t.Run(name, func(t *testing.T) {
+			e, _ := importEngine(t, additionProposal)
+			if retained {
+				e.State.Attempts = append(e.State.Attempts, &Attempt{ID: "retained", Task: e.State.Backlog.Tasks[0], Phase: "ready", ResultCommit: e.State.Tip})
+				if err := e.save(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.Config.Plans = []string{planFile(t, "Add telemetry")}
+			if err := e.initialize(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.State.Imports) != 1 || e.State.Imports[0].Status != ImportQueued {
+				t.Fatalf("plans not queued: %+v", e.State.Imports)
+			}
+			// Restarting with the same pending plan must preserve one import.
+			if err := e.initialize(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.State.Imports) != 1 {
+				t.Fatalf("duplicate pending imports: %d", len(e.State.Imports))
+			}
+		})
+	}
+}
+
+func TestImportResumesSavedAnalysis(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	e.Config.Plans = []string{planFile(t, "Add telemetry")}
+	e.startupImportPlans()
+	e.State.Imports[0].Status = ImportPlanning
+	if err := e.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.processPlanImports(context.Background())
+	if len(e.State.Imports) != 1 || e.State.Imports[0].Status != ImportApplied {
+		t.Fatalf("analysis did not resume: %+v", e.State.Imports)
+	}
+	if e.State.Backlog.Task("T002") == nil {
+		t.Fatal("resumed import did not add the task")
+	}
+}
+
+func TestDuplicateImportAcknowledgesNewRequest(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	plans := []string{planFile(t, "Add telemetry")}
+	e.Config.Plans = plans
+	e.startupImportPlans()
+	e.processPlanImports(context.Background())
+	for i := 0; i < 2; i++ {
+		e.acceptPlanImport("second-request", plans, false)
+		var ack planImportAck
+		if err := readJSON(filepath.Join(ackDir(e.Dir), "second-request.json"), &ack); err != nil {
+			t.Fatal(err)
+		}
+		if ack.ID != "second-request" || ack.Status != ImportApplied || len(ack.AddedTasks) != 1 || ack.AddedTasks[0] != "T002" {
+			t.Fatalf("ack: %+v", ack)
+		}
+	}
+	if len(e.State.Imports) != 1 || len(e.State.Backlog.Tasks) != 2 {
+		t.Fatal("duplicate import changed scope")
+	}
+}
+
+func TestImportUsesRefreshedBaseline(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	e.Config.Plans = []string{planFile(t, "Add telemetry")}
+	e.startupImportPlans()
+	before := e.State.Tip
+	if err := os.WriteFile(filepath.Join(e.Config.Root, "new.txt"), []byte("outside edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e.processPlanImports(context.Background())
+	record := e.State.Imports[0]
+	if record.Status != ImportApplied {
+		t.Fatalf("import failed: %s", record.Error)
+	}
+	if e.State.Tip == before || record.AcceptedRevision != e.State.Tip {
+		t.Fatal("import did not use the refreshed baseline")
+	}
+}
