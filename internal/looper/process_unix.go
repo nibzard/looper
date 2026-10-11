@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unsafe"
 )
 
 func lockRepository(common string) (*os.File, error) {
@@ -129,4 +130,20 @@ func runProcess(ctx context.Context, cwd, logfile string, args []string, input i
 		<-done
 		return ctx.Err()
 	}
+}
+
+type winsize struct{ rows, cols, x, y uint16 }
+
+// terminalWidth reports the terminal width in cells, detected per call so
+// resize events apply to the next rendered line. Zero means unknown.
+func terminalWidth(f *os.File) int {
+	if f == nil {
+		return 0
+	}
+	var ws winsize
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 || ws.cols == 0 {
+		return 0
+	}
+	return int(ws.cols)
 }
