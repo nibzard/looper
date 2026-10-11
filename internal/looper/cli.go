@@ -22,9 +22,12 @@ Usage: looper [run] [task-file] [options]
        looper stop
        looper tail [--follow]
        looper doctor
+       looper config [--reset]
 
 Run again to resume retained work. The default run waits for new work when idle.
 --once finishes after the current goal is checked or all remaining work is blocked.
+The first interactive run in a project asks three setup questions and saves the
+answers to runtime/profile.json; looper config edits that profile.
 
 Options:
   --jobs auto|N          Maximum concurrent workers (default: auto)
@@ -36,6 +39,8 @@ Options:
   --max-iterations N    Dispatch limit; 0 is unlimited (default: 0)
   --review-every N      Check product behavior after N integrations (default: 5)
   --once                Exit when no runnable work remains after review
+  --plain               Plain text only; no forms, color, or glyphs
+  --yes                 Skip the first-run form and use defaults
   --json                Emit machine-readable progress
   --verbose             Show the run configuration at start
   --help                Show help
@@ -63,10 +68,18 @@ func Main(args []string, out, stderr io.Writer) int {
 		fmt.Fprintln(out, "looper", Version)
 		return 0
 	}
+	switch c.Command {
+	case "start", "tui", "attach", "add-plan":
+		fmt.Fprintln(stderr, c.Command+" is not available in this build yet.")
+		return 2
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if c.Command == "doctor" {
 		return doctor(c, out)
+	}
+	if c.Command == "config" {
+		return runConfig(c, os.Stdin, out, stderr)
 	}
 	_, dir := projectPaths(c)
 	if c.Command == "stop" {
@@ -87,6 +100,17 @@ func Main(args []string, out, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	}
+	if controllerStart(c.Command) {
+		var start bool
+		c, start, err = maybeFirstRun(args, c, os.Stdin, out, stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, "Error:", err)
+			return 2
+		}
+		if !start {
+			return 0
+		}
 	}
 	e, lock, err := NewEngine(c, out)
 	if err != nil {
