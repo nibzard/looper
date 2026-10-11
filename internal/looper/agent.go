@@ -115,6 +115,17 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			args = append(args, "--output-schema", schema)
 		}
 		args = append(args, "-")
+	} else if kind == "zcode" {
+		// zcode ships no schema flag; the prompt states the output shape and
+		// the response text is parsed below. Headless already defaults to
+		// full access, so the mode is explicit for the invocation record.
+		mode := "yolo"
+		if progress != nil {
+			// Plan mode allows read-only tools and denies writes, like the
+			// codex read-only sandbox.
+			mode = "plan"
+		}
+		args = []string{a.Config.ZcodeBin, "--cwd", cwd, "--output-format", "json", "--mode", mode, "-p", prompt}
 	} else {
 		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--add-dir", cwd}
 		if progress != nil {
@@ -149,10 +160,14 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			return nil, readErr
 		}
 		var wrapper map[string]json.RawMessage
-		if kind == "claude" {
+		if kind == "claude" || kind == "zcode" {
+			// Both agents answer with one JSON line on stdout: Claude a
+			// result or structured_output event, zcode a summary object
+			// whose response field holds the final text.
+			final := map[string]string{"claude": "result", "zcode": "response"}[kind]
 			for _, line := range bytes.Split(raw, []byte{'\n'}) {
 				var o map[string]json.RawMessage
-				if json.Unmarshal(line, &o) == nil && o["result"] != nil || o["structured_output"] != nil {
+				if json.Unmarshal(line, &o) == nil && o[final] != nil || o["structured_output"] != nil {
 					wrapper = o
 				}
 			}
@@ -181,6 +196,12 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			if err != nil {
 				return nil, &AgentError{"invalid_result", "missing final result; see " + dir}
 			}
+		} else if kind == "zcode" {
+			var s string
+			if json.Unmarshal(wrapper["response"], &s) != nil || strings.TrimSpace(s) == "" {
+				return nil, &AgentError{"invalid_result", "missing response in summary; see " + dir}
+			}
+			raw = []byte(s)
 		} else if v := wrapper["structured_output"]; len(v) > 0 && string(v) != "null" {
 			raw = v
 		} else {
