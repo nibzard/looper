@@ -28,8 +28,8 @@ with its reason](docs/assets/loop.gif)
 ## Quickstart
 
 You need Go 1.22 or later, Git, Bash, and an authenticated `codex`,
-`claude`, or `zcode` command. Linux and macOS are supported. The binary needs no Python,
-Node, or SQLite command at runtime. Python is used by the repository tests.
+`claude`, or `zcode` command. Linux and macOS are supported. The binary needs
+no Python, Node, or SQLite command at runtime. Python is used by the repository tests.
 Node is optional for Measuretwice.
 
 1. Install the command:
@@ -291,7 +291,7 @@ ZCODE_BIN=/path/to/zcode looper --agent zcode
 ```
 
 `--agent zcode` selects zcode for workers. `--review-agent zcode` selects it
-for planning, diagnosis, and product review. If you omit `--review-agent`,
+for planning, diagnosis, and product review. If no review agent is configured,
 Looper uses the worker agent. zcode uses its own configured model;
 Looper's Codex and Claude model options do not select a zcode model.
 
