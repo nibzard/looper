@@ -84,6 +84,12 @@ and `LOOPER_ARTIFACT_DIR`. Use these for databases and other test resources.
 Let the operating system choose available server ports. Worktrees share Git
 metadata; they are workspace isolation, not a security sandbox.
 
+Worker agents run with permission checks disabled. Claude Code receives
+`--dangerously-skip-permissions`. Codex receives
+`--dangerously-bypass-approvals-and-sandbox`. Set `CODEX_YOLO=0` to give
+Codex a workspace-write sandbox instead. Run Looper only in repositories
+whose contents you trust.
+
 ## Dashboard
 
 Start the terminal user interface (TUI) with `looper tui`. It starts a
@@ -317,6 +323,10 @@ result replaces tests.
 
 ## Development
 
+Follow [`MANIFESTO.md`](MANIFESTO.md) when changing Looper: one purpose,
+simple before easy, do not make me think, believe in the loop, and take
+things away.
+
 ```sh
 make test
 make race
@@ -334,6 +344,10 @@ The source entry point is `cmd/looper/main.go`. The controller lives in
 state invariants and failure behavior. See
 [the validation record](docs/VALIDATION.md) for the automated checks and
 live Codex run.
+
+See [the practices report](docs/research/PRACTICES-REPORT-2026-10-11.md)
+for a dated comparison with native agent capabilities and other local
+orchestrators.
 
 The interface layer adds these direct dependencies. Versions are pinned to
 the newest releases that build with Go 1.22:
