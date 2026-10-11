@@ -228,6 +228,7 @@ func (e *Engine) review(ctx context.Context, final bool) error {
 	if final {
 		kind = "final"
 	}
+	importedScope := e.importedScope()
 	op := e.capture()
 	e.event("review", "Checking "+kind+" product behavior against the project goal...")
 	var evidence []string
@@ -251,7 +252,11 @@ Capture missing capabilities and missing ownership. Respect the project goal and
 Do not modify any files, weaken checks, or invent unrelated improvements.
 Return JSON {"status":"reviewed","summary":"...","findings":[{"title":"...","details":"acceptance criteria","evidence":"observed facts and file or command","depends_on":[],"priority":1}],"complete":false}.
 Set complete true only when the intended goal is satisfied and no required work is blocked or unfinished.
-Duplicate findings already tracked in the backlog must not become new tasks.`, kind, e.State.Tip, backlog)
+Duplicate findings already tracked in the backlog must not become new tasks.
+The final review must cover the original goal and every applied import, including imports that added no new tasks.`, kind, e.State.Tip, backlog)
+	if importedScope != "" {
+		prompt += "\nApplied imported scope that the product must satisfy:\n" + importedScope
+	}
 	if len(evidence) > 0 {
 		prompt += "\nAdvisory semantic reports and their evidence packets are in these directories:\n" + strings.Join(evidence, "\n") + "\nThese reports are unvalidated signals. Independently reproduce suspected defects before adding tasks."
 	}

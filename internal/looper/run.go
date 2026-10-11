@@ -58,9 +58,14 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 		if _, err := os.Stat(stopPath); err == nil {
 			draining = true
 		}
-		// Settings requests apply at loop boundaries, including idle polling.
-		// Synchronous planning and review above are never interrupted.
+		// Settings requests and plan imports apply at loop boundaries,
+		// including idle polling. Synchronous planning and review above are
+		// never interrupted.
 		e.processSettingsRequests()
+		if e.err != nil {
+			return 1, e.err
+		}
+		e.processPlanImports(ctx)
 		if e.err != nil {
 			return 1, e.err
 		}

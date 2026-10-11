@@ -315,7 +315,8 @@ class ParallelTests(unittest.TestCase):
                 else:
                     self.fail("Worker did not start")
                 self.assertIn("already running", self.run_loop(1))
-                os.killpg(process.pid, signal.SIGTERM)
+                # SIGINT cancels with retained work; SIGTERM drains and waits.
+                os.killpg(process.pid, signal.SIGINT)
                 process.wait(timeout=10)
             finally:
                 if process.poll() is None:

@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +27,13 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		return Main(nil, out, stderr)
 	}
 	if repositoryOwned(c) {
+		// tui attaches to the controller it finds and submits its plans
+		// through the same importer.
+		if len(c.Plans) > 0 {
+			if code := submitPlansToActive(c, out, stderr); code != 0 {
+				return code
+			}
+		}
 		return runAttach(c, out, stderr, true)
 	}
 	_, dir := projectPaths(c)
@@ -77,6 +83,18 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
 	}
 	controls.Drain = drain
+	controls.AddPlan = func(path string) error {
+		planPath, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		id, err := submitPlanImport(dir, info.Session, []string{planPath})
+		if err != nil {
+			return err
+		}
+		go waitForPlanImport(dir, id, time.Hour)
+		return nil
+	}
 	for {
 		action, err := ui.RunDashboard(controls)
 		if err != nil {
@@ -102,6 +120,24 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Error:", finish.err)
 	}
 	return finish.code
+}
+
+// submitPlansToActive submits startup plans to the controller that already
+// owns the repository.
+func submitPlansToActive(c Config, out, stderr io.Writer) int {
+	_, dir := projectPaths(c)
+	info, err := readController(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, "A controller owns this repository, but its metadata cannot be verified:", err)
+		return 1
+	}
+	id, err := submitPlanImport(dir, info.Session, c.Plans)
+	if err != nil {
+		fmt.Fprintln(stderr, "Error:", err)
+		return 1
+	}
+	fmt.Fprintln(out, "Queued plan import", id)
+	return 0
 }
 
 // submitSettingsFromForm runs the full editor against the current profile and
@@ -250,5 +286,3 @@ func attemptDiff(dir, attemptID string) (string, error) {
 	}
 	return "", fmt.Errorf("unknown attempt %s", attemptID)
 }
-
-func sortStrings(s []string) { sort.Strings(s) }
