@@ -1,0 +1,6 @@
+# Context
+
+Two releases hit the same ordering pitfalls: bumping the version
+before the gate finished, and hashing the formula before the tag
+existed. The runbook fixes that order. It is the checklist for
+the next feature release (0.7.0).
