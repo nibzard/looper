@@ -1,0 +1,10 @@
+# Context
+
+## Why This Way
+docs/UI-PLAN.md records the agreed scope for CLI styling, run
+profiles, Markdown plan import, and a dashboard with a detached
+controller. Committed separately to keep it out of the fix history.
+
+## Gotchas
+- Plan only; no code in this commit. It explicitly leaves task
+  transitions, publication rules, and the SQLite schema unchanged.
