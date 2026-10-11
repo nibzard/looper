@@ -15,7 +15,97 @@ type Config struct {
 	Command, ListStatus                                                                                                   string
 	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                              int
 	Poll, RetryDelay, Timeout, GitTimeout                                                                                 time.Duration
-	Once, Follow, JSON, Verbose, Smart, GitInit                                                                           bool
+	Once, Follow, JSON, Verbose, Smart, GitInit, JobsAuto                                                                 bool
+	Sources                                                                                                               Sources
+	ProfilePath                                                                                                           string
+}
+
+// Source records where a setting's effective value came from. Higher values
+// win during resolution; sources are tracked separately from values so an
+// explicit value equal to a default still overrides a saved profile.
+type Source int
+
+const (
+	SourceDefault Source = iota
+	SourceProfile
+	SourceEnv
+	SourceFlag
+)
+
+func (s Source) String() string {
+	switch s {
+	case SourceProfile:
+		return "profile"
+	case SourceEnv:
+		return "environment"
+	case SourceFlag:
+		return "flag"
+	default:
+		return "default"
+	}
+}
+
+// Sources is the per-setting provenance of the effective configuration.
+type Sources struct {
+	Agent, ReviewAgent, Jobs, Model, ClaudeModel, Effort, Verify, Setup, ReviewEvery Source
+}
+
+func (s Sources) any(atLeast Source) bool {
+	for _, v := range []Source{s.Agent, s.ReviewAgent, s.Jobs, s.Model, s.ClaudeModel, s.Effort, s.Verify, s.Setup, s.ReviewEvery} {
+		if v >= atLeast {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyFlag reports whether any profile-managed setting came from a flag.
+func (s Sources) AnyFlag() bool { return s.any(SourceFlag) }
+
+// AnyEnv reports whether any profile-managed setting came from the environment.
+func (s Sources) AnyEnv() bool { return s.any(SourceEnv) }
+
+type inputValue struct {
+	value string
+	from  Source
+}
+type intValue struct {
+	value int
+	from  Source
+}
+
+// settingSources layers one value per profile-managed setting: defaults, then
+// the saved profile, then present environment variables, then explicit flags.
+type settingSources struct {
+	agent, reviewAgent, jobs, model, claudeModel, effort, verify, setup inputValue
+	reviewEvery                                                         intValue
+}
+
+// flagOptions records setting flags in command-line order so replay applies
+// the same last-flag-wins semantics the original parser had. An explicit
+// empty value ("--model \"\"") is a real override, not an absent flag.
+type flagOptions struct {
+	apps       []flagApplication
+	interleave bool
+}
+
+const (
+	flagAgent = iota
+	flagReviewAgent
+	flagAll
+	flagModel
+	flagEffort
+	flagJobs
+	flagReviewEvery
+)
+
+type flagApplication struct {
+	field int
+	value string
+}
+
+func (f *flagOptions) apply(field int, value string) {
+	f.apps = append(f.apps, flagApplication{field, value})
 }
 
 func env(key, fallback string) string {
@@ -32,6 +122,21 @@ func integer(key string, def int) (int, error) {
 	}
 	return v, nil
 }
+
+// usesProfile reports whether a command reads saved settings. Read-only
+// commands never fail on an invalid profile.
+func usesProfile(command string) bool {
+	switch command {
+	case "run", "start", "tui", "config":
+		return true
+	}
+	return false
+}
+
+// Parse splits parsing from resolution: flags are collected first, the saved
+// profile loads as the lowest non-default layer, present environment
+// variables follow, and explicit flags win. Final resolution (automatic jobs,
+// the review-agent fallback, smart mode) happens once after the merge.
 func Parse(args []string) (Config, error) {
 	root, err := os.Getwd()
 	if err != nil {
@@ -42,12 +147,10 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 	home, _ := os.UserHomeDir()
-	c := Config{Root: root, Todo: "to-do.json", BaseDir: env("LOOPER_BASE_DIR", filepath.Join(home, ".looper")), Agent: env("LOOPER_ITER_SCHEDULE", "codex"), ReviewAgent: env("LOOPER_REVIEW_AGENT", ""), CodexBin: env("CODEX_BIN", "codex"), ClaudeBin: env("CLAUDE_BIN", "claude"), Model: env("CODEX_MODEL", ""), ClaudeModel: env("CLAUDE_MODEL", ""), Effort: env("CODEX_REASONING_EFFORT", ""), Verify: env("LOOPER_VERIFY_COMMAND", ""), Setup: env("LOOPER_SETUP_COMMAND", ""), Assess: env("LOOPER_ASSESS_COMMAND", ""), Hook: env("LOOPER_HOOK", ""), Command: "run", GitInit: env("LOOPER_GIT_INIT", "1") != "0"}
-	for k, p := range map[string]*int{"MAX_ITERATIONS": &c.Limit, "LOOPER_REVIEW_EVERY": &c.ReviewEvery, "LOOPER_MAX_REPAIRS": &c.MaxRepairs, "LOOPER_RATE_LIMIT_MAX": &c.RetryLimit} {
+	c := Config{Root: root, Todo: "to-do.json", BaseDir: env("LOOPER_BASE_DIR", filepath.Join(home, ".looper")), CodexBin: env("CODEX_BIN", "codex"), ClaudeBin: env("CLAUDE_BIN", "claude"), Assess: env("LOOPER_ASSESS_COMMAND", ""), Hook: env("LOOPER_HOOK", ""), Command: "run", GitInit: env("LOOPER_GIT_INIT", "1") != "0"}
+	for k, p := range map[string]*int{"MAX_ITERATIONS": &c.Limit, "LOOPER_MAX_REPAIRS": &c.MaxRepairs, "LOOPER_RATE_LIMIT_MAX": &c.RetryLimit} {
 		d := 0
 		switch k {
-		case "LOOPER_REVIEW_EVERY":
-			d = 5
 		case "LOOPER_MAX_REPAIRS":
 			d = 6
 		case "LOOPER_RATE_LIMIT_MAX":
@@ -75,7 +178,8 @@ func Parse(args []string) (Config, error) {
 		}
 		*p = time.Duration(v) * time.Second
 	}
-	jobs := env("LOOPER_JOBS", "auto")
+	// Parsing: collect every option before touching the setting layers.
+	flags := flagOptions{}
 	checks := env("LOOPER_CHECK_JOBS", "1")
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -109,10 +213,7 @@ func Parse(args []string) (Config, error) {
 		case "--smart", "-s":
 			c.Smart = true
 		case "--interleave":
-			c.Agent = "claude"
-			if c.ReviewAgent == "" {
-				c.ReviewAgent = "codex"
-			}
+			flags.interleave = true
 		case "--jobs", "--check-jobs", "--agent", "--all", "--review-agent", "--model", "--effort", "--max-iterations", "--review-every", "--ls":
 			v, err = value()
 			if err != nil {
@@ -120,21 +221,19 @@ func Parse(args []string) (Config, error) {
 			}
 			switch a {
 			case "--jobs":
-				jobs = v
+				flags.apply(flagJobs, v)
 			case "--check-jobs":
 				checks = v
 			case "--agent":
-				c.Agent = v
+				flags.apply(flagAgent, v)
 			case "--all":
-				c.Agent = v
-				c.ReviewAgent = v
+				flags.apply(flagAll, v)
 			case "--review-agent":
-				c.ReviewAgent = v
+				flags.apply(flagReviewAgent, v)
 			case "--model":
-				c.Model = v
-				c.ClaudeModel = v
+				flags.apply(flagModel, v)
 			case "--effort":
-				c.Effort = v
+				flags.apply(flagEffort, v)
 			case "--ls":
 				c.Command = "status"
 				c.ListStatus = v
@@ -146,7 +245,7 @@ func Parse(args []string) (Config, error) {
 				if a == "--max-iterations" {
 					c.Limit = n
 				} else {
-					c.ReviewEvery = n
+					flags.apply(flagReviewEvery, v)
 				}
 			}
 		default:
@@ -156,27 +255,112 @@ func Parse(args []string) (Config, error) {
 			c.Todo = a
 		}
 	}
-	if jobs == "auto" {
-		c.Jobs = max(1, min(4, runtime.NumCPU()/2))
-		if m := availableMemory(); m > 0 {
-			c.Jobs = min(c.Jobs, max(1, int(m/(2<<30))))
+	// Resolution starts here. Layer 1 is the built-in defaults; automatic
+	// jobs resolve at controller startup, not during parsing.
+	settings := settingSources{jobs: inputValue{"auto", SourceDefault}, reviewEvery: intValue{5, SourceDefault}}
+	c.BaseDir, err = filepath.Abs(c.BaseDir)
+	if err != nil {
+		return c, err
+	}
+	// Layer 2: the saved profile, below any environment variable or flag.
+	c.ProfilePath = ProfilePath(c)
+	var profile *Profile
+	if usesProfile(c.Command) {
+		if profile, err = LoadProfile(c.ProfilePath); err != nil {
+			return c, err
 		}
-	} else {
-		c.Jobs, err = strconv.Atoi(jobs)
-		if err != nil || c.Jobs < 1 {
-			return c, fmt.Errorf("jobs must be auto or a positive integer")
+	}
+	profile.mergeInto(&settings)
+	// Layer 3: present environment variables. An explicitly empty variable
+	// counts as present and overrides the profile with an empty value.
+	for k, into := range map[string]*inputValue{
+		"LOOPER_ITER_SCHEDULE": &settings.agent, "LOOPER_REVIEW_AGENT": &settings.reviewAgent,
+		"CODEX_MODEL": &settings.model, "CLAUDE_MODEL": &settings.claudeModel,
+		"CODEX_REASONING_EFFORT": &settings.effort, "LOOPER_VERIFY_COMMAND": &settings.verify,
+		"LOOPER_SETUP_COMMAND": &settings.setup,
+	} {
+		if v, ok := os.LookupEnv(k); ok {
+			*into = inputValue{v, SourceEnv}
+		}
+	}
+	if v, ok := os.LookupEnv("LOOPER_JOBS"); ok {
+		settings.jobs = inputValue{v, SourceEnv}
+	}
+	if v, ok := os.LookupEnv("LOOPER_REVIEW_EVERY"); ok {
+		n, e := strconv.Atoi(v)
+		if e != nil || n < 0 {
+			return c, fmt.Errorf("LOOPER_REVIEW_EVERY must be a nonnegative integer")
+		}
+		settings.reviewEvery = intValue{n, SourceEnv}
+	}
+	// Layer 4: explicit flags, replayed in command-line order so the last
+	// flag for each field wins, exactly as the original parser did.
+	for _, app := range flags.apps {
+		switch app.field {
+		case flagJobs:
+			settings.jobs = inputValue{app.value, SourceFlag}
+		case flagAgent:
+			settings.agent = inputValue{app.value, SourceFlag}
+		case flagAll:
+			settings.agent = inputValue{app.value, SourceFlag}
+			settings.reviewAgent = inputValue{app.value, SourceFlag}
+		case flagReviewAgent:
+			settings.reviewAgent = inputValue{app.value, SourceFlag}
+		case flagModel:
+			settings.model = inputValue{app.value, SourceFlag}
+			settings.claudeModel = inputValue{app.value, SourceFlag}
+		case flagEffort:
+			settings.effort = inputValue{app.value, SourceFlag}
+		case flagReviewEvery:
+			n, _ := strconv.Atoi(app.value) // validated during parsing
+			settings.reviewEvery = intValue{n, SourceFlag}
+		}
+	}
+	if flags.interleave {
+		settings.agent = inputValue{"claude", SourceFlag}
+		if settings.reviewAgent.from == SourceDefault {
+			// --interleave requests claude coding with codex review. An
+			// explicit review agent from a flag, the environment, or a saved
+			// profile wins.
+			settings.reviewAgent = inputValue{"codex", SourceFlag}
 		}
 	}
 	c.Checks, err = strconv.Atoi(checks)
 	if err != nil || c.Checks < 1 {
 		return c, fmt.Errorf("check-jobs must be positive")
 	}
-	if c.Smart {
-		c.Model = env("CODEX_SMART_MODEL", "gpt-6-astra")
-		c.Effort = env("CODEX_SMART_REASONING_EFFORT", "high")
+	if settings.jobs.value == "auto" {
+		c.JobsAuto = true
+		c.Jobs = max(1, min(4, runtime.NumCPU()/2))
+		if m := availableMemory(); m > 0 {
+			c.Jobs = min(c.Jobs, max(1, int(m/(2<<30))))
+		}
+	} else {
+		c.Jobs, err = strconv.Atoi(settings.jobs.value)
+		if err != nil || c.Jobs < 1 {
+			return c, fmt.Errorf("jobs must be auto or a positive integer")
+		}
 	}
+	if c.Smart {
+		settings.model = inputValue{env("CODEX_SMART_MODEL", "gpt-6-astra"), SourceFlag}
+		settings.effort = inputValue{env("CODEX_SMART_REASONING_EFFORT", "high"), SourceFlag}
+	}
+	c.Agent = settings.agent.value
+	if c.Agent == "" && settings.agent.from == SourceDefault {
+		c.Agent = "codex"
+	}
+	c.ReviewAgent = settings.reviewAgent.value
 	if c.ReviewAgent == "" {
 		c.ReviewAgent = c.Agent
+	}
+	c.Model, c.ClaudeModel, c.Effort = settings.model.value, settings.claudeModel.value, settings.effort.value
+	c.Verify, c.Setup = settings.verify.value, settings.setup.value
+	c.ReviewEvery = settings.reviewEvery.value
+	c.Sources = Sources{
+		Agent: settings.agent.from, ReviewAgent: settings.reviewAgent.from,
+		Jobs: settings.jobs.from, Model: settings.model.from, ClaudeModel: settings.claudeModel.from,
+		Effort: settings.effort.from, Verify: settings.verify.from, Setup: settings.setup.from,
+		ReviewEvery: settings.reviewEvery.from,
 	}
 	for _, a := range []string{c.Agent, c.ReviewAgent} {
 		if a != "codex" && a != "claude" {
@@ -193,9 +377,8 @@ func Parse(args []string) (Config, error) {
 		c.Todo = filepath.Join(c.Root, c.Todo)
 	}
 	c.Todo = filepath.Clean(c.Todo)
-	c.BaseDir, err = filepath.Abs(c.BaseDir)
 	gitTimeout = c.GitTimeout
-	return c, err
+	return c, nil
 }
 
 // The schema control file is named after the task file: a trailing .json is
