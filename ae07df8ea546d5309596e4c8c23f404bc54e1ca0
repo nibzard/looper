@@ -1,0 +1,12 @@
+# Context
+
+## Why This Way
+The compact threshold is 80 columns or 24 rows, the classic
+terminal size, so a phone pane or narrow tmux split gets the
+summary while a full terminal keeps full details by default.
+Section order (working, blocked, ready, then planner output)
+puts tasks above planning chatter on short screens.
+
+## Gotchas
+Tests that assert long wrapped text must set showDetails
+explicitly; the summary truncates reasons to one line.
