@@ -39,7 +39,13 @@ func publishController(dir, mode string) (*ControllerInfo, error) {
 		PID: os.Getpid(), Root: mustWD(), Mode: mode,
 		Started: time.Now().UTC().Format(time.RFC3339),
 	}
-	return info, writeJSON(controllerPath(dir), info)
+	if err := writeJSON(controllerPath(dir), info); err != nil {
+		return nil, err
+	}
+	// Optional compatibility record for tooling that only reads a pidfile;
+	// the lock and controller.json stay authoritative.
+	_ = atomicWrite(filepath.Join(dir, "looper.pid"), []byte(strconv.Itoa(info.PID)+"\n"), 0600)
+	return info, nil
 }
 
 func mustWD() string {

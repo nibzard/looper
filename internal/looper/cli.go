@@ -7,9 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -55,6 +53,18 @@ func Main(args []string, out, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "__exec" {
 		return RunChild(args[1:])
 	}
+	if len(args) > 0 && args[0] == "__daemon" {
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "the daemon entry point needs a configuration path")
+			return 2
+		}
+		ready := io.Writer(os.Stderr)
+		if f := os.NewFile(3, "daemon-readiness"); f != nil {
+			ready = f
+		}
+		return RunDaemon(args[1], ready)
+	}
+
 	c, err := Parse(args)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error:", err)
@@ -69,7 +79,7 @@ func Main(args []string, out, stderr io.Writer) int {
 		return 0
 	}
 	switch c.Command {
-	case "start", "add-plan":
+	case "add-plan":
 		fmt.Fprintln(stderr, c.Command+" is not available in this build yet.")
 		return 2
 	case "tui":
@@ -77,8 +87,10 @@ func Main(args []string, out, stderr io.Writer) int {
 	case "attach":
 		return runAttach(c, out, stderr, false)
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGTERM drains like `looper stop`; SIGINT cancels with retained work.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	installControllerSignals(c, cancel)
 	if c.Command == "doctor" {
 		return doctor(c, out)
 	}
@@ -115,6 +127,9 @@ func Main(args []string, out, stderr io.Writer) int {
 		if !start {
 			return 0
 		}
+	}
+	if c.Command == "start" {
+		return StartDetached(c, out, stderr)
 	}
 	profileAtStart := profileDigest(c.ProfilePath)
 	e, lock, err := NewEngine(c, out)

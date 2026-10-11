@@ -16,7 +16,7 @@ type Config struct {
 	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                              int
 	Poll, RetryDelay, Timeout, GitTimeout                                                                                 time.Duration
 	Once, Follow, JSON, Verbose, Smart, GitInit, JobsAuto                                                                 bool
-	Plain, Yes, Reset                                                                                                     bool
+	Plain, Yes, Reset, Detached                                                                                           bool
 	Sources                                                                                                               Sources
 	ProfilePath                                                                                                           string
 }
