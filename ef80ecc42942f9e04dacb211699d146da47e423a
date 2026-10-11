@@ -1,0 +1,7 @@
+# Todo
+
+- Verify against a live zcode binary: install, log in, one worker
+  run and one planning run. The adapter was written from the zcode
+  CLI source (github.com/zai-org/ZCode, apps/zcode-cli).
+- Revisit streaming activity interpretation if the dashboard needs
+  live worker progress for zcode.
