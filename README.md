@@ -18,7 +18,7 @@ commit one, hand off the backlog, and come back to checked work. Run
 it unattended on a server and observe from any terminal.
 
 The controller is one Go binary. SQLite stores execution state. Git stores
-code snapshots. Looper uses Codex or Claude Code through their installed
+code snapshots. Looper uses Codex, Claude Code, or zcode through their installed
 commands. Pull requests and remote services are optional parts of your
 project, not requirements of Looper.
 
@@ -27,8 +27,8 @@ with its reason](docs/assets/loop.gif)
 
 ## Quickstart
 
-You need Go 1.22 or later, Git, Bash, and an authenticated `codex` or
-`claude` command. Linux and macOS are supported. The binary needs no Python,
+You need Go 1.22 or later, Git, Bash, and an authenticated `codex`,
+`claude`, or `zcode` command. Linux and macOS are supported. The binary needs no Python,
 Node, or SQLite command at runtime. Python is used by the repository tests.
 Node is optional for Measuretwice.
 
@@ -62,6 +62,7 @@ and continues. Use `--once` when you want a finite run.
 looper --once
 looper --jobs 4 --check-jobs 2
 looper --agent claude --review-agent codex
+looper --agent zcode --review-agent zcode
 looper tui
 looper status
 looper tail --follow
@@ -278,11 +279,33 @@ Availability depends on your agent installation and account. Invocation
 records store the requested configuration; raw agent logs retain any model
 identity reported by the provider.
 
-`zcode` is a third coding agent: `looper --agent zcode` drives the Z.ai
-harness through its command. That command has no structured-output flag, so
-Looper states the output shape in the prompt and parses the answer. Planning
-keeps the inspection-only prompt as its limit; zcode's plan mode answers in
-prose and drops the JSON. Workers run with full access.
+### Use zcode
+
+Install and authenticate the command from
+[ZCode](https://github.com/zai-org/ZCode). The executable must be on your
+`PATH`. Set `ZCODE_BIN` if it is installed elsewhere.
+
+```sh
+looper --agent zcode --review-agent zcode
+ZCODE_BIN=/path/to/zcode looper --agent zcode
+```
+
+`--agent zcode` selects zcode for workers. `--review-agent zcode` selects it
+for planning, diagnosis, and product review. If you omit `--review-agent`,
+Looper uses the worker agent. zcode uses its own configured model;
+Looper's Codex and Claude model options do not select a zcode model.
+
+Looper invokes zcode with `--output-format stream-json` and `--mode yolo`.
+It parses the response from the final `result` event. Intermediate responses,
+missing final results, invalid JSON objects, and failed processes do not
+become successful task reports. One JSON object inside a Markdown code
+fence is also accepted.
+
+zcode has no schema flag. Looper states the output contract in the prompt
+and validates the returned task report. Planning uses the same full-access
+mode because zcode's plan mode returns prose instead of the required JSON.
+The inspection-only prompt limits planning behavior; it does not enforce
+read-only access to tools.
 
 There is no token budget in the controller. The dispatch limit is unlimited
 by default. Spend more computation on independent review, diagnosis, and
