@@ -1,8 +1,8 @@
 class Looper < Formula
   desc "Continuous local development with coding agents"
   homepage "https://github.com/nibzard/looper"
-  url "https://github.com/nibzard/looper/archive/refs/tags/v0.5.0.tar.gz"
-  sha256 "0a0a39e4ed8e4dfcf51b26949a858468ba6b5059cdf85b0e05e7405ec68f7fb6"
+  url "https://github.com/nibzard/looper/archive/refs/tags/v0.6.0.tar.gz"
+  sha256 "3c329a2ce1992a77b81d4533b9b1261e7ecb1405290e8ece3dfdc10235062a10"
   head "https://github.com/nibzard/looper.git", branch: "main"
 
   depends_on "go" => :build
