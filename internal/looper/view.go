@@ -47,7 +47,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		}
 		for _, a := range e.State.Attempts {
 			switch a.Phase {
-			case "done", "blocked", "abandoned":
+			case "done", "blocked":
 				continue
 			}
 			v.Attempts = append(v.Attempts, ui.AttemptView{
@@ -65,7 +65,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		for _, t := range e.State.Backlog.Ready() {
 			claimed := false
 			for _, a := range e.State.Attempts {
-				if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "abandoned" {
+				if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" {
 					claimed = true
 				}
 			}

@@ -325,7 +325,7 @@ func (e *Engine) workRetained() bool {
 	}
 	for _, a := range e.State.Attempts {
 		switch a.Phase {
-		case "done", "blocked", "abandoned":
+		case "done", "blocked":
 		default:
 			return true
 		}
@@ -354,7 +354,7 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	// Compare analysis against the refreshed baseline.
 	backlogBefore := digestFile(e.Config.Todo)
 	tipBefore := e.State.Tip
-	proposal, evidence, err := e.analyzeImport(ctx, plans)
+	proposal, err := e.analyzeImport(ctx, plans)
 	if err != nil {
 		return err
 	}
@@ -372,9 +372,6 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	record.Status = ImportApplied
 	record.AddedTasks = added
 	record.Covered = covered
-	record.Evidence = evidence
-	record.AcceptedRevision = e.State.Tip
-	record.BacklogDigest = digestFile(e.Config.Todo)
 	record.Applied = time.Now().UTC().Format(time.RFC3339Nano)
 	// Scope expansion invalidates execution planning and satisfaction.
 	e.State.Plan = nil

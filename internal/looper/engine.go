@@ -210,7 +210,7 @@ func retained(s *State) bool {
 	}
 	for _, a := range s.Attempts {
 		switch a.Phase {
-		case "done", "blocked", "abandoned":
+		case "done", "blocked":
 		default:
 			return true
 		}
@@ -300,7 +300,7 @@ func (e *Engine) initializeState(ctx context.Context) error {
 				return fmt.Errorf("project files changed since the interrupted run; work is retained in %s", e.Dir)
 			}
 			for _, a := range s.Attempts {
-				if a.Phase == "done" || a.Phase == "blocked" || a.Phase == "abandoned" {
+				if a.Phase == "done" || a.Phase == "blocked" {
 					continue
 				}
 				if err = e.contract(a); err != nil {
@@ -465,6 +465,10 @@ func (e *Engine) plan(ctx context.Context) error {
 	return e.save()
 }
 
+// command runs one shell command through the check semaphore. The semaphore
+// bounds concurrent setup and verify processes across workers and checks
+// together. The separate len(checks) bound in Run limits the speculative
+// integration chain; the two limits cover different resources.
 func (e *Engine) command(ctx context.Context, command, work, dir, name string) error {
 	if strings.TrimSpace(command) == "" {
 		return nil
@@ -594,7 +598,7 @@ func (e *Engine) compatible(t Task) bool {
 	scope := e.State.Plan.Scope(t.ID)
 	for _, a := range e.State.Attempts {
 		switch a.Phase {
-		case "done", "blocked", "abandoned", "resume":
+		case "done", "blocked", "resume":
 			continue
 		}
 		if a.Task.ID == t.ID {

@@ -266,7 +266,7 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 				}
 				claimed := false
 				for _, a := range e.State.Attempts {
-					if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "abandoned" && a.Phase != "resume" {
+					if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "resume" {
 						claimed = true
 					}
 				}
@@ -328,7 +328,7 @@ func (e *Engine) refreshIdle() error {
 		return err
 	}
 	for _, a := range e.State.Attempts {
-		if a.Phase != "done" && a.Phase != "blocked" && a.Phase != "abandoned" {
+		if a.Phase != "done" && a.Phase != "blocked" {
 			return fmt.Errorf("cannot change the project baseline while work is retained")
 		}
 	}
