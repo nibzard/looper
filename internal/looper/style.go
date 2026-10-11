@@ -90,9 +90,9 @@ func styleFor(kind string) eventStyle {
 		return eventStyle{"…", ansiBlue, "checking"}
 	case "plan", "bootstrap", "review":
 		return eventStyle{"…", ansiBlue, ""}
-	case "repair":
+	case "repair", "diagnosis":
 		return eventStyle{"↻", ansiYellow, ""}
-	case "blocker", "review-error", "hook-error":
+	case "blocker", "review-error", "hook-error", "diagnosis-error":
 		return eventStyle{"✗", ansiYellow, ""}
 	case "waiting", "limit", "stop":
 		return eventStyle{"⏸", ansiYellow, ""}

@@ -358,8 +358,8 @@ func TestCgroupHeadroomExcludesReclaimableCache(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeFile(limit, "4294967296")  // 4 GiB
-	writeFile(usage, "3019898880")  // 2.8 GiB used
+	writeFile(limit, "4294967296") // 4 GiB
+	writeFile(usage, "3019898880") // 2.8 GiB used
 	writeFile(stat, "anon 314572800\ninactive_file 2415919104\n")
 	// Working set is 2.8 GiB minus 2.25 GiB cache, so the headroom is
 	// the limit minus that working set.
