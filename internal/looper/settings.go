@@ -209,6 +209,9 @@ func runConfig(c Config, in *os.File, out, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "looper config needs an interactive terminal; --reset works without one.")
 		return 1
 	}
+	if !c.JSON {
+		fmt.Fprintln(out, "Effective settings:", EffectiveSettings(c))
+	}
 	s := settingsFromProfile(profile)
 	detection := DetectVerifyCommand(c.Root)
 	edited := s.VerifyCommand != ""
@@ -232,9 +235,36 @@ func runConfig(c Config, in *os.File, out, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Error:", err)
 		return 1
 	}
-	fmt.Fprintln(out, "Saved settings to", c.ProfilePath)
-	noticeVerifyCommand(out, saved.VerifyCommand, detection, edited || s.VerifyCommand != detection.Command)
+	if !c.JSON {
+		fmt.Fprintln(out, "Saved settings to", c.ProfilePath)
+		noticeVerifyCommand(out, saved.VerifyCommand, detection, edited || s.VerifyCommand != detection.Command)
+	}
 	return 0
+}
+
+// EffectiveSettings lists each managed setting with its effective value and
+// where the value came from, so users can see what a run will use.
+func EffectiveSettings(c Config) string {
+	value := func(v string, from Source) string {
+		if v == "" {
+			switch from {
+			case SourceFlag, SourceEnv, SourceProfile:
+				return "(empty) [" + from.String() + "]"
+			}
+			return "(default)"
+		}
+		return v + " [" + from.String() + "]"
+	}
+	jobs := fmt.Sprintf("%d", c.Jobs)
+	if c.JobsAuto {
+		jobs = "auto [" + c.Sources.Jobs.String() + "]"
+	} else {
+		jobs += " [" + c.Sources.Jobs.String() + "]"
+	}
+	return fmt.Sprintf("agent %s | review %s | sessions %s | codex model %s | claude model %s | effort %s | verify %s | setup %s | review frequency %d [%s]",
+		value(c.Agent, c.Sources.Agent), value(c.ReviewAgent, c.Sources.ReviewAgent), jobs,
+		value(c.Model, c.Sources.Model), value(c.ClaudeModel, c.Sources.ClaudeModel), value(c.Effort, c.Sources.Effort),
+		value(c.Verify, c.Sources.Verify), value(c.Setup, c.Sources.Setup), c.ReviewEvery, c.Sources.ReviewEvery.String())
 }
 
 // SettingsRequestVersion is the only supported request-envelope version.

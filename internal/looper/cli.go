@@ -69,9 +69,13 @@ func Main(args []string, out, stderr io.Writer) int {
 		return 0
 	}
 	switch c.Command {
-	case "start", "tui", "attach", "add-plan":
+	case "start", "add-plan":
 		fmt.Fprintln(stderr, c.Command+" is not available in this build yet.")
 		return 2
+	case "tui":
+		return runTUI(c, out, stderr)
+	case "attach":
+		return runAttach(c, out, stderr, false)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -112,6 +116,7 @@ func Main(args []string, out, stderr io.Writer) int {
 			return 0
 		}
 	}
+	profileAtStart := profileDigest(c.ProfilePath)
 	e, lock, err := NewEngine(c, out)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error:", err)
@@ -119,6 +124,11 @@ func Main(args []string, out, stderr io.Writer) int {
 	}
 	defer lock.Close()
 	defer e.Store.Close()
+	// Recheck after acquiring the lock: a profile written while the form or
+	// startup ran is reported, never silently replaced.
+	if profileAtStart != "" && profileDigest(c.ProfilePath) != profileAtStart && !c.JSON {
+		fmt.Fprintln(out, "Note: the saved profile changed while this run was starting; the new values apply through looper config or the next run.")
+	}
 	code, err := e.Run(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -130,7 +140,11 @@ func Main(args []string, out, stderr io.Writer) int {
 	return code
 }
 func doctor(c Config, out io.Writer) int {
-	p := NewPresenter(DetectMode(os.Stdin, out, c.Plain), out, func() int {
+	mode := DetectMode(os.Stdin, out, c.Plain)
+	if c.JSON {
+		mode = ModePlain
+	}
+	p := NewPresenter(mode, out, func() int {
 		if f, ok := out.(*os.File); ok {
 			return terminalWidth(f)
 		}
@@ -206,7 +220,7 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 				blocked++
 			}
 			if c.ListStatus != "" && t.Status == c.ListStatus {
-				fmt.Fprintf(out, "%s  %s  %s\n", t.ID, t.Status, t.Title)
+				fmt.Fprintf(out, "%s  %s  %s\n", sanitize(t.ID), t.Status, sanitize(t.Title))
 			}
 		}
 		if DetectMode(os.Stdin, out, c.Plain) == ModeInteractive {

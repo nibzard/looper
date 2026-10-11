@@ -55,13 +55,16 @@ func (s *Store) Save(v *State) error {
 	_, err = s.db.Exec("INSERT INTO state(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", string(b))
 	return err
 }
-func (s *Store) Event(kind, message string, data any) error {
+func (s *Store) Event(kind, message string, data any) (int64, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.db.Exec("INSERT INTO events(time,kind,message,data) VALUES(?,?,?,?)", time.Now().UTC().Format(time.RFC3339Nano), kind, message, string(b))
-	return err
+	result, err := s.db.Exec("INSERT INTO events(time,kind,message,data) VALUES(?,?,?,?)", time.Now().UTC().Format(time.RFC3339Nano), kind, message, string(b))
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 func (s *Store) Check(attempt, revision, kind, result, artifact string) error {
 	_, err := s.db.Exec("INSERT INTO checks(time,attempt_id,revision,kind,result,artifact) VALUES(?,?,?,?,?,?)", time.Now().UTC().Format(time.RFC3339Nano), attempt, revision, kind, result, artifact)

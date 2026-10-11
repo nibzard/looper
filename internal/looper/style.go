@@ -259,7 +259,11 @@ func (p *Presenter) line(kind, text, stamp string) {
 			label = " " + p.paint(style.color, label)
 		}
 		prefix := timestamp + " " + glyph + label
-		prefixCells := displayWidth(stamp) + 1 + displayWidth(style.glyph) + displayWidth(style.label) + 2
+		labelCells := displayWidth(style.label)
+		if labelCells > 0 {
+			labelCells++ // the rendered label carries one leading space
+		}
+		prefixCells := displayWidth(stamp) + 1 + displayWidth(style.glyph) + labelCells + 2
 		if width := p.Width(); width > prefixCells+4 {
 			first := true
 			for _, line := range wrapText(text, width-prefixCells-1) {
@@ -319,7 +323,7 @@ func (p *Presenter) StatusBoard(s *State, dbPath string) {
 	for _, a := range s.Attempts {
 		switch a.Phase {
 		case "running":
-			inFlight = append(inFlight, a.Task.ID+" "+p.paint(ansiBlue, "implementing"))
+			inFlight = append(inFlight, sanitize(a.Task.ID)+" "+p.paint(ansiBlue, "implementing"))
 		case "verifying":
 			inFlight = append(inFlight, a.Task.ID+" "+p.paint(ansiBlue, "checking"))
 		case "ready", "resume":
@@ -327,13 +331,17 @@ func (p *Presenter) StatusBoard(s *State, dbPath string) {
 		}
 	}
 	for _, t := range s.Backlog.Ready() {
-		ready = append(ready, t.ID+" "+t.Title)
+		ready = append(ready, t.ID+" "+sanitize(t.Title))
 	}
 	for _, t := range s.Backlog.Tasks {
 		if t.Status == "blocked" {
 			reason := "blocked"
 			if len(t.Blockers) > 0 {
-				reason = strings.Join(t.Blockers, "; ")
+				reasons := make([]string, 0, len(t.Blockers))
+				for _, b := range t.Blockers {
+					reasons = append(reasons, sanitize(b))
+				}
+				reason = strings.Join(reasons, "; ")
 			}
 			blockedLines = append(blockedLines, t.ID+" — "+reason)
 		}

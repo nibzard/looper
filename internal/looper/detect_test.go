@@ -77,6 +77,16 @@ func TestDetectPackageManager(t *testing.T) {
 	}
 }
 
+func TestDetectNestedMixedRootsStayEmpty(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "go.mod"), "module x\n")
+	write(t, filepath.Join(root, "web", "package.json"), `{"scripts": {"test": "node --test"}}`)
+	write(t, filepath.Join(root, "web", "package-lock.json"), "{}")
+	if d := DetectVerifyCommand(root); d.Command != "" {
+		t.Fatalf("a nested project root must leave the override empty: %+v", d)
+	}
+}
+
 func TestDetectCargo(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, "Cargo.toml"), "[package]\nname = \"x\"\n")
