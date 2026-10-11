@@ -25,6 +25,22 @@ func lockRepository(common string) (*os.File, error) {
 	return f, nil
 }
 
+// ownsRepository reports whether another process holds the repository lock,
+// without holding it. An unopenable lock file counts as owned: something is
+// wrong with the repository and starting a controller is unsafe.
+func ownsRepository(common string) bool {
+	f, err := os.OpenFile(filepath.Join(common, "looper.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
+}
+
 func cleanEnv(extra map[string]string) []string {
 	skip := map[string]bool{"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true, "GIT_INDEX_FILE": true, "CLAUDECODE": true}
 	var out []string

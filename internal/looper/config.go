@@ -16,6 +16,7 @@ type Config struct {
 	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                              int
 	Poll, RetryDelay, Timeout, GitTimeout                                                                                 time.Duration
 	Once, Follow, JSON, Verbose, Smart, GitInit, JobsAuto                                                                 bool
+	Plain, Yes, Reset                                                                                                     bool
 	Sources                                                                                                               Sources
 	ProfilePath                                                                                                           string
 }
@@ -192,7 +193,7 @@ func Parse(args []string) (Config, error) {
 		}
 		var v string
 		switch a {
-		case "run", "status", "stop", "doctor", "tail", "version":
+		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-plan":
 			c.Command = a
 		case "--help", "-h":
 			c.Command = "help"
@@ -208,6 +209,12 @@ func Parse(args []string) (Config, error) {
 			c.Once = true
 		case "--json":
 			c.JSON = true
+		case "--plain":
+			c.Plain = true
+		case "--yes", "-y":
+			c.Yes = true
+		case "--reset":
+			c.Reset = true
 		case "--verbose", "-v":
 			c.Verbose = true
 		case "--smart", "-s":
