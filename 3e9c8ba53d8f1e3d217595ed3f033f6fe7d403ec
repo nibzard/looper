@@ -1,0 +1,19 @@
+# Context
+
+## Why This Way
+The comparison holds the model constant (GLM-5.3 served through
+both harnesses) so the delta measures harness behavior: context
+management, tool surface, and verify-command authorship. Run on
+2026-10-11 right after the zcode adapter's live verification.
+
+## Gotchas
+- The pycache trap (unittest regenerates .pyc, failing the
+  changed-files check) hits every fresh Python project; both
+  arms hit it. Workers should gitignore build artifacts before
+  the first verify.
+- zcode's TMPDIR must stay short enough for Unix sockets; see
+  the design note on b27673a.
+
+## Related
+- docs/research/PRACTICES-REPORT-2026-10-11.md
+- Commits ef80ecc, b27673a (zcode adapter)
