@@ -53,6 +53,7 @@ log_contains() {
 LOOPER_BIN=$(resolve_looper_bin)
 
 mkdir -p "$PROJECT_DIR"
+git init -q "$PROJECT_DIR"
 
 cat > "$PROJECT_DIR/PROJECT.md" <<'EOF'
 # Smoke Test Project
@@ -87,9 +88,10 @@ run_status=0
     CODEX_JSON_LOG=0 \
         LOOPER_BASE_DIR="$TMP_DIR/logs" \
         LOOPER_GIT_INIT=0 \
+        LOOPER_VERIFY_COMMAND="test -s README.md" \
         LOOP_DELAY_SECONDS=0 \
         MAX_ITERATIONS=1 \
-        "$LOOPER_BIN" to-do.json 2>&1 | tee "$RUN_LOG"
+        "$LOOPER_BIN" --once --jobs 1 to-do.json 2>&1 | tee "$RUN_LOG"
 ) || run_status=$?
 
 if [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
@@ -112,8 +114,8 @@ require_outcome
 echo "Looper executable: $LOOPER_BIN"
 echo "Temp project: $PROJECT_DIR"
 echo "Run log: $RUN_LOG"
-echo "Selected task: $(log_contains '^[0-9:]+  \[[0-9]+/[0-9]+\]' "$RUN_LOG")"
-echo "Result: $(log_contains '^  (Done|Blocked)  ' "$RUN_LOG")"
+echo "Selected task: $(log_contains '^T2  ' "$RUN_LOG")"
+echo "Result: $(log_contains '^T2  done' "$RUN_LOG")"
 
 echo "Task statuses:"
 jq -r '.tasks[] | "\(.id)\t\(.status)\t\(.title)"' "$PROJECT_DIR/to-do.json"

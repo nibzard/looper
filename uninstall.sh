@@ -5,7 +5,7 @@ usage() {
     cat <<'USAGE'
 Usage: ./uninstall.sh [options]
 
-Removes looper.sh and Codex skills installed by this project.
+Removes looper and its compatibility launcher and Codex skills installed by this project.
 
 Options:
   --prefix <path>      Uninstall from prefix (bin -> <prefix>/bin,
@@ -22,7 +22,7 @@ USAGE
 
 DEFAULT_PREFIX="$HOME/.local"
 PREFIX="${PREFIX:-$DEFAULT_PREFIX}"
-CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+TARGET_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
 PREFIX_OVERRIDE=""
 BIN_DIR_OVERRIDE=""
@@ -81,7 +81,7 @@ if [ -n "$PREFIX_OVERRIDE" ]; then
 fi
 
 if [ -n "$CODEX_HOME_OVERRIDE" ]; then
-    CODEX_HOME="$CODEX_HOME_OVERRIDE"
+    TARGET_CODEX_HOME="$CODEX_HOME_OVERRIDE"
 fi
 
 if [ "$PREFIX" != "$DEFAULT_PREFIX" ]; then
@@ -100,7 +100,7 @@ else
     if [ "$PREFIX_MODE" -eq 1 ] && [ -z "$CODEX_HOME_OVERRIDE" ]; then
         SKILLS_DIR="$PREFIX/share/looper/skills"
     else
-        SKILLS_DIR="$CODEX_HOME/skills"
+        SKILLS_DIR="$TARGET_CODEX_HOME/skills"
     fi
 fi
 
@@ -120,6 +120,9 @@ run() {
 }
 
 if [ "$REMOVE_BIN" -eq 1 ]; then
+    if [ -f "$BIN_DIR/looper" ]; then
+        run rm -f "$BIN_DIR/looper"
+    fi
     if [ -f "$BIN_DIR/looper.sh" ]; then
         run rm -f "$BIN_DIR/looper.sh"
     fi
