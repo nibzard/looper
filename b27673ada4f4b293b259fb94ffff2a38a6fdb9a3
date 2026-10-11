@@ -1,0 +1,28 @@
+# Design: live zcode contract verification
+
+## What was verified
+Built the CLI from source (zai-org/ZCode at main, node 24/tsx),
+logged in through configureCodingPlanApiKey with a Z.ai coding
+plan key, and ran Looper end to end on a one-task repository:
+planning, worker, integrated check, publication, final review.
+
+## Findings
+- The --output-format json summary is pretty-printed across
+  lines; only the stream-json result terminator is one line.
+  The adapter now uses stream-json.
+- --mode plan routes the plan through zcode's plan presentation
+  flow; the final response is prose without the JSON. Planning
+  stays in yolo with the inspection-only prompt as the limit.
+  Weaker than codex read-only and claude tool restrictions; this
+  is the known zcode gap.
+- The zcode stack binds Unix sockets under TMPDIR. Looper's
+  private per-attempt TMPDIR can exceed the socket path limit
+  (about 104 characters), producing listen EINVAL. The smoke
+  wrapper maps TMPDIR to a short per-attempt path. A packaged
+  zcode install under a deep runtime directory will hit this;
+  a shorter TMPDIR policy in resourceEnv is a candidate fix.
+
+## Remaining
+- The wrapper-level TMPDIR workaround is environmental, not an
+  adapter rule. If zcode users report blocked workers with
+  listen EINVAL, shorten TMPDIR in resourceEnv for all agents.
