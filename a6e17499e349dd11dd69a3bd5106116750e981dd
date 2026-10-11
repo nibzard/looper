@@ -1,0 +1,1 @@
+Release 0.7.1 includes the persistent TUI, zcode integration, a reviewed final-result parser, and updated setup documentation. Validation: make test and focused zcode/agent race tests pass. The parser regression was proved against the old implementation.
