@@ -166,8 +166,8 @@ func (e *Engine) acceptPlanImport(requestID string, paths []string, staleSession
 		return
 	}
 	if applied := e.appliedByDigest(plans); applied != nil {
-		// The same content is already applied; return the recorded result.
-		e.writePlanAck(applied)
+		// Reply under the new request identifier while reusing the applied result.
+		e.ackPlanImport(requestID, ImportApplied, "", applied)
 		return
 	}
 	record := &ImportRecord{
@@ -201,12 +201,20 @@ func (e *Engine) importReceipt(requestID string) *ImportRecord {
 // appliedByDigest matches already-applied content digests so repeated
 // imports never add tasks twice.
 func (e *Engine) appliedByDigest(plans []capturedPlan) *ImportRecord {
+	return e.matchingImport(plans, ImportApplied)
+}
+
+func (e *Engine) matchingImport(plans []capturedPlan, statuses ...string) *ImportRecord {
 	digests := map[string]bool{}
 	for _, p := range plans {
 		digests[p.Digest] = true
 	}
 	for _, r := range e.State.Imports {
-		if r.Status != ImportApplied || len(r.Digests) != len(digests) {
+		accepted := false
+		for _, status := range statuses {
+			accepted = accepted || r.Status == status
+		}
+		if !accepted || len(r.Digests) != len(digests) {
 			continue
 		}
 		match := true
@@ -272,7 +280,7 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 		return
 	}
 	for _, record := range e.State.Imports {
-		if record.Status != ImportQueued && record.Status != ImportWaiting {
+		if record.Status != ImportQueued && record.Status != ImportWaiting && record.Status != ImportPlanning {
 			continue
 		}
 		if e.drainingNow() {
@@ -339,16 +347,13 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 		}
 		e.writePlanAck(record)
 	}
-	backlogBefore := digestFile(e.Config.Todo)
-	tipBefore := e.State.Tip
 	// Refresh the baseline through the existing checks before analysis.
 	if err = e.refreshIdle(); err != nil {
 		return err
 	}
-	// Inputs must still match after the refresh.
-	if digestFile(e.Config.Todo) != backlogBefore && record.BacklogDigest != "" {
-		return fmt.Errorf("the backlog changed during import; retrying at the next boundary")
-	}
+	// Compare analysis against the refreshed baseline.
+	backlogBefore := digestFile(e.Config.Todo)
+	tipBefore := e.State.Tip
 	proposal, evidence, err := e.analyzeImport(ctx, plans)
 	if err != nil {
 		return err
@@ -358,7 +363,7 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 		return fmt.Errorf("the plan conflicts with existing scope: %s", strings.Join(proposal.Conflicts, "; "))
 	}
 	if digestFile(e.Config.Todo) != backlogBefore || e.State.Tip != tipBefore {
-		return fmt.Errorf("the project changed during analysis; the import retries at the next boundary")
+		return fmt.Errorf("the project changed during analysis; resubmit the import")
 	}
 	added, covered, err := e.applyProposal(proposal)
 	if err != nil {
@@ -407,10 +412,10 @@ func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef
 	alloc := func() string {
 		for {
 			id := fmt.Sprintf("T%03d", next)
+			next++
 			if e.State.Backlog.Task(id) == nil {
 				return id
 			}
-			next++
 		}
 	}
 	local := map[string]string{}
@@ -419,6 +424,9 @@ func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef
 		t := proposal.Additions[i]
 		if strings.TrimSpace(t.Title) == "" || strings.TrimSpace(t.Details) == "" {
 			return nil, nil, fmt.Errorf("addition %d lacks a title or acceptance criteria", i+1)
+		}
+		if strings.TrimSpace(t.ID) == "" || local[t.ID] != "" {
+			return nil, nil, fmt.Errorf("addition %d has an empty or duplicate identifier", i+1)
 		}
 		local[t.ID] = alloc()
 	}

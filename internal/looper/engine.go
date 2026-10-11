@@ -213,6 +213,14 @@ func retained(s *State) bool {
 	return false
 }
 func (e *Engine) initialize(ctx context.Context) error {
+	if err := e.initializeState(ctx); err != nil {
+		return err
+	}
+	e.startupImportPlans()
+	return e.err
+}
+
+func (e *Engine) initializeState(ctx context.Context) error {
 	var bootstrapPlans []capturedPlan
 	if _, err := os.Stat(e.Config.Todo); errors.Is(err, os.ErrNotExist) {
 		// A fresh project reads project context and all explicitly supplied
@@ -352,7 +360,6 @@ func (e *Engine) initialize(ctx context.Context) error {
 	if err := e.save(); err != nil {
 		return err
 	}
-	e.startupImportPlans()
 	return nil
 }
 
