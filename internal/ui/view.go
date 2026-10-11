@@ -8,21 +8,24 @@ const ViewVersion = 1
 // not complete state, so the snapshot holds the authoritative presentation
 // state and the journal stays authoritative for event history.
 type ViewSnapshot struct {
-	Version     int           `json:"version"`
-	Session     string        `json:"session"`
-	Mode        string        `json:"mode"`
-	Started     string        `json:"started,omitempty"`
-	Now         string        `json:"now,omitempty"`
-	State       string        `json:"state,omitempty"`
-	Goal        string        `json:"goal,omitempty"`
-	Counters    ViewCounters  `json:"counters"`
-	Attempts    []AttemptView `json:"attempts"`
-	Ready       []TaskView    `json:"ready"`
-	Blocked     []BlockedView `json:"blocked"`
-	EventCursor int64         `json:"event_cursor"`
-	Draining    bool          `json:"draining,omitempty"`
-	Finished    bool          `json:"finished,omitempty"`
-	Stale       bool          `json:"stale,omitempty"`
+	Version         int           `json:"version"`
+	Session         string        `json:"session"`
+	Mode            string        `json:"mode"`
+	Started         string        `json:"started,omitempty"`
+	Now             string        `json:"now,omitempty"`
+	State           string        `json:"state,omitempty"`
+	ActivityDetail  string        `json:"activity_detail,omitempty"`
+	ActivityUpdated string        `json:"activity_updated,omitempty"`
+	ActivityLog     string        `json:"activity_log,omitempty"`
+	Goal            string        `json:"goal,omitempty"`
+	Counters        ViewCounters  `json:"counters"`
+	Attempts        []AttemptView `json:"attempts"`
+	Ready           []TaskView    `json:"ready"`
+	Blocked         []BlockedView `json:"blocked"`
+	EventCursor     int64         `json:"event_cursor"`
+	Draining        bool          `json:"draining,omitempty"`
+	Finished        bool          `json:"finished,omitempty"`
+	Stale           bool          `json:"stale,omitempty"`
 }
 
 // ViewCounters carries board counters. Missing timing fields render as

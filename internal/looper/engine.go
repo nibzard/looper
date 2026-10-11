@@ -39,6 +39,9 @@ type Engine struct {
 	wg                  sync.WaitGroup
 	capacity, successes int
 	err                 error
+
+	activity, activityDetail, activityLog string
+	activityUpdated                       string
 }
 
 // operation is the immutable execution configuration captured before each
@@ -434,7 +437,7 @@ func (e *Engine) plan(ctx context.Context) error {
 	defer e.Repo.Remove(work)
 	op := e.capture()
 	e.event("plan", "Planning independent tasks and executable checks...")
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog, e.importedScope()), false)
+	raw, err := e.runPlanner(ctx, op, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog, e.importedScope()))
 	if err != nil {
 		return err
 	}

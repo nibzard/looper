@@ -34,7 +34,8 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		Version: ui.ViewVersion, Goal: e.State.Backlog.Goal,
 		Now:         time.Now().UTC().Format(time.RFC3339),
 		EventCursor: e.eventCursor,
-		Draining:    draining, Finished: e.State.Finished,
+		State:       e.activity, ActivityDetail: e.activityDetail, ActivityLog: e.activityLog, ActivityUpdated: e.activityUpdated,
+		Draining: draining, Finished: e.State.Finished,
 	}
 	if e.controller != nil {
 		v.Session, v.Mode, v.Started = e.controller.Session, e.controller.Mode, e.controller.Started

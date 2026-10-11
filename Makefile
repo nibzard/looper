@@ -1,6 +1,6 @@
 PREFIX ?= $(HOME)/.local
 CODEX_HOME ?= $(HOME)/.codex
-VERSION ?= dev
+VERSION ?= $(shell cat VERSION)
 
 .PHONY: build install uninstall smoke test race test-measuretwice
 

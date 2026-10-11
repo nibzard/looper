@@ -4,24 +4,29 @@ Looper keeps a local development process running. It plans tasks, runs coding
 agents in private Git worktrees, checks their combined changes, and integrates
 successful work. It uses Codex or Claude Code through their installed commands.
 
+**Go is the default implementation starting with v0.5.0.** Both `looper` and
+`looper.sh` run the Go controller. The Bash script stays as a compatibility
+launcher for existing scripts and command paths; it is not a separate engine.
+
 The controller is one Go binary. SQLite stores execution state. Git stores code
 snapshots. Sequential and parallel runs use the same engine. Pull requests and
 remote services are optional parts of your project, not requirements of Looper.
 
-## Start
+## Install and start
 
 You need Go 1.22 or later to build, Git, Bash, and an authenticated coding agent.
 The runtime supports Linux and macOS. The binary needs no Python, Node, or SQLite
 command. Python is used by the repository tests. Node is optional for Measuretwice.
 
+From the Looper checkout, install the command:
+
 ```sh
-make build
 ./install.sh --skip-skills
 cd /path/to/project
 looper
 ```
 
-Run from the repository root. Keep the intended outcome and exclusions in a file
+Run `looper` from your project’s repository root. Keep the intended outcome and exclusions in a file
 such as `PROJECT.md`. If `to-do.json` is absent, Looper asks the planning agent to
 create tasks from the existing requirements. A project without Git gets a local
 repository unless `LOOPER_GIT_INIT=0` is set.
@@ -43,6 +48,55 @@ looper stop
 `looper stop` stops new dispatch and lets active work finish. An interrupt stops
 child processes and retains partial work. Run `looper` again to resume.
 `bin/looper.sh` remains a compatibility launcher for the Go binary.
+
+## Dashboard and mobile terminals
+
+Start the terminal user interface (TUI) with `looper tui`. It starts a controller
+or attaches to the active run. The header separates run state from current
+activity, for example `RUNNING · PLANNING`.
+
+| State | Color | Meaning |
+| --- | --- | --- |
+| `RUNNING` | Green | The controller is active; the activity identifies its work. |
+| `WAITING` | Yellow | No tasks are ready. |
+| `STOPPING` | Yellow | Current work finishes before the controller exits. |
+| `BLOCKED` | Red | Work needs attention. |
+| `COMPLETE` | Green | The goal is met; Looper waits for new work. |
+| `STOPPED` | Gray | No controller is active. |
+
+Text labels remain visible without color. There is no pause command.
+
+| Key | Action |
+| --- | --- |
+| `l` or `L` | Open the planner activity log. The footer shows `[L] logs`. |
+| `t` / `b` | Open events / return to the board. |
+| `j` / `k`, arrows | Scroll; on the board, also move the task selection. |
+| `d` | Show the selected task’s diff. |
+| `a` / `s` | Add a plan / open settings when controls are available. |
+| `x` | Request a drain: stop new dispatch and finish current work. |
+| `q` | Detach an observer or open the controller exit choices. |
+| `Ctrl+C` | Interrupt a controller and retain work, or detach an observer. |
+| `?` | Show help. |
+
+A drain waits for current planning or agent work to finish. To stop immediately,
+choose **interrupt; retain work** in the exit dialog. Restarting retains task
+progress, but unfinished planning runs again.
+
+The dashboard shows `PLANNING` before implementation starts. Its timer continues
+while the agent runs. Press `l` to read the planner log and `t` to read events.
+Agent attempts, tool activity, and retry delays appear in the event history.
+The header reports time since the last observed agent output. Controller waiting
+messages do not count as agent output. Claude planning streams file reads and
+searches. Its available tools are Read, Glob, and Grep; shell commands, delegation,
+skills, and external tool servers are disabled for planning. Codex planning uses
+its read-only sandbox. The planning prompt tells both agents to identify commands
+without running builds, tests, benchmarks, or dataset generators. Planning has no
+timeout. Press Ctrl+C to interrupt and retain work.
+
+In mobile terminals and tmux panes, the header and controls wrap to fit the pane.
+Use `j` and `k`, arrow keys, or Page Up and Page Down to scroll the board.
+The header and controls stay visible when the keyboard reduces the pane height.
+Press `?` for the complete list of controls.
 
 ## The development loop
 
@@ -229,8 +283,9 @@ The default run is now continuous. Add `--once` to scripts that expect completio
 Odd/even and round-robin agent schedules are replaced by explicit coding and
 review agents. Submodules and unresolved index conflicts are not supported.
 
-The Homebrew stable formula still targets the published v0.4.0 archive. The Go
-build is selected for `--HEAD`. No new release or archive checksum is implied.
+The Homebrew stable formula builds the Go release. Both stable and `--HEAD`
+install `looper` and the `looper.sh` compatibility launcher. The old Bash runner
+is no longer maintained as a separate execution engine.
 
 ## Development
 

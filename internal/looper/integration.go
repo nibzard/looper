@@ -263,6 +263,9 @@ type reviewResult struct {
 }
 
 func (e *Engine) review(ctx context.Context, final bool) error {
+	e.activity = "reviewing"
+	e.publishView(false)
+	defer func() { e.activity = ""; e.publishView(false) }()
 	name := identifier("review")
 	work, err := e.Repo.Workspace(name, e.State.Tip, e.State.Backlog)
 	if err != nil {
