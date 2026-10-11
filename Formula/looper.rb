@@ -12,7 +12,6 @@ class Looper < Formula
            "-X github.com/nibzard/looper/internal/looper.Version=#{version}",
            "-o", "looper", "./cmd/looper"
     bin.install "looper"
-    bin.install "bin/looper.sh"
     bin.install "install.sh" => "looper-install"
     bin.install "uninstall.sh" => "looper-uninstall"
     pkgshare.install "skills"
@@ -21,7 +20,7 @@ class Looper < Formula
 
   def caveats
     <<~EOS
-      Go is the default implementation. looper.sh is a compatibility launcher.
+      Go is the only implementation.
 
       To install skills into ~/.codex/skills:
         looper-install --skip-bin
@@ -33,7 +32,6 @@ class Looper < Formula
 
   test do
     system "#{bin}/looper", "--help"
-    system "#{bin}/looper.sh", "--help"
     assert_match version.to_s, shell_output("#{bin}/looper --version")
   end
 end

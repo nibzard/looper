@@ -5,7 +5,7 @@ usage() {
     cat <<'USAGE'
 Usage: ./uninstall.sh [options]
 
-Removes looper and its compatibility launcher and Codex skills installed by this project.
+Removes looper and the Codex skills installed by this project.
 
 Options:
   --prefix <path>      Uninstall from prefix (bin -> <prefix>/bin,
@@ -13,7 +13,7 @@ Options:
   --bin-dir <path>     Override bin dir (default: <prefix>/bin)
   --codex-home <path>  Override CODEX_HOME (default: ~/.codex)
   --skills-dir <path>  Override skills dir (default: <CODEX_HOME>/skills)
-  --skip-bin           Skip removing looper.sh
+  --skip-bin           Skip removing the binary
   --skip-skills        Skip removing skills
   --dry-run            Print actions without making changes
   -h, --help           Show help
@@ -123,6 +123,7 @@ if [ "$REMOVE_BIN" -eq 1 ]; then
     if [ -f "$BIN_DIR/looper" ]; then
         run rm -f "$BIN_DIR/looper"
     fi
+    # Legacy files from the retired Bash implementation.
     if [ -f "$BIN_DIR/looper.sh" ]; then
         run rm -f "$BIN_DIR/looper.sh"
     fi

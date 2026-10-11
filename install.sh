@@ -5,7 +5,7 @@ usage() {
     cat <<'USAGE'
 Usage: ./install.sh [options]
 
-Installs looper and its compatibility launcher and Codex skills into user-appropriate locations.
+Installs looper and the Codex skills into user-appropriate locations.
 
 Options:
   --prefix <path>      Install into a prefix (bin -> <prefix>/bin,
@@ -106,23 +106,17 @@ fi
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR="$SCRIPT_DIR"
-SRC_BIN="$ROOT_DIR/bin/looper.sh"
 SRC_PROGRAM="$ROOT_DIR/build/looper"
 SRC_SKILLS="$ROOT_DIR/skills"
 
 # Homebrew installs the commands in bin and the skills in share/looper.
-if [ ! -f "$SRC_BIN" ] && [ -f "$SCRIPT_DIR/looper.sh" ]; then
-    SRC_BIN="$SCRIPT_DIR/looper.sh"
+if [ ! -f "$SRC_PROGRAM" ] && [ -f "$SCRIPT_DIR/looper" ]; then
     SRC_PROGRAM="$SCRIPT_DIR/looper"
 fi
 if [ ! -d "$SRC_SKILLS" ] && [ -d "$SCRIPT_DIR/../share/looper/skills" ]; then
     SRC_SKILLS="$SCRIPT_DIR/../share/looper/skills"
 fi
 
-if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_BIN" ]; then
-    echo "Error: missing $SRC_BIN" >&2
-    exit 1
-fi
 if [ "$INSTALL_BIN" -eq 1 ] && [ ! -f "$SRC_PROGRAM" ] && [ ! -f "$ROOT_DIR/go.mod" ]; then
     echo "Error: missing $SRC_PROGRAM" >&2
     exit 1
@@ -156,8 +150,6 @@ if [ "$INSTALL_BIN" -eq 1 ]; then
     fi
     run install -d "$BIN_DIR"
     run install -m 0755 "$SRC_PROGRAM" "$BIN_DIR/looper"
-    run install -m 0755 "$SRC_BIN" "$BIN_DIR/looper.sh"
-
 fi
 
 if [ "$INSTALL_SKILLS" -eq 1 ]; then
