@@ -1,0 +1,44 @@
+# Design: Resume attempts do not hold exclusive scope
+
+## Problem
+After a controller restart, initializeState retains mid-run
+attempts as phase "resume". compatible() skipped only done,
+blocked, and abandoned attempts, so a retained attempt vetoed
+every task with an overlapping plan scope, including the task
+of the other retained attempt. Two overlapping retained
+attempts deadlocked dispatch: the run loop spun at zero
+workers with no error and no event.
+
+## Approach
+Skip "resume" attempts in compatible(). Exclusivity is not
+lost: start() reuses the retained attempt and sets its phase
+to "running" synchronously, before the dispatch loop evaluates
+the next candidate, so later overlapping candidates are vetoed
+from that moment. Ready() already sorts "doing" tasks ahead of
+"todo", so retained work keeps dispatch priority and fresh
+tasks cannot jump ahead of it.
+
+## Key Trade-offs
+- Overlapping retained attempts now resume serially instead of
+  never; the second waits for the first to integrate.
+- A retained attempt whose task is not ready (blocked
+  dependencies) no longer vetoes overlapping fresh work. That
+  work can proceed; prepare() later merges the retained result
+  onto the moved tip.
+
+## Alternatives Considered
+- Reorder the dispatch loop to offer retained tasks first —
+  rejected: Ready() already orders "doing" first.
+- Rebase retained worktrees to the current tip during resume —
+  rejected: prepare() already merges a stale-base result commit
+  onto the check base.
+
+## References
+- Live incident: margin run run-65058e0c23e6f050 stalled from
+  2026-10-11T15:17:42Z with the event cursor frozen at 732; a
+  replan widened the T053 and T066 write scopes to share
+  README.md while both were retained mid-run.
+- Regression test: internal/looper/resume_test.go drives the
+  real run loop with a stub agent and fails on the old code
+  with the stall signature (no start event, both attempts
+  retained).
