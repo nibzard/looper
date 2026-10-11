@@ -14,29 +14,29 @@ resolve_looper_bin() {
         return 0
     fi
 
-    if [ -x "./bin/looper.sh" ]; then
-        printf "%s" "$(pwd -P)/bin/looper.sh"
+    if [ -x "./build/looper" ]; then
+        printf "%s" "$(pwd -P)/build/looper"
         return 0
     fi
 
-    if [ -n "${LOOPER_REPO:-}" ] && [ -x "$LOOPER_REPO/bin/looper.sh" ]; then
-        printf "%s" "$(cd "$LOOPER_REPO" && pwd -P)/bin/looper.sh"
+    if [ -n "${LOOPER_REPO:-}" ] && [ -x "$LOOPER_REPO/build/looper" ]; then
+        printf "%s" "$(cd "$LOOPER_REPO" && pwd -P)/build/looper"
         return 0
     fi
 
     local checkout
     checkout=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)
-    if [ -x "$checkout/bin/looper.sh" ]; then
-        printf '%s' "$checkout/bin/looper.sh"
+    if [ -x "$checkout/build/looper" ]; then
+        printf '%s' "$checkout/build/looper"
         return 0
     fi
 
-    if command -v looper.sh >/dev/null 2>&1; then
-        command -v looper.sh
+    if command -v looper >/dev/null 2>&1; then
+        command -v looper
         return 0
     fi
 
-    echo "Error: looper.sh not found. Set LOOPER_BIN or LOOPER_REPO, or add looper.sh to PATH." >&2
+    echo "Error: looper not found. Set LOOPER_BIN or LOOPER_REPO, build with make build, or add looper to PATH." >&2
     return 1
 }
 

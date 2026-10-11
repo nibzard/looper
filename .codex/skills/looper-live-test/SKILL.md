@@ -12,8 +12,9 @@ A local stub checks the runner, but does not establish live agent behavior.
 ## Workflow
 
 1. Resolve `scripts/run-live-test.sh` relative to this skill's directory.
-   To test a particular checkout, set `LOOPER_BIN` to its absolute
-   `bin/looper.sh` path. The runner otherwise prefers its checkout over PATH.
+   To test a particular checkout, set `LOOPER_BIN` to its absolute `looper`
+   binary path, such as `build/looper`. The runner otherwise prefers its
+   checkout over PATH.
 2. Run the script. It creates `PROJECT.md` and a two-task backlog, then
    initializes Git, then executes Looper with `--once --jobs 1` and
    `MAX_ITERATIONS=1`. The integration check requires a nonempty `README.md`.

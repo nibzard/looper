@@ -428,10 +428,9 @@ class ParallelTests(unittest.TestCase):
         prefix=self.path/"installed"
         package=self.path/"package/bin";package.mkdir(parents=True)
         shutil.copy2(ROOT/"build/looper",package/"looper")
-        shutil.copy2(ROOT/"bin/looper.sh",package/"looper.sh")
         shutil.copy2(ROOT/"install.sh",package/"looper-install")
         subprocess.run([str(package/"looper-install"),"--prefix",str(prefix),"--skip-skills"],check=True,capture_output=True,text=True)
-        result=subprocess.run([str(prefix/"bin/looper.sh"),"--once"],cwd=self.project,env=self.env,capture_output=True,text=True,timeout=40)
+        result=subprocess.run([str(prefix/"bin/looper"),"--once"],cwd=self.project,env=self.env,capture_output=True,text=True,timeout=40)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertTrue(self.state()["finished"])
 

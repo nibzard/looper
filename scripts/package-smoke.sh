@@ -9,7 +9,6 @@ BREW_DIR="$TMP_DIR/homebrew"
 mkdir -p "$BREW_DIR/bin" "$BREW_DIR/share/looper"
 install -m 0755 "$ROOT_DIR/install.sh" "$BREW_DIR/bin/looper-install"
 install -m 0755 "$ROOT_DIR/uninstall.sh" "$BREW_DIR/bin/looper-uninstall"
-install -m 0755 "$ROOT_DIR/bin/looper.sh" "$BREW_DIR/bin/looper.sh"
 install -m 0755 "$ROOT_DIR/build/looper" "$BREW_DIR/bin/looper"
 cp -a "$ROOT_DIR/skills" "$BREW_DIR/share/looper/skills"
 
@@ -29,15 +28,11 @@ test ! -e "$SKILLS_DIR/release-runbook"
 
 PREFIX_DIR="$TMP_DIR/user-prefix"
 "$BREW_DIR/bin/looper-install" --prefix "$PREFIX_DIR"
-test -x "$PREFIX_DIR/bin/looper.sh"
 test -x "$PREFIX_DIR/bin/looper"
 "$PREFIX_DIR/bin/looper" --help >/dev/null
-"$PREFIX_DIR/bin/looper.sh" --help >/dev/null
 test "$("$PREFIX_DIR/bin/looper" --version)" = "$("$ROOT_DIR/build/looper" --version)"
-test "$("$PREFIX_DIR/bin/looper.sh" --version)" = "$("$ROOT_DIR/build/looper" --version)"
 test -f "$PREFIX_DIR/share/looper/skills/release-runbook/SKILL.md"
 "$BREW_DIR/bin/looper-uninstall" --prefix "$PREFIX_DIR"
-test ! -e "$PREFIX_DIR/bin/looper.sh"
 test ! -e "$PREFIX_DIR/bin/looper"
 test ! -e "$PREFIX_DIR/share/looper/skills/release-runbook"
 
