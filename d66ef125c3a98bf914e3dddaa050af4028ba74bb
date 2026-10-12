@@ -1,0 +1,1 @@
+Record the completed local release and current recovery evidence. The setup request was saved for the next run; nine requeues were rejected. Ignore local AXINBOX metadata because it contains a write credential. Validation: staged whitespace check and ignore rule check passed. No runtime code changed.
