@@ -1,1 +1,3 @@
 Version-only bump after the explicit build-stamp fix. The final 0.8.2 candidate passes make test and make race, all 53 runtime tests in both runs, build stamp fixtures, packaging and skill checks, and Darwin arm64 compilation. The tested runtime identity equals Git HEAD. Installation must use the clean committed checkout. Live controllers retain their existing executable.
+
+Final installation succeeds from the clean 0.8.2 release checkout. Installed JSON identity is release 0.8.2, revision 29377a8f7f9083d71f32ffd055aa37d71ec02b3e, modified false. Installed bytes match the clean build. The final isolated runtime check passes for task timing and durable session identity. Project requeue and setup requests remain pending; host and expiry inputs remain unresolved.
