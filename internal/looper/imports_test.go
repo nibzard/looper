@@ -12,11 +12,18 @@ import (
 
 // fakeAgent writes a canned JSON result wherever the agent protocol expects
 // its final message, so import tests exercise the real agent plumbing. The
-// prompt on stdin selects LOOPER_FAKE_DIAGNOSIS for diagnosis consultations
-// and LOOPER_FAKE_RESULT otherwise. With LOOPER_FAKE_TOUCH set, it also
-// creates that file to simulate an agent that breaks its read-only contract.
-// With LOOPER_FAKE_SLEEP set, it sleeps that many seconds first, so a test
-// can hold a dispatched worker in the running phase.
+// prompt on stdin selects LOOPER_FAKE_DIAGNOSIS for diagnosis consultations,
+// LOOPER_FAKE_REVIEW for review passes, LOOPER_FAKE_PLAN for planning, and
+// LOOPER_FAKE_SUMMARY for worker reports; LOOPER_FAKE_RESULT answers
+// everything else. With LOOPER_FAKE_TOUCH set, it also creates that file to
+// simulate an agent that breaks its read-only contract. With
+// LOOPER_FAKE_BACKLOG_EDIT set, it overwrites the task file in its working
+// directory with that content, which simulates a review or planning agent
+// that edits the private backlog. With LOOPER_FAKE_LOG set, it appends one
+// line per invocation, "worker" for worker prompts and "other" otherwise, so
+// tests can count implementation runs. With LOOPER_FAKE_SLEEP set, it sleeps
+// that many seconds first, so a test can hold a dispatched worker in the
+// running phase.
 func fakeAgent(t *testing.T, proposal string) (bin string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -29,12 +36,27 @@ for a in "$@"; do
 done
 p="$(cat)"
 if [ -n "$LOOPER_FAKE_SLEEP" ]; then sleep "$LOOPER_FAKE_SLEEP"; fi
+kind=other
+if printf '%s' "$p" | grep -q "Complete task "; then kind=worker; fi
 result="$LOOPER_FAKE_RESULT"
 if [ -n "$LOOPER_FAKE_DIAGNOSIS" ] && printf '%s' "$p" | grep -q "Diagnose the repeated failure"; then
   result="$LOOPER_FAKE_DIAGNOSIS"
 fi
+if [ -n "$LOOPER_FAKE_PLAN" ] && printf '%s' "$p" | grep -q "Plan execution for Looper"; then
+  result="$LOOPER_FAKE_PLAN"
+fi
+if [ -n "$LOOPER_FAKE_SUMMARY" ] && [ "$kind" = worker ]; then
+  result="$LOOPER_FAKE_SUMMARY"
+fi
+if [ -n "$LOOPER_FAKE_REVIEW" ] && printf '%s' "$p" | grep -q "review pass for Looper"; then
+  result="$LOOPER_FAKE_REVIEW"
+fi
 if [ -n "$out" ]; then printf '%s' "$result" > "$out"; fi
+if [ -n "$LOOPER_FAKE_LOG" ]; then printf '%s\n' "$kind" >> "$LOOPER_FAKE_LOG"; fi
 if [ -n "$LOOPER_FAKE_TOUCH" ]; then touch "$LOOPER_FAKE_TOUCH"; fi
+if [ -n "$LOOPER_FAKE_BACKLOG_EDIT" ]; then
+  printf '%s' "$LOOPER_FAKE_BACKLOG_EDIT" > "${LOOPER_FAKE_BACKLOG_PATH:-to-do.json}"
+fi
 exit 0
 `
 	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
@@ -113,8 +135,9 @@ func TestStartupImportAppliesAdditions(t *testing.T) {
 	if digestFile(c.Todo) != e.State.ExportHash {
 		t.Fatal("export hash mismatch after import")
 	}
-	// Scope text includes captured content for review and workers.
-	if !strings.Contains(e.importedScope(), "Add telemetry") {
+	// Context includes every applied document for review and workers.
+	documents, err := e.appliedContext()
+	if err != nil || len(documents) != 1 || !strings.Contains(string(documents[0].Text), "Add telemetry") {
 		t.Fatal("imported scope missing")
 	}
 	// The ack names added tasks and coverage.

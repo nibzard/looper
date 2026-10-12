@@ -3,6 +3,7 @@ package looper
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 // TestMain dispatches helper invocations that re-execute the current
@@ -11,6 +12,13 @@ import (
 // whose generated main would otherwise run the whole suite again.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "__exec" {
+		if os.Getenv("LOOPER_TEST_LAUNCH_REPORT") == "missing" {
+			os.Exit(0)
+		}
+		if os.Getenv("LOOPER_TEST_LAUNCH_REPORT") == "hang" {
+			time.Sleep(time.Minute)
+			os.Exit(0)
+		}
 		os.Exit(RunChild(os.Args[2:]))
 	}
 	os.Exit(m.Run())

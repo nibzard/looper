@@ -37,7 +37,7 @@ func publishController(dir, mode string) (*ControllerInfo, error) {
 	info := &ControllerInfo{
 		Version: ControllerVersion, Session: identifier("run"),
 		PID: os.Getpid(), Root: mustWD(), Mode: mode,
-		Started: time.Now().UTC().Format(time.RFC3339),
+		Started: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := writeJSON(controllerPath(dir), info); err != nil {
 		return nil, err
@@ -104,7 +104,10 @@ func runIdentityCommand(pid int) (string, error) {
 		// The field after the comm parenthetical holds the start time.
 		text := string(b)
 		if i := strings.LastIndex(text, ")"); i >= 0 && i+2 <= len(text) {
-			return strings.Fields(text[i+2:])[19], nil
+			fields := strings.Fields(text[i+2:])
+			if len(fields) > 19 && fields[0] != "Z" && fields[0] != "X" {
+				return fields[19], nil
+			}
 		}
 	}
 	return "", fmt.Errorf("process %d is not running", pid)

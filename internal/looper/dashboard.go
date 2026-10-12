@@ -72,13 +72,14 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	}
 	defer observer.Close()
 	controls := ui.Controls{
-		Inspect:   observer.inspect,
-		WorkerLog: func(id string) (string, string, error) { return workerLog(dir, id) },
-		Log:       func(path string) (string, error) { return plannerLog(dir, path) },
-		Snapshot:  e.viewNotify,
-		Poll:      func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
-		Events:    observer.events,
-		Diff:      func(id string) (string, error) { return attemptDiff(dir, id) },
+		Statistics: func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
+		Inspect:    observer.inspect,
+		WorkerLog:  func(id string) (string, string, error) { return workerLog(dir, id) },
+		Log:        func(path string) (string, error) { return plannerLog(dir, path) },
+		Snapshot:   e.viewNotify,
+		Poll:       func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
+		Events:     observer.events,
+		Diff:       func(id string) (string, error) { return attemptDiff(dir, id) },
 		Done: func() bool {
 			select {
 			case <-done:
@@ -213,13 +214,14 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	}
 	defer observer.Close()
 	controls := ui.Controls{
-		Inspect:   observer.inspect,
-		WorkerLog: func(id string) (string, string, error) { return workerLog(dir, id) },
-		Log:       func(path string) (string, error) { return plannerLog(dir, path) },
-		Poll:      func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
-		Events:    observer.events,
-		ReadOnly:  !withControls,
-		Diff:      func(id string) (string, error) { return attemptDiff(dir, id) },
+		Statistics: func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
+		Inspect:    observer.inspect,
+		WorkerLog:  func(id string) (string, string, error) { return workerLog(dir, id) },
+		Log:        func(path string) (string, error) { return plannerLog(dir, path) },
+		Poll:       func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
+		Events:     observer.events,
+		ReadOnly:   !withControls,
+		Diff:       func(id string) (string, error) { return attemptDiff(dir, id) },
 	}
 	if withControls {
 		controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }

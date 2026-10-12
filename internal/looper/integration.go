@@ -3,10 +3,12 @@ package looper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func (e *Engine) prepare(a *Attempt, base string) (Candidate, error) {
@@ -50,13 +52,21 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 	}
 	if err := e.command(ctx, p.Setup, c.Worktree, dir, "setup"); err != nil {
 		c.OK = false
-		c.Feedback = "Integration setup failed:\n" + logTail(filepath.Join(dir, "setup.log"))
+		c.Feedback = commandFeedback("Integration setup failed:", p.Setup, err, filepath.Join(dir, "setup.log"))
+		var launch *LaunchError
+		if errors.As(err, &launch) {
+			c.LaunchFailure = err
+		}
 		return c
 	}
 	err := e.command(ctx, p.Verify, c.Worktree, dir, "verify")
 	if err != nil {
 		c.OK = false
-		c.Feedback = "Combined verification failed:\n" + logTail(filepath.Join(dir, "verify.log"))
+		c.Feedback = commandFeedback("Combined verification failed:", p.Verify, err, filepath.Join(dir, "verify.log"))
+		var launch *LaunchError
+		if errors.As(err, &launch) {
+			c.LaunchFailure = err
+		}
 		return c
 	}
 	tree, err := e.Repo.Snapshot(c.Worktree)
@@ -68,8 +78,16 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 		}
 		return c
 	}
-	if op.config.Assess != "" {
+	if strings.TrimSpace(op.config.Assess) != "" {
 		e.assess(ctx, op, a, c, dir)
+		if ctx.Err() != nil {
+			// Controller cancellation discards the check rather than turning
+			// it into an advisory outcome; restart re-verifies the retained
+			// result without repeating implementation.
+			c.OK = false
+			c.Feedback = "Verification was cancelled during the advisory assessment."
+			return c
+		}
 		tree, err = e.Repo.Snapshot(c.Worktree)
 		if err != nil || tree != c.Tree {
 			c.OK = false
@@ -91,9 +109,26 @@ func logTail(path string) string {
 	return string(b)
 }
 
+// assessmentDeadline bounds any optional assessment command. It leaves time
+// around an adapter's own evaluation deadline for startup and report writing.
+const assessmentDeadline = 60 * time.Second
+
 // A semantic report is advisory. Its exit status never substitutes for tests.
 // Reports and exact evidence references remain beside the candidate's checks.
 func (e *Engine) assess(ctx context.Context, op operation, a Attempt, c Candidate, dir string) {
+	deadline := assessmentDeadline
+	if e.assessDeadline > 0 {
+		deadline = e.assessDeadline
+	}
+	e.assessWithin(ctx, op, a, c, dir, deadline)
+}
+
+// assessWithin runs one assessment under the supplied deadline; production
+// always passes assessmentDeadline and tests pass a short duration. A
+// deadline or a nonzero exit is advisory. Controller cancellation is not: it
+// leaves no advisory record so the cancelled check can never read as a
+// timeout that permits publication.
+func (e *Engine) assessWithin(ctx context.Context, op operation, a Attempt, c Candidate, dir string, timeout time.Duration) {
 	patch, err := gitCommand(e.Repo.Root, nil, nil, "diff", "--no-ext-diff", "--no-textconv", c.Base, c.Commit, "--")
 	if err != nil {
 		return
@@ -106,10 +141,21 @@ func (e *Engine) assess(ctx context.Context, op operation, a Attempt, c Candidat
 	extra := resourceEnv(dir)
 	extra["LOOPER_EVIDENCE_FILE"] = path
 	extra["LOOPER_ASSESS_REPORT"] = filepath.Join(dir, "assessment.json")
-	err = runProcess(ctx, c.Worktree, filepath.Join(dir, "assessment.log"), []string{"bash", "-lc", op.config.Assess}, nil, extra)
-	if err != nil {
-		_ = writeJSON(filepath.Join(dir, "assessment-error.json"), map[string]string{"outcome": "error", "error": err.Error()})
+	logfile := filepath.Join(dir, "assessment.log")
+	actx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err = runShell(actx, c.Worktree, dir, "assessment", op.config.Assess, extra)
+	if err == nil {
+		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
+	_ = writeJSON(filepath.Join(dir, "assessment-error.json"), map[string]string{
+		"outcome": "error", "error": err.Error(), "command": op.config.Assess, "log": logfile,
+	})
+	// Reporting happens on the owner goroutine: noteAssessment reads this
+	// record when the check result is consumed and emits the advisory event.
 }
 
 func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out chan<- workerResult) error {
@@ -161,8 +207,7 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 		return err
 	}
 	e.event("repair", "Repairing "+a.Task.ID+" with the recorded failure evidence.")
-	e.launch(ctx, a, out)
-	return nil
+	return e.launch(ctx, a, out)
 }
 
 // diagnosis is the structured result of one repair consultation.
@@ -182,14 +227,20 @@ func (e *Engine) diagnose(ctx context.Context, a *Attempt, feedback string) (dia
 		return diagnosis{}, false
 	}
 	dir := filepath.Join(a.Directory, fmt.Sprintf("diagnose-%02d-%s", a.Repairs, identifier("session")))
-	prompt := fmt.Sprintf(`Diagnose the repeated failure of task %s. Read the worktree and the attempt records under %s (summaries, check logs, receipts), and the failure feedback below. Do not change any files.
-Failure feedback:
-%s
-Return one JSON object: {"root_cause":"why the current approach keeps failing","evidence":"files or logs that show the cause","fix_approach":"a different approach that resolves the cause"}.`, a.Task.ID, a.Directory, feedback)
+	c, err := prepareAgentContext(e.Repo, a.Worktree, dir, e.State.Backlog, &a.Task, feedback, nil, nil)
+	if err != nil {
+		return diagnosis{}, false
+	}
+	prompt := fmt.Sprintf(`Diagnose the repeated failure of task %s. Read the worktree and the attempt records under %s (summaries, check logs, receipts), and the failure feedback file. Do not change any files.
+Failure feedback file: %s
+Return one JSON object: {"root_cause":"why the current approach keeps failing","evidence":"files or logs that show the cause","fix_approach":"a different approach that resolves the cause"}.`, a.Task.ID, a.Directory, c.Feedback)
 	op := e.capture()
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, a.Worktree, dir, prompt, false)
 	if err != nil {
 		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation failed; repairing with the recorded evidence.")
+		return diagnosis{}, false
+	}
+	if err = c.validate(); err != nil {
 		return diagnosis{}, false
 	}
 	var d diagnosis
@@ -232,17 +283,23 @@ func (e *Engine) publish() error {
 	if digest(data) != e.State.ExportHash {
 		return fmt.Errorf("the backlog changed outside Looper before integration")
 	}
-	observed, err := e.Repo.Snapshot(e.Config.Root)
+	observed, err := e.Repo.SnapshotFrom(e.Config.Root, p.Tree, p.Before)
 	if err != nil {
 		return err
 	}
-	if observed == p.Before && p.Before != p.Tree {
-		if err = e.Repo.Apply(p.Before, p.Tree); err != nil {
-			return err
-		}
-		observed, err = e.Repo.Snapshot(e.Config.Root)
+	if observed != p.Tree {
+		before, err := e.Repo.SnapshotFrom(e.Config.Root, p.Before, p.Tree)
 		if err != nil {
 			return err
+		}
+		if before == p.Before {
+			if err = e.Repo.Apply(p.Before, p.Tree); err != nil {
+				return err
+			}
+			observed, err = e.Repo.SnapshotFrom(e.Config.Root, p.Tree, p.Before)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if observed != p.Tree {
@@ -268,6 +325,10 @@ type reviewResult struct {
 }
 
 func (e *Engine) review(ctx context.Context, final bool) error {
+	documents, err := e.appliedContext()
+	if err != nil {
+		return err
+	}
 	e.activity = "reviewing"
 	e.publishView(false)
 	defer func() { e.activity = ""; e.publishView(false) }()
@@ -277,12 +338,15 @@ func (e *Engine) review(ctx context.Context, final bool) error {
 		return err
 	}
 	defer e.Repo.Remove(work)
-	backlog, _ := json.Marshal(e.State.Backlog)
 	kind := "milestone"
 	if final {
 		kind = "final"
 	}
-	importedScope := e.importedScope()
+	dir := filepath.Join(e.Dir, name)
+	c, err := prepareAgentContext(e.Repo, work, dir, e.State.Backlog, nil, "", documents, nil)
+	if err != nil {
+		return err
+	}
 	op := e.capture()
 	e.event("review", "Checking "+kind+" product behavior against the project goal...")
 	var evidence []string
@@ -298,7 +362,7 @@ func (e *Engine) review(ctx context.Context, final bool) error {
 		evidence = evidence[len(evidence)-10:]
 	}
 	prompt := fmt.Sprintf(`You are running a %s review pass for Looper at revision %s.
-Read repository instructions, project goal, source specifications, and this backlog:
+Read repository instructions, project goal, source specifications, and the accepted backlog snapshot:
 %s
 Exercise complete user workflows where possible. Compare the integrated product with requirements,
 not only task summaries. Verify suspected defects with code or executable evidence.
@@ -306,16 +370,22 @@ Capture missing capabilities and missing ownership. Respect the project goal and
 Do not modify any files, weaken checks, or invent unrelated improvements.
 Return JSON {"status":"reviewed","summary":"...","findings":[{"title":"...","details":"acceptance criteria","evidence":"observed facts and file or command","depends_on":[],"priority":1}],"complete":false}.
 Set complete true only when the intended goal is satisfied and no required work is blocked or unfinished.
+Report gaps as findings only. Do not edit the task file or add tasks yourself; Looper owns task changes and rejects a review that edits the backlog.
 Duplicate findings already tracked in the backlog must not become new tasks.
-The final review must cover the original goal and every applied import, including imports that added no new tasks.`, kind, e.State.Tip, backlog)
-	if importedScope != "" {
-		prompt += "\nApplied imported scope that the product must satisfy:\n" + importedScope
-	}
+The final review must cover the original goal and every applied import, including imports that added no new tasks.`, kind, e.State.Tip, c.Backlog)
+	prompt += c.references()
+	prompt += "Read every document in the applied requirements index before declaring completion. Do not limit review to requirements selected by workers.\n"
 	if len(evidence) > 0 {
 		prompt += "\nAdvisory semantic reports and their evidence packets are in these directories:\n" + strings.Join(evidence, "\n") + "\nThese reports are unvalidated signals. Independently reproduce suspected defects before adding tasks."
 	}
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
 	if err != nil {
+		return err
+	}
+	if err = c.validate(); err != nil {
+		return err
+	}
+	if _, err = e.appliedContext(); err != nil {
 		return err
 	}
 	var result reviewResult
@@ -332,32 +402,18 @@ The final review must cover the original goal and every applied import, includin
 	if tree != e.State.Published {
 		return fmt.Errorf("review changed code; its result was not applied")
 	}
-	// Older adapters append findings to a private backlog. Accept only additions;
-	// this preserves the legacy contract without giving review ownership of state.
+	// Findings and completion come from the review response alone. The
+	// private backlog belongs to the controller: any edit, including a
+	// legacy project-done marker, rejects the review before anything applies.
 	var reviewed Backlog
 	if err = readJSON(filepath.Join(work, e.Repo.Excluded[0]), &reviewed); err != nil {
-		return err
+		return fmt.Errorf("review changed the private backlog: %w", err)
 	}
 	if err = reviewed.Validate(); err != nil {
-		return err
+		return fmt.Errorf("review changed the private backlog: %w", err)
 	}
-	for _, t := range e.State.Backlog.Tasks {
-		v := reviewed.Task(t.ID)
-		if v == nil || hashJSON(*v) != hashJSON(t) {
-			return fmt.Errorf("review changed an existing task")
-		}
-	}
-	for _, t := range reviewed.Tasks {
-		if e.State.Backlog.Task(t.ID) == nil {
-			if t.Marker() {
-				result.Complete = true
-				continue
-			}
-			if t.Status != "todo" {
-				return fmt.Errorf("review added a task that was already marked complete")
-			}
-			e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, t)
-		}
+	if hashJSON(reviewed) != hashJSON(e.State.Backlog) {
+		return fmt.Errorf("review changed the private backlog; findings and completion were not applied")
 	}
 	for _, f := range result.Findings {
 		e.addFinding(f)

@@ -24,7 +24,7 @@ test: build
 	python3 scripts/skill-regression.py
 
 race:
-	go test -race ./...
+	GORACE=atexit_sleep_ms=0 go test -race ./...
 	go build -race -o build/looper ./cmd/looper
 	GORACE=atexit_sleep_ms=0 python3 scripts/runtime-test.py
 

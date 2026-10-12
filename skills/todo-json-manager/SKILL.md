@@ -60,5 +60,7 @@ Looper validates the summary and applies any configured verification gate.
    replacing the task file. Remove the temporary file on failure.
 
 A final review checks completed work against its acceptance criteria.
-Add tasks for observed gaps. Add the `project-done` marker only when the
-review finds no remaining work, as directed by Looper's review prompt.
+Return the review response Looper asks for: findings for observed gaps and
+`complete` true only when the goal is satisfied. Do not edit the backlog
+during a review. Looper owns task changes, applies accepted findings itself,
+and rejects a review that edits the task file.

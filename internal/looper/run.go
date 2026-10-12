@@ -2,6 +2,8 @@ package looper
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,13 +17,48 @@ type checkRun struct {
 	Done      chan Candidate
 }
 
-func (e *Engine) Run(parent context.Context) (int, error) {
-	ctx, cancel := context.WithCancel(parent)
-	defer func() { cancel(); e.wg.Wait() }()
-	if e.controller != nil {
-		// Only this session's metadata is removed on any exit path.
-		defer removeController(e.Dir, e.controller.Session)
-		defer clearView(e.Dir)
+func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
+	ctx, cancel := context.WithCancel(withTiming(parent, e.Store))
+	exitReason := "stopped"
+	defer func() {
+		crash := recover()
+		if e.err != nil && !errors.Is(resultErr, e.err) {
+			resultErr = errors.Join(resultErr, e.err)
+		}
+		if crash != nil {
+			code, exitReason = 2, "panic"
+			resultErr = fmt.Errorf("controller panic: %v", crash)
+		} else if parent.Err() != nil {
+			code, exitReason = 130, "cancelled"
+			if !errors.Is(resultErr, parent.Err()) {
+				resultErr = errors.Join(resultErr, parent.Err())
+			}
+		} else if resultErr != nil || code == 1 {
+			code = 1
+			exitReason = "error"
+		}
+		cancel()
+		e.wg.Wait()
+		exit := sessionExit{Reason: exitReason, ExitCode: code}
+		if resultErr != nil {
+			exit.Error = resultErr.Error()
+		}
+		if err := e.Store.endSession(exit); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("record controller exit: %w", err))
+			if code == 0 || code == 2 {
+				code = 1
+			}
+		}
+		if e.controller != nil {
+			clearView(e.Dir)
+			removeController(e.Dir, e.controller.Session)
+		}
+		if crash != nil {
+			panic(crash)
+		}
+	}()
+	if previous := e.Store.previous; previous != nil && previous.Unclean {
+		e.eventData("recovery", fmt.Sprintf("Previous controller session %s ended uncleanly; its cause is unknown. Last recorded event: %d.", previous.ID, previous.LastEventID), e.previousExitData())
 	}
 	if err := e.initialize(ctx); err != nil {
 		return 1, err
@@ -91,6 +128,11 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 					if ctx.Err() != nil {
 						return 130, ctx.Err()
 					}
+					var launch *LaunchError
+					var agent *AgentError
+					if errors.As(r.Err, &launch) || (errors.As(r.Err, &agent) && agent.Kind == "invalid_request") {
+						return 1, r.Err
+					}
 					if err := e.hold(a, r.Err.Error()); err != nil {
 						return 1, err
 					}
@@ -125,7 +167,16 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 			entry := checks[0]
 			checks = checks[1:]
 			deferred = ""
+			if ctx.Err() != nil {
+				// Cancellation discards the finished check instead of
+				// publishing from a cancelled verification. The attempt stays
+				// in its verifying phase and restart re-verifies it.
+				return 130, ctx.Err()
+			}
 			a := e.attempt(entry.AttemptID)
+			if result.LaunchFailure != nil {
+				return 1, result.LaunchFailure
+			}
 			if err := e.Store.Check(a.ID, result.Commit, "executable", map[bool]string{true: "pass", false: "fail"}[result.OK], filepath.Join(a.Directory, "checks", result.Commit, "verify.log")); err != nil {
 				return 1, err
 			}
@@ -204,11 +255,25 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 		busy := len(active)+len(pending)+len(checks) > 0
 		if !busy {
 			if draining {
+				exitReason = "drained"
 				e.event("stop", "Stopped after draining active work. Run looper to resume.")
 				return 0, e.save()
 			}
 			if err := e.refreshIdle(); err != nil {
-				return 1, err
+				if !e.idleInputWait(err) {
+					return 1, err
+				}
+				// Invalid task-file input waits here for a corrected edit.
+				// Planning, review, dispatch, and backlog writes stay paused;
+				// queued requests are held, and no older contract runs.
+				e.waitForInput(err)
+				if !e.idleWait(ctx, e.Config.Poll) {
+					return 130, ctx.Err()
+				}
+				continue
+			}
+			if e.inputPending {
+				e.resumeFromInputWait()
 			}
 			ready := e.State.Backlog.Ready()
 			final := len(ready) == 0
@@ -227,10 +292,12 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 			if len(ready) == 0 {
 				if e.Config.Once {
 					if e.State.Finished {
+						exitReason = "complete"
 						e.event("finish", "Project goal satisfied.")
 						return 0, nil
 					}
 					e.event("waiting", "No runnable tasks remain. Blocked work is retained.")
+					exitReason = "no_runnable_tasks"
 					return 2, nil
 				}
 				message := "Waiting for changed requirements or resolved blockers. Use looper stop to finish."
@@ -246,6 +313,7 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 				continue
 			}
 			if e.Config.Limit > 0 && attempted >= e.Config.Limit {
+				exitReason = "dispatch_limit"
 				e.event("limit", "Dispatch limit reached; all active work is retained or integrated.")
 				return 2, nil
 			}
@@ -309,6 +377,21 @@ func (e *Engine) Run(parent context.Context) (int, error) {
 	}
 }
 
+// invalidBacklogError marks task-file input that a corrected edit can fix.
+// It is recoverable only at an idle boundary of a continuous run; startup,
+// finite runs, and every other failure keep their existing fatal behavior.
+type invalidBacklogError struct{ err error }
+
+func (e *invalidBacklogError) Error() string { return e.err.Error() }
+func (e *invalidBacklogError) Unwrap() error { return e.err }
+
+// idleInputWait reports whether an idle refresh error should hold the loop
+// open for a corrected task file instead of failing the run.
+func (e *Engine) idleInputWait(err error) bool {
+	var bad *invalidBacklogError
+	return errors.As(err, &bad) && !e.Config.Once
+}
+
 // Only import edits at a boundary with no running work. Execution status remains
 // in SQLite; the task file is its human-editable, version-checked projection.
 func (e *Engine) refreshIdle() error {
@@ -316,20 +399,22 @@ func (e *Engine) refreshIdle() error {
 	if err != nil {
 		return err
 	}
-	tree, err := e.Repo.Snapshot(e.Config.Root)
+	// Parse and validate the same bytes that are hashed below, so a concurrent
+	// edit can never split the checked content from the accepted baseline.
+	var b Backlog
+	if err = json.Unmarshal(data, &b); err != nil {
+		return &invalidBacklogError{fmt.Errorf("%s is not valid JSON: %w", e.Config.Todo, err)}
+	}
+	if err = b.Validate(); err != nil {
+		return &invalidBacklogError{fmt.Errorf("%s has invalid content: %w", e.Config.Todo, err)}
+	}
+	tree, err := e.Repo.SnapshotFrom(e.Config.Root, e.State.Published)
 	if err != nil {
 		return err
 	}
 	head, branch := e.Repo.Head()
 	if digest(data) == e.State.ExportHash && tree == e.State.Published && head == e.State.Head && branch == e.State.Branch {
 		return nil
-	}
-	var b Backlog
-	if err = readJSON(e.Config.Todo, &b); err != nil {
-		return err
-	}
-	if err = b.Validate(); err != nil {
-		return err
 	}
 	for _, a := range e.State.Attempts {
 		if a.Phase != "done" && a.Phase != "blocked" {
@@ -355,6 +440,29 @@ func (e *Engine) refreshIdle() error {
 	e.State.ReviewedTip = ""
 	e.event("refresh", "Imported changed project requirements or files.")
 	return e.save()
+}
+
+// waitForInput enters the recoverable wait for a corrected task file. The
+// diagnostic is reported when the problem appears and when it changes, not on
+// every poll. The accepted state and the user's file are preserved as they are.
+func (e *Engine) waitForInput(err error) {
+	e.inputPending = true
+	diag := fmt.Sprintf("Task file input needs correction: %v. Correct the file to continue.", err)
+	if diag != e.inputProblem {
+		e.inputProblem = diag
+		e.event("waiting", diag)
+	}
+	// Publish before idleWait sleeps, including when the problem changes.
+	e.publishView(false)
+}
+
+// resumeFromInputWait clears the input wait after a refresh accepted the file
+// again, including when the corrected bytes match the previous accepted file.
+func (e *Engine) resumeFromInputWait() {
+	e.inputPending = false
+	e.inputProblem = ""
+	e.event("waiting", "Task file accepted again; resuming.")
+	e.publishView(false)
 }
 
 // idleWait sleeps for the poll interval unless a controller request arrives,

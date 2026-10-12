@@ -238,6 +238,9 @@ func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
 	if digest(data) != e.State.ExportHash {
 		ack.Status = AckConflict
 		ack.Message = "The task file changed. Wait for Looper to import the edit."
+		if e.inputPending {
+			ack.Message = "The task file needs correction before Looper can apply changes. Correct it to continue."
+		}
 		return
 	}
 	t.Status = "todo"

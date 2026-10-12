@@ -37,7 +37,14 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		Now:         time.Now().UTC().Format(time.RFC3339),
 		EventCursor: e.eventCursor,
 		State:       e.activity, ActivityDetail: e.activityDetail, ActivityLog: e.activityLog, ActivityUpdated: e.activityUpdated,
-		Draining: draining, Finished: e.State.Finished,
+		Draining: draining,
+		// The completion banner stays hidden while input needs correction,
+		// even when the last accepted state was finished.
+		Finished: e.State.Finished && !e.inputPending,
+	}
+	if e.inputPending {
+		v.State, v.ActivityDetail = "waiting", e.inputProblem
+		v.ActivityLog, v.ActivityUpdated = "", ""
 	}
 	if e.controller != nil {
 		v.Session, v.Mode, v.Started = e.controller.Session, e.controller.Mode, e.controller.Started
@@ -173,7 +180,7 @@ func OpenStoreReadonly(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, dir: filepath.Dir(path)}, nil
 }
 
 // RecentEvents pages the journal by identifier with a bounded tail. after < 0

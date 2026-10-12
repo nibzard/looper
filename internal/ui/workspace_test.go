@@ -57,6 +57,43 @@ func TestWorkspaceOverviewOrientation(t *testing.T) {
 	}
 }
 
+func TestWorkspaceShowsInputWaitWithoutEventHistory(t *testing.T) {
+	for _, size := range [][2]int{{100, 24}, {50, 16}, {30, 12}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			m := workspaceFixture()
+			m.width, m.height = size[0], size[1]
+			m.snap.State = "waiting"
+			m.snap.ActivityDetail = "/repo/to-do.json: invalid status. Correct the file to continue."
+			m.snap.Attempts = nil
+			m.snap.Tasks = []TaskView{{ID: "T1", Title: "ready work", Status: "todo"}}
+			m.snap.Counters = ViewCounters{Total: 1, Ready: 1}
+			m.events, m.snap.RecentOutcomes = nil, nil
+			m.syncTasks()
+			m.sizeViewports()
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "WAITING") || !strings.Contains(view, "Correct task file") || strings.Contains(view, "SCHEDULING") {
+				t.Fatalf("the overview does not explain the input wait:\n%s", view)
+			}
+			var lines []string
+			for _, row := range m.overviewRows() {
+				lines = append(lines, ansi.Strip(row.text))
+			}
+			detail := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+			if strings.Contains(detail, "Scheduling") || strings.Contains(detail, "in progress") {
+				t.Fatalf("the overview presents paused dispatch as active: %s", detail)
+			}
+			for _, want := range []string{"/repo/to-do.json", "invalid status", "Correct the file to continue."} {
+				if !strings.Contains(detail, want) {
+					t.Fatalf("the scrollable overview omits %q: %s", want, detail)
+				}
+			}
+			if lipgloss.Width(m.View()) > m.width || lipgloss.Height(m.View()) != m.height {
+				t.Fatal("the input wait overflows the terminal")
+			}
+		})
+	}
+}
+
 func TestWorkspaceNavigationAcrossTaskStates(t *testing.T) {
 	m := workspaceFixture()
 	m.workspace.selectedTask = "T004"

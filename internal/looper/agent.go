@@ -126,10 +126,10 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		// (verified against a live binary).
 		args = []string{a.Config.ZcodeBin, "--cwd", cwd, "--output-format", "stream-json", "--mode", "yolo", "-p", prompt}
 	} else {
-		args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--add-dir", cwd}
+		args = []string{a.Config.ClaudeBin, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--add-dir", cwd}
 		if progress != nil {
 			// Planning can inspect files but cannot invoke a shell or delegate work.
-			args = []string{a.Config.ClaudeBin, "-p", prompt, "--output-format", "stream-json", "--verbose",
+			args = []string{a.Config.ClaudeBin, "-p", "--output-format", "stream-json", "--verbose",
 				"--dangerously-skip-permissions", "--add-dir", cwd, "--tools", "Read,Glob,Grep",
 				"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--disable-slash-commands"}
 		}
@@ -140,7 +140,18 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			args = append(args, "--json-schema", outputSchema)
 		}
 	}
-	if err := writeJSON(filepath.Join(dir, "invocation.json"), map[string]any{"agent": kind, "model": map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], "effort": a.Config.Effort, "cwd": cwd}); err != nil {
+	transport := "stdin"
+	if kind == "zcode" {
+		transport = "argv"
+	}
+	role, target := promptBudget(prompt, summary, progress != nil)
+	var files []contextFile
+	_ = readJSON(filepath.Join(dir, "context.json"), &files)
+	contextBytes := 0
+	for _, file := range files {
+		contextBytes += file.Bytes
+	}
+	if err := writeJSON(filepath.Join(dir, "invocation.json"), map[string]any{"agent": kind, "model": map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], "effort": a.Config.Effort, "cwd": cwd, "prompt_bytes": len(prompt), "prompt_transport": transport, "context_role": role, "context_bytes": contextBytes, "prompt_target_bytes": target, "prompt_target_exceeded": len(prompt) > target}); err != nil {
 		return nil, err
 	}
 	for retry := 0; retry < a.Config.RetryLimit; retry++ {
@@ -151,10 +162,17 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		}
 		input := strings.NewReader(prompt)
 		err := runProcess(ctx, cwd, log, args, input, resourceEnv(dir))
+		var launchErr *LaunchError
+		if errors.As(err, &launchErr) {
+			return nil, &AgentError{"invalid_request", fmt.Sprintf("%v; see %s and %s", err, filepath.Join(dir, "prompt.txt"), filepath.Join(dir, "invocation.json"))}
+		}
+		raw, readErr := readBounded(log, 64<<20)
+		if readErr == nil {
+			recordAgentUsage(ctx, log, kind, map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], raw)
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		raw, readErr := readBounded(log, 64<<20)
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -224,6 +242,27 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		return data, nil
 	}
 	return nil, &AgentError{"transient", "retry limit reached"}
+}
+
+// These byte targets are observations, not model context limits. Exceeding
+// one does not reject work; actual usage is recorded from agent events.
+func promptBudget(prompt string, summary, planning bool) (string, int) {
+	if planning {
+		return "planner", 4 << 10
+	}
+	if summary {
+		return "worker", 16 << 10
+	}
+	if strings.HasPrefix(prompt, "You are running a ") {
+		return "review", 16 << 10
+	}
+	if strings.HasPrefix(prompt, "Analyze additional requirements") {
+		return "import", 16 << 10
+	}
+	if strings.HasPrefix(prompt, "Bootstrap a development backlog") {
+		return "bootstrap", 16 << 10
+	}
+	return "consultation", 16 << 10
 }
 func readBounded(path string, limit int64) ([]byte, error) {
 	s, err := os.Stat(path)
@@ -298,21 +337,28 @@ func tail(b []byte, n int) []byte {
 	return b
 }
 func resourceEnv(dir string) map[string]string {
-	tmp := filepath.Join(dir, "tmp")
-	os.MkdirAll(tmp, 0700)
 	id := digest([]byte(dir))[:20]
-	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir, "TMPDIR": tmp}
+	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir}
 }
 
-func workerPrompt(b Backlog, t Task, feedback, importedScope string) string {
+func workerPrompt(b Backlog, t Task, c agentContext) string {
 	data, _ := json.MarshalIndent(t, "", "  ")
 	sources, _ := json.Marshal(b.Sources)
+	contract := string(data)
+	if len(data) > 8<<10 {
+		contract = "Read the complete task contract and acceptance criteria in " + c.Task
+	}
+	if len(sources) > 1024 {
+		sources = []byte(`(listed in the accepted backlog snapshot)`)
+	}
 	p := fmt.Sprintf(`Complete task %s: %s.
 You work autonomously in a private Git worktree. Read repository instructions and source files %s.
 Project goal: %s
 Task contract:
 %s
 Implement the outcome and exercise its acceptance criteria. Repair problems you can resolve locally.
+Setup and verification must leave tracked and unignored project files unchanged.
+Include ignore rules for generated output in your implementation. Remove tracked build artifacts when necessary.
 Do not edit the backlog, other worktrees, shared Git refs, or repository configuration. Do not push.
 Use LOOPER_RESOURCE_PREFIX for private databases and temporary resources. Bind servers to free ports.
 Do not weaken acceptance criteria or remove failing tests to claim success.
@@ -320,20 +366,17 @@ If an external prerequisite is missing, report blocked with an explicit unblock 
 Return JSON: task_id, status (done or blocked), summary, files (array), blockers (array),
 followups (array of title, details, evidence, depends_on, priority), and unblock_when (string).
 Capture concrete missing work in followups; do not invent unrelated product goals.
-`, t.ID, t.Title, sources, b.Goal, data)
-	if importedScope != "" {
-		p += "\nImported requirements in scope for this product:\n" + importedScope
-	}
-	if feedback != "" {
-		p += "\nRepair the task using the retained code and this evidence. Inspect existing edits before changing them.\n" + feedback
+`, shortText(t.ID, 80), shortText(t.Title, 160), sources, shortText(b.Goal, 512), contract)
+	p += c.references()
+	p += "Read requirements relevant to this task. Use the complete index to find constraints; unrelated tasks are context only.\n"
+	if c.Feedback != "" {
+		p += "\nRepair the task using the retained code and this evidence. Inspect existing edits before changing them.\nRead repair feedback: " + c.Feedback
 	}
 	return p
 }
 
-func planPrompt(b Backlog, importedScope string) string {
-	data, _ := json.Marshal(b)
-	p := `Plan execution for Looper. Read repository instructions and the source_files in this backlog:
-` + string(data) + `
+func planPrompt(b Backlog, c agentContext) string {
+	p := `Plan execution for Looper. Read repository instructions and the source_files in the accepted backlog snapshot.
 This is an inspection-only planning step. Read files and search existing code and configuration.
 Do not run builds, tests, benchmarks, dataset or corpus generators, package installation, or application commands.
 Do not delegate work. Identify setup and verification commands from existing documentation, manifests, and scripts;
@@ -343,12 +386,13 @@ Return JSON with setup (shell command or empty string), verify (shell command),
 and tasks [{task_id, write_paths: [relative file or directory prefixes], resources: [shared interface names]}].
 Include each unfinished task. Use ["."] when the write scope is uncertain. Include generated files and wiring.
 Setup must recreate ignored dependencies in each worktree. Never share mutable build output between worktrees.
+Setup and verification must leave tracked and unignored project files unchanged; workers must implement any needed ignore rules.
 Checks must execute meaningful acceptance checks for the combined product; a no-op is invalid.
-Commands receive LOOPER_RESOURCE_PREFIX and TMPDIR unique to the operation. Isolate databases and bind free ports.
+Checks run in a fresh integrated worktree. Verify product behavior without depending on Looper-private refs or worker commit history.
+Commands receive LOOPER_RESOURCE_PREFIX unique to the operation and TMPDIR private to each process. Isolate databases and bind free ports.
 Tasks sharing public interfaces or migration ordering need the same resource name, even if files differ.
 Do not create tasks or change requirements. Use existing commands and lockfiles where available.`
-	if importedScope != "" {
-		p += "\nImported requirements in scope for this product:\n" + importedScope
-	}
+	p += c.references()
+	p += "\nUnfinished task index (read the snapshot for all tasks and dependencies):\n" + taskIndex(b, 1024)
 	return p
 }

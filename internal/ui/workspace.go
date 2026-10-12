@@ -283,6 +283,10 @@ func (m model) workspaceKeys(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 		case ModeTasks:
 			m.mode = ModeTail
 			m.followActivity()
+		case ModeTail:
+			m.mode = ModeStatistics
+			m.refreshStatistics()
+			m.tailView.GotoTop()
 		default:
 			m.mode = ModeBoard
 		}
@@ -468,7 +472,7 @@ func (m model) orientationHeader() string {
 	if operation == "" {
 		operation = "Unknown"
 	}
-	if v.State != "" && v.ActivityDetail != "" {
+	if v.State != "" && v.State != "waiting" && v.ActivityDetail != "" {
 		operation += " · " + plainText(v.ActivityDetail)
 	}
 	lines = append(lines, truncate("Operation: "+operation, m.width))
@@ -527,6 +531,14 @@ func (m model) overviewRows() []overviewRow {
 			}
 		}
 		return tasks[start:min(len(tasks), start+limit)]
+	}
+	if m.snap.State == "waiting" && m.snap.ActivityDetail != "" && !m.staleView && !m.snap.Stale {
+		add(sectionStyle.Render("Task file needs correction"))
+		detail := ansi.Wrap(plainText(m.snap.ActivityDetail), max(1, m.width-2), "")
+		for _, line := range strings.Split(detail, "\n") {
+			add(blockedStyle.Render("  " + line))
+		}
+		add("")
 	}
 	var attention, active []TaskView
 	waiting := 0
@@ -589,7 +601,7 @@ func (m model) overviewRows() []overviewRow {
 		if len(shown) < len(active) {
 			add(fmt.Sprintf("  %d more active tasks · [u] Tasks", len(active)-len(shown)))
 		}
-	} else {
+	} else if m.snap.State != "waiting" || m.staleView || m.snap.Stale {
 		add(sectionStyle.Render("Scheduling"))
 		switch {
 		case m.staleView || m.snap.Stale:
@@ -733,7 +745,10 @@ func (m model) workspaceFooter() string {
 	if m.ctrl.Snapshot != nil && !m.ctrl.ReadOnly {
 		exit = "exit"
 	}
-	hints := []struct{ key, label string }{{"b", "overview"}, {"u", "tasks"}, {"t", "activity"}, {"enter", "inspect"}, {"?", "help"}, {"q", exit}}
+	hints := []struct{ key, label string }{{"b", "overview"}, {"u", "tasks"}, {"t", "activity"}, {"p", "statistics"}, {"?", "help"}, {"q", exit}}
+	if m.mode == ModeStatistics {
+		hints = []struct{ key, label string }{{"b", "overview"}, {"j/k", "scroll"}, {"t", "activity"}, {"?", "help"}, {"q", exit}}
+	}
 	if m.mode == ModeInspect {
 		hints = []struct{ key, label string }{{"esc", "back"}}
 		if t := m.workspaceTask(); t != nil {
@@ -770,7 +785,7 @@ func (m model) workspaceFooter() string {
 			exitLabel = "Exit"
 		}
 		context := "[u] Tasks"
-		if m.mode == ModeTasks || m.mode == ModeTail {
+		if m.mode == ModeTasks || m.mode == ModeTail || m.mode == ModeStatistics {
 			context = "[b] Back"
 		}
 		if m.mode == ModeInspect || m.mode == ModeLog || m.mode == ModeHelp || m.mode == ModeDiff {
@@ -968,12 +983,13 @@ func (m model) activityScreen() string {
 const workspaceHelp = `Workspace
   [b]             overview: state, attention, workers, outcomes
   [u]             all tasks, including completed and blocked work
+  [p]             project statistics: time, tokens, cost, daily effort
   [enter]         inspect the selected task
   [/]             search task identifiers, titles, and states
   [f]             filter all, active, blocked, waiting, or done tasks
   [r]             requeue a blocked task after confirming its blocker is resolved
   [esc]           return from the inspector; finish search
-  [tab]           cycle overview, tasks, and activity
+  [tab]           cycle overview, tasks, activity, and statistics
   [end]           follow live activity after scrolling
 
 Output age is evidence of silence, not a verdict that a worker is stuck.

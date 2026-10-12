@@ -77,7 +77,7 @@ func TestPlannerActivityPartialAndOversizedRecords(t *testing.T) {
 }
 
 func TestPlannerPromptDefersExpensiveWork(t *testing.T) {
-	prompt := planPrompt(Backlog{}, "")
+	prompt := planPrompt(Backlog{}, agentContext{})
 	for _, want := range []string{"inspection-only", "Do not run builds, tests, benchmarks", "Do not delegate work", "Do not execute them"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing instruction: %s", want)
