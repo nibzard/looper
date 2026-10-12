@@ -145,8 +145,8 @@ warn_missing() {
 if [ "$INSTALL_BIN" -eq 1 ]; then
     if [ -f "$ROOT_DIR/go.mod" ]; then
         run mkdir -p "$ROOT_DIR/build"
-        BUILD_VERSION=$(cat "$ROOT_DIR/VERSION")
-        run go -C "$ROOT_DIR" build -trimpath -ldflags "-X github.com/nibzard/looper/internal/looper.Version=$BUILD_VERSION" -o "$SRC_PROGRAM" ./cmd/looper
+        BUILD_FLAGS=$(bash "$ROOT_DIR/scripts/build-ldflags.sh")
+        run go -C "$ROOT_DIR" build -trimpath -ldflags "$BUILD_FLAGS" -o "$SRC_PROGRAM" ./cmd/looper
     fi
     run install -d "$BIN_DIR"
     run install -m 0755 "$SRC_PROGRAM" "$BIN_DIR/looper"

@@ -5,7 +5,7 @@ VERSION ?= $(shell cat VERSION)
 .PHONY: build install uninstall smoke test race test-measuretwice
 
 build:
-	go build -trimpath -ldflags "-X github.com/nibzard/looper/internal/looper.Version=$(VERSION)" -o build/looper ./cmd/looper
+	go build -trimpath -ldflags "$$(bash scripts/build-ldflags.sh "$(VERSION)")" -o build/looper ./cmd/looper
 
 install:
 	PREFIX="$(PREFIX)" CODEX_HOME="$(CODEX_HOME)" ./install.sh
@@ -19,13 +19,14 @@ smoke: build
 test: build
 	go test ./...
 	go vet ./...
+	python3 scripts/build-test.py
 	python3 scripts/runtime-test.py
 	./scripts/package-smoke.sh
 	python3 scripts/skill-regression.py
 
 race:
 	GORACE=atexit_sleep_ms=0 go test -race ./...
-	go build -race -o build/looper ./cmd/looper
+	go build -race -ldflags "$$(bash scripts/build-ldflags.sh "$(VERSION)")" -o build/looper ./cmd/looper
 	GORACE=atexit_sleep_ms=0 python3 scripts/runtime-test.py
 
 test-measuretwice:

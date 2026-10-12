@@ -274,6 +274,9 @@ class ParallelTests(unittest.TestCase):
         self.assertEqual(version.returncode, 0, version.stderr)
         build = json.loads(version.stdout)
         self.assertTrue(build["revision"])
+        if (ROOT / ".git").exists():
+            revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(build["revision"], revision)
         self.assertEqual(self.controller_events("session")[-1]["data"]["build"], build)
 
     def test_usage_statistics_survive_restart_without_duplicates(self):

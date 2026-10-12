@@ -5,6 +5,10 @@ import (
 	"runtime/debug"
 )
 
+// Repository builds stamp these values explicitly. Automatic Go VCS metadata
+// is a fallback for direct go build invocations.
+var BuildRevision, BuildModified string
+
 // BuildInfo describes this executable, not the currently installed binary.
 // Source archives without VCS metadata explicitly report an unknown revision.
 type BuildInfo struct {
@@ -24,6 +28,12 @@ func currentBuild() BuildInfo {
 				build.Modified = setting.Value == "true"
 			}
 		}
+	}
+	if BuildRevision != "" {
+		build.Revision = BuildRevision
+	}
+	if BuildModified != "" {
+		build.Modified = BuildModified == "true"
 	}
 	return build
 }
