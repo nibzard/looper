@@ -229,6 +229,50 @@ watches the backlog and resumes without repeating finished work. Use
   160.4 USD estimated against 370.0 USD reported, a factor of 2.3. Check
   the pricing table before budgeting on `estimated_usd`.
 
+### Monitoring close-out, 18:25Z
+
+The observer stopped after 15:32Z to 18:25Z (17 ticks plus baseline).
+Margin ended stopped and resumable (last event 3634). Commonstate ended
+healthy: 83 of 130 done, 19 integrated, 13 blocked, T121 in flight,
+session `run-dac67b00a161a719` alive throughout.
+
+Window totals for commonstate: done 76 to 83, integrated 12 to 19,
+backlog 116 to 130, tokens 519.8M to 627.6M, cost 154.6 to 186.3 USD
+estimated and 356.5 to 428.6 USD reported, worker time plus 12,543 s.
+Completions: T105, T110, T112 (repair round 2), T119, T120, T116.
+T114 blocked on missing infrastructure with three named reasons.
+
+Additional learnings from the final hour:
+
+- **The review phase is event-silent; the planner is not.** A 27.5
+  minute milestone review emitted one start event and nothing else, while
+  planners stream activity plus 30 s controller heartbeats ("Controller
+  waiting for planner, last activity ..."). Extend those heartbeats to
+  review; an events-only operator currently cannot distinguish a long
+  review from a hang.
+- **Two worker slots doubled throughput.** With one slot, one task
+  completed every 15 to 30 minutes; with two, every 7 to 10 minutes,
+  and worker_seconds tracked the in-flight count exactly (601, 1201,
+  1327 s per 600 s interval). No contention anomalies appeared.
+- **Reviews keep the backlog honest.** Fourteen new tasks were filed
+  during the window and the done count still rose by seven. "Total done"
+  is a moving target; integrated count is the stable progress measure.
+- **Zero repair churn in the final hour.** All six completions passed
+  their checks on the first attempt after the milestone review replanned
+  the work. The earlier 57-repair churn concentrated on tasks whose
+  check setup hit the Docker network limit.
+- **Blocking classes seen in practice:** environment (Docker address
+  pools, no host pair, no Proxmox credentials), product decision (C-18,
+  T121, T127), and launcher failure (margin exit 126). The system files
+  its own unblock work: T125 turns the missing agentlabd deployment
+  into a backlog task.
+- **Duplicate follow-ups are ignored with the subject named** (events
+  7094, 7688), confirming the Finding 2 fix live, twice.
+- **Usage cost lands in lumps.** Reports arrive when an agent run
+  completes, so a 10 minute interval shows either zero cost or the full
+  cost of a finished task (0.5 to 8 USD observed). Per-interval cost
+  deltas measure completions, not spend rate.
+
 ## Diagnosis fixes, 2026-10-12
 
 This goal addresses Findings 1, 2, and 3 in the source tree. The earlier
@@ -287,3 +331,170 @@ explicit request.
 
 The exact file list and remaining steps are in `docs/RELEASE-PREP-0.8.0.md`.
 Release notes are in `docs/release-notes/0.8.0.md`.
+
+## Review of monitoring actions, 2026-10-12
+
+Reviewed the 16:00Z retained snapshots, current launch handling, public usage
+records, and focused regression coverage. No live run or project backlog changes.
+
+- Finish the existing release for shutdown records and task timing. Retained
+  live databases contain no structured shutdown records, and the snapshots have
+  no task timing. Those observations describe older builds, not missing source fixes.
+- Do not add a circuit breaker based only on exit 126. Current source stops
+  the controller on confirmed launcher failures and retains work without repairs.
+  A process that starts and returns 126 remains an execution failure. One margin
+  blocker log is empty, so its underlying cause remains unknown. Diagnose the
+  launcher or wrapper before choosing a shared-failure mechanism. Empty logs
+  alone do not prove a launch failure.
+- Audit cost provenance before changing rates. The mismatch exists within
+  individual stored usage reports, not only dashboard aggregation. A commonstate
+  sample records 0.59735 USD estimated and 1.485591 USD reported for the same
+  model usage. Estimated cost uses the pinned provider rates; reported cost comes
+  from public agent fields. Neither value alone establishes the actual charge.
+  Compare endpoint, model, cache counters, and the agent's rate basis. Do not
+  apply a fixed multiplier from the aggregate ratio.
+- Treat Docker network exhaustion, unavailable hosts, and expiry policy as
+  project or environment work. Verify the exact check setup failure before
+  choosing a backlog or setup edit. Current Looper uses the accepted setup
+  command for both workers and checks; the notes do not establish a distinct
+  controller-side omission.
+- Add build provenance as a useful follow-up. Several different binaries retain
+  version 0.7.1. A commit or build identifier in version and session metadata
+  would make deployment verification direct. It need not block the prepared release.
+- Leave parked controllers alone. No evidence here calls for a timeout or an
+  automatic restart. Historical blockers need their underlying conditions fixed.
+
+Focused tests for launcher failure, retained work, controller panic, and read-only
+per-task timing pass. This review changes notes only; the release candidate is unchanged.
+
+## Implementation and local release, 2026-10-12
+
+The user approves the proposed plan and requests a goal. At this goal's start,
+another session has already committed the 0.8.0 content and bump in `d87ca35`.
+Preserve those commits. Follow-up diagnostics first land as 0.8.1, then the
+verified build-stamp correction lands as 0.8.2. No published tag is replaced.
+
+Implemented and committed:
+
+- `a83d909`: retain executable identity in JSON version output, controller
+  metadata, and durable session events. Retain public agent provider and cost
+  basis in usage records and report unknown or mixed bases in statistics.
+  Publish review log identity and 30-second heartbeats. Preserve agent tools,
+  result contracts, cancellation cleanup, and existing acceptance checks.
+- `ffc70a3`: synchronize the existing parallel runtime fixture. The first full
+  candidate run reproduces a timing flake: one short worker ends about one
+  millisecond before the other starts. The shared start barrier fixes the test
+  without changing production scheduling.
+- `a81b33b`: record verified database recovery and mark the old release
+  preparation report as historical.
+- `5724707`: version-only 0.8.1 bump. Installation exposes missing automatic
+  Go VCS metadata in the clean worktree, even with `-buildvcs=true`.
+- `1d7629d`: explicitly stamp revision and modified-source state in normal
+  builds, race builds, and installation. Fixtures cover clean and modified
+  repositories, detached worktrees, version overrides, and archives inside an
+  enclosing repository. Archives retain revision `unknown`.
+- `29377a8`: version-only 0.8.2 bump after final checks.
+
+Final 0.8.2 validation passes: `make test`, `make race`, all 53 runtime tests in
+both runs, build-stamp fixtures, static analysis, packaging, skill checks, and
+Darwin arm64 compilation. A final isolated runtime check passes on the clean
+release build. It checks task timing and session build identity against Git HEAD.
+The installed binary matches the clean build byte for byte and reports:
+release 0.8.2, revision 29377a8f7f9083d71f32ffd055aa37d71ec02b3e, modified false.
+Installation updates future runs and installed skills; existing controllers
+retain their original executable. No branch push, tag, GitHub release, or
+Homebrew formula update occurs. Darwin runtime validation remains a follow-up.
+
+Diagnosis decisions:
+
+- All 28 retained margin exit-126 logs are empty. Prompts are small. The lost
+  evidence cannot establish the cause. A fixture confirms that current launch
+  handling distinguishes a non-executable target from a started target returning
+  126. No circuit breaker based only on that exit code is added.
+- The cost sample calculates exactly to 0.59734892 USD from the pinned rates.
+  The agent reports 1.485591 USD with cost basis unknown. Preserve provenance
+  rather than changing rates or applying a multiplier.
+
+Project recovery progress:
+
+- A fresh 18:40Z observation shows margin stopped, and commonstate active with
+  84 done and 13 blocked. Nine blockers cite the old Compose address-pool failure.
+- The accepted setup now contains a default-bridge workaround. An isolated
+  fixture from the accepted source tip runs that database portion and
+  `pnpm db:check` successfully against PostgreSQL 18.6. The SQL round trip takes
+  36 milliseconds. Its temporary container and volume are removed successfully.
+- Nine guarded requeue requests target T057, T059, T100, T102, T104, T106,
+  T107, T109, and T111. A guarded settings request saves the tested setup for
+  the next controller run. All ten requests are still pending during synchronous
+  review at the final acknowledgement check. Submission is not application.
+  Request records: `/tmp/looper-release-requeue-requests.json` and
+  `/tmp/looper-release-setup-request.json`.
+- T050 needs the expiry-policy choice: an operations setting or a bounded
+  per-request field. Keep the seven-day default until the user answers.
+- T108, T113, and T114 need the two-host benchmark profile in SPEC section 26.2.
+  Recorded evidence says no usable provisioning credentials or second dedicated
+  host are available. Host information and configured access remain required.
+
+The goal remains active for controller acknowledgements and unresolved project
+inputs. Do not restart the active controller, guess a product policy, or report
+unacknowledged requests as applied. Preserve the other session's pending notes
+and AXINBOX metadata. Detailed diagnosis: `docs/research/MONITORING-ACTIONS-2026-10-12.md`.
+
+### Goal continuation audit, 19:11Z
+
+The previous goal turn makes concrete progress: the final 0.8.2 build is
+installed and verified. This continuation checks current state. Main remains
+at 29377a8. The installed release still reports that exact revision with a
+false modified flag. Only existing working notes and AXINBOX metadata are dirty.
+
+The commonstate process, PID 2861537, is confirmed live with `ps`. It moves
+from review into planning, and planner activity advances. Ten queued requests
+remain unacknowledged, with no request-error events. A bounded wait polls the
+same live process and request IDs. Do not resubmit or restart it because a
+client observation times out. Completion remains unproven until acknowledgements
+arrive and required project policy and host inputs are supplied.
+
+### Blocked audit, 19:12Z
+
+The original implementation turn and both continuations retain the same missing
+project inputs: the expiry-policy choice and usable benchmark-host access.
+The previous continuation is a verified wait on live PID 2861537 and the exact
+queued request IDs. This audit reconfirms that process, advancing planner events,
+and nine requeues plus one setup request still pending. The release remains
+installed at 0.8.2, revision 29377a8, modified false.
+
+No safe implementation step remains without the missing inputs or a controller
+boundary that acknowledges requests. Do not guess the policy, invent host access,
+restart the live controller, or claim queued requests are applied. The blocked
+threshold now reaches three consecutive goal turns. Mark the goal blocked;
+leave the authorized requests queued and the live controller running. Resume
+when the user supplies the project inputs or controller acknowledgements arrive.
+
+
+## Notes action review, 2026-10-12, 19:27Z
+
+Read the full notes and check current request acknowledgements. The installed
+binary remains 0.8.2 at revision 29377a8, modified false. Earlier shutdown,
+finding identity, timing, build identity, cost provenance, and review visibility
+work is complete. Darwin runtime validation and live Zcode transport validation
+remain follow-ups. Publication remains outside this review.
+
+The ten requests are no longer pending. The setup request
+`settings-545679dbaf4e41e2` is applied: saved for the next controller run.
+All nine requeue requests have conflict acknowledgements: "Wait until active
+work finishes before requeuing this task." They did not reopen the tasks.
+Retry requires fresh guards after checking the current task and session state.
+
+Commonstate PID 2861537 exists at the first process check, then disappears
+during this inspection. At 19:26:57Z, status and doctor report no controller
+ownership and retained work. Process records show T115, T132, and T128 ending
+around 19:26:46Z. The last retained event is 8020 at 19:26:42Z; no exit reason
+is recorded. The cause remains unknown. Do not infer a crash or request failure.
+The retained view reports 84 done, 14 blocked, and 20 integrated. It does not
+match an active controller.
+
+Next project actions: establish why the controller stopped, retry the nine
+requeues with current guards, and resume retained work with the saved setup.
+The expiry-policy choice and benchmark-host access remain required inputs.
+This review updates notes only. It does not restart a controller, change a
+project backlog, resubmit requests, install a build, or publish a release.
