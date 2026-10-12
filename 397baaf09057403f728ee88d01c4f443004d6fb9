@@ -1,0 +1,24 @@
+# Track temporary resources by operation
+
+Status: accepted.
+
+Setup-created PostgreSQL instances survived worker and check completion.
+Operation prefixes alone did not provide a resource lifecycle.
+
+Record a durable lease with the operation directory, prefix, controller
+session, process identity, and cleanup status. Projects register an
+idempotent cleanup script before provisioning. Run cleanup after the full
+operation. Preserve resources for interrupted work and retry failed cleanup
+at completion and recovery boundaries. Scripts verify external ownership.
+
+A setup exit trap removes resources before the worker can use them. A broad
+Docker sweep can remove shared services or resources for unfinished work.
+The registered hook keeps external resource policy in the project.
+
+Configured startup commands take precedence when retained work resumes.
+Integration conflict diagnostics name differing files and retain both the
+verified candidate and the local edits.
+
+Validation: make test (55 runtime tests), Go race checks, changed-command
+recovery under SIGINT and SIGKILL, a real Docker fixture, and Darwin arm64
+compilation. Darwin execution remains untested.
