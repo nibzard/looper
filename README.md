@@ -500,6 +500,12 @@ controller.
 `schema_version: 1`. It reports controller ownership, the published view,
 session matching, and observations for active attempts.
 
+Use `looper --version --json` to read the executable's release, Git revision,
+and modified-source flag. `observation.controller.build` identifies a live
+controller's executable. A durable `session` event retains that build identity
+after the controller exits. Older controller records omit it; builds from source
+archives without Git metadata report revision `unknown`.
+
 `status` also reports project timing. `status --json` includes a `timing`
 object with `schema_version: 1`. All durations use seconds:
 
@@ -542,6 +548,17 @@ and null durations. Project `worker_seconds` retains its broader definition abov
 `status --json` also includes a `statistics` object with `schema_version: 1`.
 It exposes project totals, usage coverage, model breakdowns, and fourteen
 UTC daily buckets used by the terminal statistics view. Missing costs are null.
+
+Usage records preserve `agent_provider` and `reported_cost_basis` from public
+agent counters. Statistics expose the reported cost basis for totals and models.
+Absent provenance is `unknown`; combined incompatible bases are `mixed`.
+Provider API estimates and agent-reported costs can differ. These fields do not
+establish the actual charge, and Looper does not rescale prices to match a ratio.
+
+Reviews publish their log path through `review-activity`. A `review-heartbeat`
+event appears every 30 seconds while the agent runs. It reports output size and
+the last output timestamp. Log silence alone does not establish a stalled review.
+The heartbeat does not change review tools, completion rules, or timeouts.
 
 `events --json` prints one JSON event per line. Save its `id` and reconnect
 with `looper events --json --follow --after 123`. Without `--follow`, the

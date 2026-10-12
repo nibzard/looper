@@ -3,6 +3,7 @@ package looper
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -41,6 +42,15 @@ func (s *Store) beginSession(info *ControllerInfo) error {
 	}
 	if _, err = tx.Exec("INSERT INTO sessions(id,pid,identity,started,outcome) VALUES(?,?,?,?,'running')", info.Session, info.PID, identity, info.Started); err != nil {
 		return err
+	}
+	if info.Build != nil {
+		data, err := json.Marshal(info)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO events(time,kind,message,data) VALUES(?,'session',?,?)", info.Started, "Controller build: "+info.Build.String(), string(data)); err != nil {
+			return err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return err

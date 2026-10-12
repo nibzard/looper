@@ -356,7 +356,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.snap != nil && m.snap.ActivityLog != "" && m.ctrl.Log != nil {
 			m.logPath = m.snap.ActivityLog
 		} else {
-			m.message = "No active worker or planner log."
+			m.message = "No active worker or controller log."
 			return m, nil
 		}
 		m.workspace.returnMode = m.mode
@@ -1027,7 +1027,7 @@ func (m model) footer() string {
 	if m.selectedAttempt() != "" {
 		logLabel = "[l] Worker log"
 	} else if m.snap != nil && m.snap.ActivityLog != "" {
-		logLabel = "[l] Planner log"
+		logLabel = "[l] Controller log"
 	}
 	keys := []string{logLabel}
 	if m.selectedAttempt() != "" {

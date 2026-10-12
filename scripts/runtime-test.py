@@ -268,6 +268,12 @@ class ParallelTests(unittest.TestCase):
         shutdown = self.controller_events("shutdown")[-1]["data"]
         self.assertEqual(shutdown["reason"], "complete")
         self.assertEqual(shutdown["exit_code"], 0)
+        version = subprocess.run([str(ROOT / "build/looper"), "--version", "--json"],
+                                 cwd=self.project, env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(version.returncode, 0, version.stderr)
+        build = json.loads(version.stdout)
+        self.assertTrue(build["revision"])
+        self.assertEqual(self.controller_events("session")[-1]["data"]["build"], build)
 
     def test_usage_statistics_survive_restart_without_duplicates(self):
         self.env["TEST_MODE"]="usage"

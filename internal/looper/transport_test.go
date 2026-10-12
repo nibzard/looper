@@ -75,6 +75,24 @@ func TestMissingTargetAndExit127AreDistinct(t *testing.T) {
 	}
 }
 
+func TestNonExecutableTargetAndExit126AreDistinct(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "agent")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := runProcess(context.Background(), dir, filepath.Join(dir, "not-executable.log"), []string{bin}, nil, nil)
+	var launch *LaunchError
+	if !errors.As(err, &launch) || launch.Stage != "target" {
+		t.Fatalf("non-executable target: %v", err)
+	}
+	err = runProcess(context.Background(), dir, filepath.Join(dir, "started.log"), []string{"sh", "-c", "exit 126"}, nil, nil)
+	var exit *exec.ExitError
+	if errors.As(err, &launch) || !errors.As(err, &exit) || exit.ExitCode() != 126 {
+		t.Fatalf("started target: %v", err)
+	}
+}
+
 func TestReducedStackExecutionLimit(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux stack limit")

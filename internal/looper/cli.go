@@ -85,7 +85,11 @@ func Main(args []string, out, stderr io.Writer) int {
 		return 0
 	}
 	if c.Command == "version" {
-		fmt.Fprintln(out, "looper", Version)
+		if c.JSON {
+			json.NewEncoder(out).Encode(currentBuild())
+		} else {
+			fmt.Fprintln(out, currentBuild())
+		}
 		return 0
 	}
 	switch c.Command {
