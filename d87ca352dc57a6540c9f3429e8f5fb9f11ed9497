@@ -1,0 +1,20 @@
+# Context
+
+## Why This Way
+Committed the verified release candidate tree byte-for-byte
+(f3ebbba155edc9c25aebcc68291f4b96d789372a, prepared under
+docs/RELEASE-PREP-0.8.0.md) after the user confirmed scope with
+"commit all and push". The staged tree hash matched the candidate
+exactly before committing, so the release contains precisely what
+make test, make race, and the package fixtures verified.
+
+## Gotchas
+- .axinbox/ is deliberately untracked: it holds a live AXINBOX
+  write token (wrt_...). Do not commit it.
+- Live runs keep their old binary until restarted; installed 0.8.0
+  reaches only new sessions.
+- VERSION moved 0.7.1 -> 0.8.0 in this commit.
+
+## Related
+- docs/release-notes/0.8.0.md
+- NOTES.md "Diagnosis fixes" and "Run monitoring" sections
