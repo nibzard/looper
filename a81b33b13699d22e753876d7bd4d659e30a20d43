@@ -1,0 +1,1 @@
+The accepted commonstate setup passes its database round trip in an isolated fixture. Nine guarded requeue requests are pending during live review. Temporary database resources were removed. No project source or live controller was changed. This commit changes documentation only; release code is unchanged from the checked candidate.
