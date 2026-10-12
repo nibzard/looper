@@ -1,5 +1,10 @@
 # Release preparation for 0.8.0
 
+Historical record: another session committed the 0.8.0 content and version in
+`d87ca35`. The follow-up diagnostics are prepared as 0.8.1. See
+[the monitoring actions](research/MONITORING-ACTIONS-2026-10-12.md). The scope
+and status below describe the earlier preparation window.
+
 Status: candidate verified; shared-change confirmation is pending. The working
 `VERSION` and installed binary remain at 0.7.1. No commit, tag, push, or GitHub
 release has occurred. Packaging checks install only in temporary fixtures.
