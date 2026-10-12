@@ -19,3 +19,6 @@ to-do.schema.json
 # Build and optional adapter dependencies
 /build/
 node_modules/
+
+# Local AXINBOX credentials
+/.axinbox/
