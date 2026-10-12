@@ -199,6 +199,7 @@ class ParallelTests(unittest.TestCase):
             return None
 
     def test_parallel_and_exact_publication(self):
+        self.env["TEST_MODE"] = "timing_parallel"
         self.run_loop()
         events = self.recorded()
         starts = [e["time"] for e in events if e["kind"] == "start"]
