@@ -51,3 +51,22 @@ and live controller separate from Looper changes.
 No live controller is restarted and no blocked task is requeued during diagnosis.
 The Looper release supplies diagnostics; it does not satisfy missing host or
 product-policy conditions.
+
+## Verified database recovery
+
+A fresh 18:40Z observation confirms that margin is stopped with 28 blockers.
+Commonstate owns its repository, has 84 completed tasks, and retains the same
+13 blockers. Its accepted setup already replaces failing Compose creation with
+a uniquely named PostgreSQL container on the default bridge.
+
+The isolated fixture runs that database portion of the accepted setup, including
+`pnpm db:check`, against source from the accepted tip. The dependency lock matches
+the project. PostgreSQL 18.6 passes the SQL round trip in 36 milliseconds.
+The temporary container and anonymous volume are removed successfully. No
+existing container, network, or project source is changed.
+
+Submit guarded requeue requests for T057, T059, T100, T102, T104, T106, T107,
+T109, and T111. Each request binds to the current session and task revision.
+The controller alone changes status. Requests remain pending during synchronous
+review; report acknowledgements separately from submission. Host and policy
+blockers remain blocked until their conditions are resolved.
