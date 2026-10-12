@@ -1,0 +1,1 @@
+Version-only bump after the explicit build-stamp fix. The final 0.8.2 candidate passes make test and make race, all 53 runtime tests in both runs, build stamp fixtures, packaging and skill checks, and Darwin arm64 compilation. The tested runtime identity equals Git HEAD. Installation must use the clean committed checkout. Live controllers retain their existing executable.
