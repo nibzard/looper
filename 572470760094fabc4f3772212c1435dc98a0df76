@@ -1,0 +1,1 @@
+Version-only bump after all release content commits. make test and make race pass, including 53 runtime tests in each run; Darwin arm64 compilation passes. The initial concurrency fixture failure was reproduced and fixed with a start barrier. Install from a clean checkout to retain an exact executable revision. No tag, push, GitHub release, or Homebrew update is authorized.
