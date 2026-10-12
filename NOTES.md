@@ -498,3 +498,278 @@ requeues with current guards, and resume retained work with the saved setup.
 The expiry-policy choice and benchmark-host access remain required inputs.
 This review updates notes only. It does not restart a controller, change a
 project backlog, resubmit requests, install a build, or publish a release.
+
+## Commonstate integration error, 2026-10-12, 19:51Z
+
+The user reports `looper tui` exiting with "project files changed during
+integration; verified work is retained without marking the task done".
+Read-only status, doctor, events, Git snapshots, and check artifacts establish
+the cause. No controller or project edits occur during this investigation.
+
+- The failed restart is session `run-030588487ba971b6`, installed Looper
+  0.8.2, revision `29377a8`. Events 8021 and 8022 record its start and error
+  shutdown at 19:50:44Z. No controller owns the project at observation time.
+- A retained publication belongs to T115, attempt `task-f0840342fc489adf`.
+  Its verified commit is `8f0104cd27cdabe6b2584635439ff892ee4462e5`.
+  The journal records `ok: true`; the retained verification log ends with
+  passing tests. The task remains unfinished.
+- The accepted tree is `0f96dc87d867b1a600d006a05da4cf4bdaa0ef80`.
+  The candidate tree is `5a1b6465ab1ef188d8919146c290bb0f810db178`.
+  Repeating both snapshot comparisons with a temporary Git index yields
+  `c1991927972480a92f34027d4bbf6230db5d9655`, which matches neither.
+  These comparisons leave the user's index and files unchanged.
+- Relative to the accepted tree, 17 files differ: submission expiry wiring,
+  operator configuration, documentation, and conformance coverage. Examples
+  include `packages/server/src/proposals.ts`, `deploy/compose/docker-compose.yml`,
+  and `conformance/expiry/expired-submission-refused-without-sweep.fixture.json`.
+  Their modification times range from 18:39:58Z to 18:58:20Z. They precede
+  T115's check completion around 19:26:46Z. File contents do not establish
+  which person or process made those edits.
+- `publish()` in `internal/looper/integration.go` accepts only the complete
+  accepted tree or candidate tree. It applies the candidate only when the
+  accepted-tree comparison matches. This restart fails that comparison and
+  exits without applying the candidate. The guard protects existing edits.
+  The message's "during integration" wording does not establish when edits
+  occurred. The previous controller's exact exit reason remains unrecorded.
+
+Evidence and separate binary patches for local edits and T115 are retained in
+`/tmp/looper-integration-diagnosis/`. Recovery must preserve the local edits,
+restore the accepted Looper tree, resume retained integration, then merge and
+verify the local edits against the integrated result. Git HEAD is older than
+Looper's accepted tree; restoring HEAD is not equivalent. Do not delete the
+runtime state or mark T115 done by hand.
+
+Smallest useful improvement: report the differing file paths and both expected
+states in the integration error, with recovery guidance. A regression fixture
+should edit an unrelated project file before publication, assert the diagnostic
+names it, and confirm the file, task, and publication journal remain retained.
+Existing publication guard tests pass with `go test ./internal/looper -run
+'^TestPublish' -count=1`. No source change or live recovery is requested.
+
+### Diagnostic fix
+
+The user requests a fix. The integration error now identifies the task,
+accepted tree, verified candidate tree, and retained runtime directory. It lists
+up to 20 differing paths per tree and reports any remaining count. Recovery
+guidance tells the user to preserve local edits, restore the accepted tree,
+resume Looper, and merge and verify local edits afterward. The comparison and
+publication rules do not change.
+
+The new regression test adds an unrelated local file before application and
+after application. Both cases reject publication and retain the file, staged
+Git index, candidate files, task status, accepted tip, and durable journal.
+The focused publication tests, full Go suite (`go test ./...`), static analysis
+(`go vet ./...`), and diff checks pass. No installation or commonstate recovery
+occurs as part of this diagnostic change.
+
+### Authorized commonstate recovery, 20:04Z
+
+The user asks the agent to perform recovery. A fresh observation confirms no
+controller owns commonstate and the saved reverse patch still passes its check.
+Back up the original local patch, verified T115 patch, current status, user
+index, and task file to `/home/agent/.looper/recovery/commonstate-20261012/`.
+Reverse only the saved local patch, then run `looper start` from commonstate.
+
+The new session is `run-f7803453a9ce5f6b`, PID 2662749, release 0.8.2.
+At 20:05:02Z, controller ownership and view matching are true. T115 is done,
+the publication journal is clear, and the accepted tip is its verified commit.
+Planner events continue through 8050. No task status is edited manually.
+
+The local edits are restored in `/home/agent/commonstate-local-recovery`, branch
+`recovery/local-edits-20261012`, based on T115's integration commit. Three
+conflicts in two files combine the event notifier and expiry settings in
+`http-server.ts` and `listener.ts`. Both settings remain in every affected
+service object. The resolved changes are staged. A separate merged binary patch
+is saved beside the original backup. No commit or publication occurs.
+
+Pinned dependency installation, build, required-database tests, and staged diff
+checks pass. Verification uses a temporary PostgreSQL 18.6 container on the
+default bridge with an assigned loopback port, independent of the live run.
+Service conformance passes all 48 regular cases and the recovered expiry case
+(49 total, zero failures or errors). Temporary database cleanup succeeds.
+Verification logs and exit codes are copied to the durable recovery directory.
+
+At 20:09:05Z, the same controller owns commonstate, the view matches, T115 is
+done, and the publication journal remains clear. The event cursor advances from
+8033 to 8080 during this recovery. The live project retains only Looper-owned
+changes; the recovered local edits stay staged in the separate worktree.
+
+## Docker postgres accumulation, 2026-10-12, 20:25Z
+
+Found during a host disk-space check. The root filesystem is 89 percent full
+(129G of 146G used, 18G free). `/var/lib/docker` holds 40G and grew by 24G
+during the inspection itself. `docker ps` lists 85 `looper_*` containers, all
+running: 83 postgres instances plus two task-named databases. All are
+`postgres:18.6-alpine` pinned by digest.
+
+- **The accepted setup command provisions one postgres per task run.** The
+  commonstate profile (`~/.looper/commonstate-5b2241b5/runtime/profile.json`)
+  names the container from `LOOPER_RESOURCE_PREFIX`. Every task receives a
+  unique prefix, so the `docker container inspect` guard never matches and
+  each task starts a fresh container on the default bridge network. The
+  database is required: the verify command (`pnpm test`) needs `DATABASE_URL`.
+  Compose stays unusable on this host ("all predefined address pools have been
+  fully subnetted"), so the setup script runs `docker run --network bridge`
+  with a digest pin, a free loopback port, and matching durability settings.
+- **Nothing removes the containers.** The setup script only creates. Task
+  agents sometimes remove their own (`t128`, `T115` notes record "removed
+  afterwards"), but no controller path enforces it. Containers from sessions
+  that ended hours ago remain running. At observation, the live commonstate
+  daemon (PID 2662749, session `run-f7803453a9ce5f6b`) dispatched new tasks
+  every few minutes, so creation is ongoing.
+- **Two containers are agent-made, not setup-made:** `looper_t132_pg` and
+  `looper_2639a612be532232ed96_t128_pg`, private test databases named by
+  their tasks.
+- **Looper-side implication:** a session teardown or container lease that
+  removes `LOOPER_RESOURCE_PREFIX` resources would stop the accumulation.
+  Until then, growth is one container plus volume per task run.
+
+Cleanup path: stop finished sessions, then remove `looper_*` containers and
+their volumes when no live session owns the prefix. The commonstate session
+was live at observation; do not stop it without user confirmation. Docker
+(40G) plus `~/.looper` (9.9G) hold most of the recoverable space; the rest is
+project build artifacts outside Looper's scope (`~/margin/target` 12G,
+`~/uhm/target` 2.4G, Go build cache 2.2G).
+
+### Accumulation audit, 20:26Z
+
+The user asks to check this finding. Current Docker evidence confirms the
+accumulation: 88 containers total, 87 running PostgreSQL containers. Of those,
+86 have Looper-related names: 59 start with `looper_`, and 27 start with
+`sw-looper`. All 86 have a Docker volume mount. Some started on October 11.
+The remaining PostgreSQL container belongs to `shared-work-dev`.
+
+Docker reports 127 volumes totaling 8.509 GB, including 1.921 GB classified
+as reclaimable. The root filesystem remains 89 percent full with 18 GB free.
+These figures do not independently verify the earlier 40 GB directory size
+or its reported growth. Docker's aggregate storage report and directory size
+measure different things.
+
+The saved commonstate setup creates a container on the default bridge. It uses
+`LOOPER_RESOURCE_PREFIX` and an inspect guard, but contains no `docker rm`,
+`--rm`, or cleanup trap. The verify command contains no cleanup either.
+Source confirms that the prefix derives from the operation artifact directory
+(`agent.go:339`), not only from a task or controller session. Worker invocations
+and candidate checks can therefore create separate resources for one task.
+Revise the earlier "one container per task run" description to one per distinct
+operation prefix that reaches setup. The actual container count per task can
+be greater than one.
+
+At 20:26:34Z, commonstate session `run-f7803453a9ce5f6b` still owns the project.
+No containers, volumes, or networks are removed in this audit. Prefixes and
+container age alone do not establish that deletion is safe. A lifecycle fix
+needs explicit resource ownership and cleanup after workers and checks finish,
+plus recovery for resources whose owner ended. A trap in the setup shell alone
+would remove the database before the later worker or check uses it.
+
+### Resource lifecycle implementation, 2026-10-12
+
+The user authorizes the lifecycle fix and removal of confirmed leftovers.
+The first regression run fails because both successful and failed checks leave
+their fixture database behind. The worker fixture also lacks cleanup evidence.
+
+Implement a project-independent cleanup contract. Setup and agents receive
+`LOOPER_RESOURCE_CLEANUP_FILE`. They register an idempotent Bash script before
+creating external resources. A durable `resources.json` records the operation
+directory, prefix, controller session, process identity, status, and errors.
+The worker owns the setup-to-report lifetime; the check owns setup, verification,
+and assessment. Nested agent calls reuse that lifetime. Other agent operations
+have separate leases. Cleanup runs after the operation finishes, not after setup.
+
+Cancellation retains ownership and resources. Recovery preserves leases for
+unfinished workers and checks, skips live owners, and reclaims completed work.
+Cleanup failures retain a retry record and emit an event without changing the
+verification outcome or consuming repairs. Cleanup runs from the artifact
+directory with a separate 30-second deadline. Invalid ownership fails closed.
+Linux uses the process start identity; Darwin uses the process start time from
+`ps`. No broad Docker removal is built into Looper.
+
+Commonstate's prepared setup registers Docker cleanup before provisioning. It
+labels private containers with the exact operation prefix and artifact directory,
+records their IDs, checks both labels before removal, and removes their anonymous
+volumes. Two guarded settings requests are acknowledged as applied, with the
+setup saved for the next controller run. A real Docker fixture confirms that
+worker and check containers and their volumes disappear after completion.
+
+The old commonstate controller receives a graceful drain request. T124 and T126
+remain active at 20:49Z; their databases remain protected. Installation and
+restart initially wait for the completed drain. After 25 minutes, the drain still
+waits on T124's verification and T126's worker. Use the tested cancellation and
+resume path to activate the fix. Verify the old session and process identity,
+send SIGINT, and confirm shutdown event 8759 records cancellation with exit 130.
+Both tasks retain their work and logs. Register their three remaining private
+databases in durable leases with exact container IDs and zero-client guards.
+
+Host cleanup removes 87 completed-operation PostgreSQL containers and their
+unshared volumes. The audit maps exact prefixes to retained operation directories
+and task state, checks recorded process identities, then rechecks zero connected
+clients immediately before removing each container by ID. Two older T054
+databases lack process sidecars but map to the completed task. The task-named
+T132 database is separately identified in the prior audit and its task is done.
+Thirty empty Compose networks belong to those retired operations and are removed
+by ID. Shared development services, unfinished tasks, and unidentified volumes
+remain untouched. Free root disk space increases from 18 GB to 23 GB.
+
+Audit manifests, removal results, prepared setup, and the real Docker fixture
+result are retained in `/home/agent/.looper/recovery/docker-cleanup-20261012/`.
+The existing integration diagnostic changes and recovered commonstate branch
+remain separate work. Source changes are not committed or published.
+
+Final validation passes: the full `make test` checks (54 runtime tests), the
+full race checks on the first candidate, the final Go race suite, and focused
+ownership, deadline, failure, cancellation, and recovery tests. The additional
+runtime test kills the controller with SIGKILL and confirms that its abandoned
+lease survives until resumed work finishes. Both cancellation and SIGKILL
+recovery fixtures pass. Darwin arm64 compilation passes; Darwin execution is
+not tested here.
+
+The final labeled Docker setup also records container IDs at creation and
+removes a stale ID file before replacement. Its real Docker fixture passes after
+this change. All three guarded setup requests have applied acknowledgements,
+with the final script saved for the next controller run. The script remains
+idempotent when a candidate operation reuses an artifact directory.
+
+The normal fixed binary is installed and matches `build/looper` byte for byte.
+It reports 0.8.2, revision `d66ef125c3a98bf914e3dddaa050af4028ba74bb`, modified
+true. That intervening commit belongs to another session's notes work; preserve
+it. The resource fix is still uncommitted. No version bump or publication occurs.
+At 20:56Z, the old controller still drains: T124 has advanced to verification,
+and T126 continues implementation. Do not claim the active controller uses the
+installed fix until its replacement starts.
+
+The first replacement, `run-d46bbe33227d38fb`, starts on the fixed build at
+21:06Z. It resumes T124's verification and T126's worker. Recovery cleans both
+T124 leases and retains T126's database until its worker finishes. Source and
+logs remain retained; task status is not edited manually.
+
+Activation exposes a separate command precedence defect. Retained operations
+reuse the old plan's setup command before the controller replans, despite a
+configured setup saved for the new run. Both new regression tests fail for this
+reason. Workers and checks now apply the immutable operation's configured setup;
+checks also apply its configured verification command. This keeps startup
+configuration authoritative without changing scopes or repeating planning.
+The focused tests pass. Repeat full validation and replace the controller with
+the command-precedence correction before claiming cleanup is active.
+
+The final command-precedence build passes `make test`, including all 55 runtime
+tests, the Go race suite, static analysis, packaging, build stamps, and skill
+checks. Both real-process recovery fixtures also change setup and verification
+commands between runs and confirm that resumed workers and checks use the new
+values. The real Docker fixture passes on the final installed binary. Darwin
+arm64 compilation passes again. Final logs are copied to the recovery directory.
+
+Cancel the interim session through the same retained-work path, capture its
+remaining container IDs, and append guarded cleanup to its leases. Preserve any
+cleanup the worker already registered. The final controller is
+`run-ac9291e173998d32`, PID 1785667, started at 21:12:54Z. Its build matches the
+installed normal binary: 0.8.2, revision `d66ef125`, modified true. At 21:16Z,
+ownership and view matching are true. T124 is done; T126 is retained for resume
+while the controller replans. The saved setup exactly matches the tested script,
+and no nonempty setup environment override is present.
+
+Three migrated T124 operation leases clean their old databases during recovery.
+Two old T126 databases remain under retained leases until that task finishes.
+The shared development PostgreSQL service remains outside cleanup. Unknown
+unattached volumes also remain untouched. The final controller uses configured
+commands at each execution boundary, even while its persisted plan still shows
+the previous setup during replanning. No backlog status is edited manually.

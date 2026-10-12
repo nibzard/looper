@@ -104,6 +104,25 @@ each child process. Looper removes it after the process exits or is
 cancelled. Store retained evidence in `LOOPER_ARTIFACT_DIR`; do not use
 `TMPDIR` to pass files between setup, workers, and checks. An abrupt
 controller termination can leave temporary directories behind.
+
+Setup receives `LOOPER_RESOURCE_CLEANUP_FILE`, a private path for a Bash cleanup
+script. Write the script before you create external resources. Looper runs it
+after the worker or check finishes, including setup and verification failures.
+Make cleanup idempotent and check ownership before you remove a resource. Use
+labels and container IDs for Docker resources; do not remove resources by a
+shared name alone. Remove private anonymous volumes with their containers.
+Use `io.looper.resource-prefix` and `io.looper.artifact` labels with the values
+of `LOOPER_RESOURCE_PREFIX` and `LOOPER_ARTIFACT_DIR`. Preserve cleanup that
+setup already registers when you add more resources.
+
+Looper records each operation's owner, prefix, and cleanup status in
+`LOOPER_ARTIFACT_DIR/resources.json`. Cancellation retains resources for recovery.
+After retained work finishes, Looper retries its cleanup. Restart also retries
+failed cleanup and cleans abandoned resources for completed work. Cleanup has
+a 30-second limit and a separate `cleanup.log`. A cleanup failure preserves the
+task result and emits a `resource-cleanup-error` event. Projects without a
+registered cleanup script keep their existing resource behavior.
+
 Let the operating system choose available server ports. Worktrees share Git
 metadata; they are workspace isolation, not a security sandbox.
 

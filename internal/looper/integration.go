@@ -43,8 +43,21 @@ func (e *Engine) prepare(a *Attempt, base string) (Candidate, error) {
 	return c, nil
 }
 func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidate, p Plan) Candidate {
+	if op.config.Setup != "" {
+		p.Setup = op.config.Setup
+	}
+	if op.config.Verify != "" {
+		p.Verify = op.config.Verify
+	}
 	defer e.Repo.Remove(c.Worktree)
 	dir := filepath.Join(a.Directory, "checks", c.Commit)
+	ctx, finish, err := beginResourceOperation(ctx, dir)
+	if err != nil {
+		c.OK = false
+		c.LaunchFailure = &LaunchError{"resource ownership", err}
+		return c
+	}
+	defer finish()
 	if err := writeJSON(filepath.Join(dir, "verify-command.json"), map[string]string{"command": p.Verify}); err != nil {
 		c.OK = false
 		c.Feedback = "Cannot record verification command: " + err.Error()
@@ -59,7 +72,7 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 		}
 		return c
 	}
-	err := e.command(ctx, p.Verify, c.Worktree, dir, "verify")
+	err = e.command(ctx, p.Verify, c.Worktree, dir, "verify")
 	if err != nil {
 		c.OK = false
 		c.Feedback = commandFeedback("Combined verification failed:", p.Verify, err, filepath.Join(dir, "verify.log"))
@@ -303,7 +316,7 @@ func (e *Engine) publish() error {
 		}
 	}
 	if observed != p.Tree {
-		return fmt.Errorf("project files changed during integration; verified work is retained without marking the task done")
+		return e.publicationConflict(a, p, observed)
 	}
 	if err = e.Repo.Ref(e.State.Ref, p.Commit); err != nil {
 		return err
@@ -315,6 +328,31 @@ func (e *Engine) publish() error {
 	a.Verification = &v
 	e.State.Publication = nil
 	return e.save()
+}
+
+func (e *Engine) publicationConflict(a *Attempt, p *Candidate, observed string) error {
+	var message strings.Builder
+	fmt.Fprintf(&message, "project files match neither the accepted tree nor the verified candidate for %s. Verified work is retained without marking the task done.", a.Task.ID)
+	for _, expected := range []struct{ label, tree string }{
+		{"accepted", p.Before}, {"verified candidate", p.Tree},
+	} {
+		fmt.Fprintf(&message, "\nDifferences from the %s tree %s:", expected.label, expected.tree)
+		paths, err := e.Repo.Changes(expected.tree, observed)
+		if err != nil {
+			fmt.Fprintf(&message, "\n  Cannot list differing files: %v", err)
+			continue
+		}
+		for i, path := range paths {
+			if i == 20 {
+				fmt.Fprintf(&message, "\n  ... and %d more files", len(paths)-i)
+				break
+			}
+			fmt.Fprintf(&message, "\n  %q", path)
+		}
+	}
+	fmt.Fprintf(&message, "\nRetained work: %s", e.Dir)
+	message.WriteString("\nPreserve your local edits. Restore project files to the accepted tree, then rerun Looper. Merge and verify your local edits after integration. Git HEAD can be older than the accepted tree. Keep the retained work and task file.")
+	return errors.New(message.String())
 }
 
 type reviewResult struct {

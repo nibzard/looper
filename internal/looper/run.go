@@ -18,6 +18,9 @@ type checkRun struct {
 }
 
 func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
+	if e.controller != nil {
+		parent = context.WithValue(parent, resourceSessionKey{}, e.controller.Session)
+	}
 	ctx, cancel := context.WithCancel(withTiming(parent, e.Store))
 	exitReason := "stopped"
 	defer func() {
@@ -39,6 +42,9 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		}
 		cancel()
 		e.wg.Wait()
+		if e.State != nil {
+			e.sweepResources()
+		}
 		exit := sessionExit{Reason: exitReason, ExitCode: code}
 		if resultErr != nil {
 			exit.Error = resultErr.Error()
@@ -63,6 +69,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 	if err := e.initialize(ctx); err != nil {
 		return 1, err
 	}
+	e.sweepResources()
 	if e.Config.Verbose {
 		e.event("config", fmt.Sprintf("agents %s (review %s) | jobs %d | checks %d | poll %s | retry %d at %s | worker timeout %s | git timeout %s | task file %s",
 			e.Config.Agent, e.Config.ReviewAgent, e.Config.Jobs, e.Config.Checks, e.Config.Poll, e.Config.RetryLimit, e.Config.RetryDelay, e.Config.Timeout, gitTimeout, e.Config.Todo))
@@ -121,6 +128,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			case r := <-results:
 				delete(active, r.ID)
 				a := e.attempt(r.ID)
+				e.sweepResources()
 				if a == nil {
 					return 1, fmt.Errorf("unknown completed attempt %s", r.ID)
 				}
@@ -174,6 +182,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				return 130, ctx.Err()
 			}
 			a := e.attempt(entry.AttemptID)
+			e.sweepResources()
 			if result.LaunchFailure != nil {
 				return 1, result.LaunchFailure
 			}

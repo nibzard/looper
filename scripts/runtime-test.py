@@ -591,6 +591,55 @@ class ParallelTests(unittest.TestCase):
             finally:
                 if process.poll() is None:process.kill();process.wait()
 
+    def test_resource_cleanup_after_cancelled_worker_recovery(self):
+        self.resource_cleanup_recovery(signal.SIGINT, 130, "retained")
+
+    def test_resource_cleanup_after_killed_worker_recovery(self):
+        self.resource_cleanup_recovery(signal.SIGKILL, -signal.SIGKILL, "active")
+
+    def resource_cleanup_recovery(self, stop_signal, exit_code, lease_status):
+        self.tasks(count=1)
+        self.env["LOOPER_SETUP_COMMAND"] = r'''set -e
+touch "$LOOPER_ARTIFACT_DIR/database"
+cat > "$LOOPER_RESOURCE_CLEANUP_FILE" <<'CLEANUP'
+rm -f "$LOOPER_ARTIFACT_DIR/database"
+echo cleaned > "$LOOPER_ARTIFACT_DIR/cleanup-proof"
+CLEANUP
+'''
+        self.env["TEST_MODE"] = "interrupt"
+        with (self.path / "resource-output").open("w") as output:
+            process = subprocess.Popen(self.command(), cwd=self.project, env=self.env,
+                                       stdout=output, stderr=output)
+            try:
+                self.wait_for(lambda: self.events.exists() and any(
+                    e["kind"] == "start" and (Path(e["cwd"]) / "T1.txt").exists()
+                    for e in self.recorded()))
+                process.send_signal(stop_signal)
+                self.assertEqual(process.wait(timeout=15), exit_code)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+        runtime = next((self.path / "logs").glob("*/runtime"))
+        retained = list(runtime.glob("task-*/work-*/database"))
+        self.assertEqual(len(retained), 1)
+        lease = json.loads((retained[0].parent / "resources.json").read_text())
+        self.assertEqual(lease["status"], lease_status)
+        self.assertTrue(lease["session"])
+        self.env["TEST_MODE"] = "resume_partial"
+        self.env["LOOPER_SETUP_COMMAND"] += '\ntouch "$LOOPER_ARTIFACT_DIR/new-setup"\n'
+        self.env["LOOPER_VERIFY_COMMAND"] = 'test -f "$LOOPER_ARTIFACT_DIR/new-setup"'
+        self.run_loop()
+        self.assertFalse(list(runtime.glob("task-*/work-*/database")))
+        self.assertFalse(list(runtime.glob("task-*/checks/*/database")))
+        self.assertTrue((retained[0].parent / "cleanup-proof").exists())
+        new_proofs = [p for p in runtime.glob("task-*/**/cleanup-proof")
+                      if p.parent != retained[0].parent]
+        self.assertEqual(len(new_proofs), 2)
+        for proof in new_proofs:
+            self.assertTrue((proof.parent / "new-setup").exists())
+        self.assertEqual(json.loads(self.todo.read_text())["tasks"][0]["status"], "done")
+
     def test_setup_failure_can_be_repaired_by_worker(self):
         self.tasks(count=1)
         self.env["LOOPER_SETUP_COMMAND"]="test -f T1.txt"

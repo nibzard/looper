@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -182,5 +183,64 @@ func TestPublishRejectsChangedIgnoredCandidateFile(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != "user edit\n" {
 		t.Fatal("failed publication overwrote the user edit")
+	}
+}
+
+func TestPublishExplainsUnrelatedLocalEdits(t *testing.T) {
+	for _, alreadyApplied := range []bool{false, true} {
+		name := "before apply"
+		if alreadyApplied {
+			name = "after apply"
+		}
+		t.Run(name, func(t *testing.T) {
+			e, p := publicationFixture(t)
+			if alreadyApplied {
+				if err := e.Repo.Apply(p.Before, p.Tree); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(e.Config.Root, "local.txt")
+			if err := os.WriteFile(path, []byte("local work\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gitText(e.Config.Root, "add", "--", "local.txt"); err != nil {
+				t.Fatal(err)
+			}
+			indexPath := filepath.Join(e.Config.Root, ".git", "index")
+			index, err := os.ReadFile(indexPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = e.publish()
+			if err == nil {
+				t.Fatal("local edits must prevent publication")
+			}
+			for _, want := range []string{"T001", "local.txt", "accepted tree " + p.Before, "verified candidate tree " + p.Tree, e.Dir, "Preserve your local edits", "Git HEAD can be older", "without marking the task done"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("diagnostic does not contain %q: %v", want, err)
+				}
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != "local work\n" {
+				t.Fatal("publication changed local work")
+			}
+			gotIndex, err := os.ReadFile(indexPath)
+			if err != nil || string(gotIndex) != string(index) {
+				t.Fatal("publication changed the user index")
+			}
+			_, err = os.Stat(filepath.Join(e.Config.Root, "raw", "sample.txt"))
+			if alreadyApplied && err != nil || !alreadyApplied && !os.IsNotExist(err) {
+				t.Fatalf("publication changed candidate files: %v", err)
+			}
+			saved, err := e.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, state := range []*State{e.State, saved} {
+				if state.Publication == nil || state.Publication.Commit != p.Commit || state.Published != p.Before || state.Tip != p.Base || state.Attempts[len(state.Attempts)-1].Phase != "verifying" || state.Backlog.Task("T001").Status != "doing" {
+					t.Fatal("failed publication did not retain unfinished work")
+				}
+			}
+		})
 	}
 }
