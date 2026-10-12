@@ -29,7 +29,8 @@ They report missing history explicitly. Startup imports existing Looper process
 metadata by artifact path and start time, so retries remain separate and repeated
 imports do not duplicate durations.
 
-Go build metadata identifies the executable revision and modified-source state.
+Repository build commands stamp the Git revision and modified-source state
+explicitly. Direct Go builds use automatic VCS metadata as a fallback.
 Controller metadata exposes this identity to observers. The session start and a
 structured `session` event commit together, retaining build identity without
 changing the timing table schema. Source archives report an unknown revision.
