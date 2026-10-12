@@ -32,85 +32,94 @@ the adapter commits.
 
 | Finding | Decision | Change |
 |---|---|---|
-| Build-artifact trap burns a repair cycle | Do | One sentence in `planPrompt` |
-| Repair evidence grows without a bound | Do | Byte cap on appended feedback |
-| `TMPDIR` can exceed the Unix socket path limit | Do, carefully | Short private `TMPDIR` with a retention answer |
-| No guard against unsatisfiable verify commands | Do not build | None; make the spiral cheap instead |
+| Build-artifact trap burns a repair cycle | Do | State the contract in planner and worker prompts |
+| Agent invocations consume large contexts | Defer | Measure supplied prompts separately from tool reads |
+| `TMPDIR` can exceed the Unix socket path limit | Do | Short private directory with process ownership and cleanup |
+| No guard against unsatisfiable verify commands | Defer | Explain integration constraints; retain bounded repairs |
 | zcode permission and planner parity gaps | Defer | Documentation only |
 
-## Do: teach the planner the loop's own contract
+## Do: state the verification contract
 
 Finding. In both benchmark arms the first worker committed
 `__pycache__/*.pyc` artifacts. `python3 -m unittest` regenerates them,
 and the engine's changed-files invariant rejects the verification
 (`internal/looper/integration.go:65`: "Verification changed project
-files or failed to capture its result"). Each arm paid one repair cycle
-to learn a rule the controller already enforces.
+files or failed to capture its result"). Both arms encountered a rule the
+controller already enforces. Claude
+Code recovered; zcode also encountered an unsatisfiable verification step.
 
-Change. Add one sentence to `planPrompt`
-(`internal/looper/agent.go:333`): verify commands must not regenerate
-tracked or unignored files, and setup must add ignore rules for build
-output when needed.
+Change. State the contract in `planPrompt` and `workerPrompt`: setup
+and verification must leave tracked and unignored project files unchanged.
+Workers must include ignore rules in their implementation and remove
+tracked build artifacts when necessary. Setup recreates ignored dependencies;
+it must not edit ignore rules during verification. Ignore rules alone
+cannot exclude files that Git already tracks.
+
+Explain that checks run in a fresh integrated worktree and verify product
+behavior. Checks must not depend on Looper-private refs or worker commit
+history. This is an execution constraint the planner needs to know.
 
 Reasoning. The engine already enforces this invariant deterministically;
 the prompt merely fails to state it, so agents discover it by failing.
 Stating an existing rule is wiring, not adding (`MANIFESTO.md:67`). The
-rule is general — any build system, not only Python bytecode — and it is
-controller-side knowledge no agent CLI vendor will ever ship, so it
-passes the absorption test (`PRACTICES-REPORT-2026-10-11.md`, section 6,
-lesson 1). The existing prompt already carries the neighboring rules
+rule applies to any build system. It describes Looper's execution model,
+which Looper must explain to each agent. The existing prompt already
+carries the neighboring rules
 ("Setup must recreate ignored dependencies in each worktree. Never share
-mutable build output between worktrees."), so the sentence completes a
+mutable build output between worktrees."), so these instructions complete a
 contract the prompt already implies.
 
-## Do: cap repair evidence
+## Defer: cap repair evidence
 
-Finding. `MaxRepairs` (`internal/looper/config.go:18`, default 6) bounds
-repair attempts, but nothing bounds the size of the evidence appended to
-each attempt. In the first zcode run the diagnosis prompt reached 573,848
-input tokens; in the complete run, diagnosis calls carried 322,497 and
-421,256. `failureEvidence` (`internal/looper/engine.go:417`) already
-strips operation paths before comparing failures across repairs, but the
-text still grows monotonically.
+Finding. `MaxRepairs` bounds repair attempts. The benchmark records large
+input token totals for diagnosis invocations, including 322,497 and
+421,256 in the complete run. These totals include context collected during
+the invocation; they do not measure the supplied prompt alone.
 
-Change. Truncate appended repair and diagnosis evidence to a fixed byte
-budget, keeping the most recent content and noting the truncation.
+The code replaces repair feedback on each repair. `logTail` already limits
+individual log excerpts to 16,000 bytes. Diagnosis also directs the agent
+to read retained attempt records. A cap on supplied feedback cannot bound
+those tool reads or the harness's resulting context.
 
-Reasoning. The manifesto states the rule directly: "when a turn fails,
-make the next turn smaller, not smarter" (`MANIFESTO.md:56`). A byte cap
-is that rule made literal: deterministic, no new states, no model
-judgment, and it bounds the cost of every pathological loop, including
-the unsatisfiable-verify spiral below. A bound needs no paragraph of
-justification; it is the same shape as `MaxRepairs` and the dispatch
-limit.
+Decision. Defer a new evidence cap. First measure supplied prompt bytes
+separately from context collected through tool reads. Add a limit only if
+that evidence identifies a controller-owned source of excessive input.
 
-## Do carefully: shorten `TMPDIR`
+Reasoning. A deterministic limit fits Looper when it bounds a demonstrated
+problem. This benchmark does not establish that appended feedback causes
+the observed cost. Repair limits bound attempts, not the cost of each
+agent invocation. Do not claim that failure is cheap without measuring it.
 
-Finding. `resourceEnv` (`internal/looper/agent.go:300`) gives each
-attempt `TMPDIR=<runtime>/task-<id>/work-<session>/tmp`. Toolchains that
-bind Unix sockets under `TMPDIR` — the zcode stack does — fail with
-`listen EINVAL` once the path approaches the kernel's roughly 104-byte
-`sun_path` limit. The benchmark needed a wrapper that remaps `TMPDIR` to
-a short path (recorded in the design note on commit `b27673a`).
+## Do: shorten `TMPDIR`
 
-Change. A short private directory, for example
-`/tmp/looper-<hash8>`, created with mode 0700 and unique per attempt.
+Finding. The previous `resourceEnv` placed `TMPDIR` under the runtime
+operation directory. Toolchains that bind Unix sockets under `TMPDIR` can
+exceed the operating system's socket path limit. The live zcode run failed
+with `listen EINVAL` until a wrapper supplied a short path.
 
-Reasoning. The documented invariant in `README.md` is "a unique
-`LOOPER_RESOURCE_PREFIX`, a private `TMPDIR`, and `LOOPER_ARTIFACT_DIR`
-... use these for databases and other test resources". The invariant is
-private, unique, per-attempt — not "located under the runtime
-directory". A short path preserves every promised property while
-respecting an operating-system limit the controller cannot negotiate.
-This is not a hardcode: it applies to all agents and all projects.
+Change. `runProcess` creates a directory under `/tmp` with `os.MkdirTemp`
+for each child process that receives Looper resource variables. The
+fixed short root avoids long inherited `TMPDIR` and runtime paths.
+Directories have mode 0700 and separate names. Creation errors stop the
+operation. The process runner owns cleanup after exit, failure, or
+cancellation, once it terminates the child process group.
 
-Open wrinkle. Attempt directories are retained ("no automatic retention
-limit yet", `README.md`), so short directories need the same lifecycle
-or an explicit cleanup, otherwise they accumulate in `/tmp`. This change
-touches worker isolation, so it ships as its own small change with
-tests, not as a drive-by.
+`LOOPER_RESOURCE_PREFIX` remains scoped to the operation. `TMPDIR` is
+private to each child process, including retries. Setup, workers, and
+checks must not pass files through `TMPDIR`. Retained evidence belongs
+in `LOOPER_ARTIFACT_DIR`, which keeps its existing retention behavior.
 
-## Do not build: verify-command guards or a re-plan path
+Reasoning. Looper owns the execution environment. Its directory layout
+must support ordinary tools, including tools that bind Unix sockets.
+This fixes that responsibility without adding an agent-specific rule,
+a configuration knob, or another loop state.
+
+Lifecycle limit. An abrupt controller termination can bypass cleanup and
+leave temporary directories behind. This change does not add a retention
+service. Tests cover socket binding under a deep runtime path, directory
+permissions, isolation, and cleanup after success, failure, and cancellation.
+
+## Defer: verify-command guards or a re-plan path
 
 Finding. The zcode planner authored a verify command containing
 `git merge-base --is-ancestor <task-ref> HEAD` checks against
@@ -119,30 +128,24 @@ the checks can never pass. The loop spent 14 invocations and 3,263,146
 input tokens, both diagnosis calls correctly proved the check
 unsatisfiable, and the run ended blocked with nothing published.
 
-Options considered and rejected:
+Options considered and deferred:
 
 - **Plan-time lint** rejecting verify steps that reference
-  `refs/looper-tasks/` or ancestry checks. Rejected: it is a deny-list
+  `refs/looper-tasks/` or ancestry checks. Deferred: it is a deny-list
   of observed patterns. The next agent invents a different
-  unsatisfiable check — a coverage threshold, a timing assertion, a
-  network probe — and the list grows forever. Partial coverage bought
-  with permanent surface is the definition of a temporary fix.
+  unsatisfiable check. One observed pattern does not justify a growing
+  list of special cases. First explain the integration contract.
 - **Diagnosis-triggered verify re-plan**: when the diagnosis attributes
   failure to the check rather than the code, re-plan the verify command
-  instead of repairing code again. Rejected twice over. It lets model
-  judgment steer control flow of the deterministic shell, against
-  "deterministic beats clever inside the loop" (`MANIFESTO.md:56`), and
-  it adds a state to the loop machine, against "fewer states beat better
-  explanations" (`MANIFESTO.md:46`).
+  instead of repairing code again. Deferred: it adds another recovery
+  transition and lets diagnosis change the verification gate. That needs
+  evidence and a design that preserves the acceptance criteria.
 
-Reasoning. The manifesto's answer to this finding already exists:
-bounded repairs, then block, retain the diagnosis, and idle until a
-human edits the backlog. An unattended run has nobody to make the
-judgment call, and the controller correctly refuses to make it itself.
-The blocked outcome is the product working as designed; what was wrong
-was the price. The two accepted changes above are what make that outcome
-cheap: the prompt line removes the common trap, the evidence cap bounds
-the burn.
+Reasoning. Keep bounded repairs, then block, retain the diagnosis, and
+wait for a human to edit the backlog. State the integration contract
+before adding another recovery mechanism. The contract clarification can
+prevent known misunderstandings, but does not guarantee planner compliance.
+Neither accepted change bounds the token cost of an agent invocation.
 
 Revisit trigger. If unsatisfiable verify commands keep appearing once
 real users exist, that evidence justifies a real design — per the
@@ -172,9 +175,8 @@ about. Defer until a real zcode user hits a real need.
 - Commits `ef80ecc`, `b27673a` — the zcode adapter and its live-contract
   fixes, with `design` and `todo` git notes carrying the `TMPDIR`
   finding and the verification story.
-- Code anchors: `internal/looper/agent.go:300` (`resourceEnv`),
-  `internal/looper/agent.go:333` (`planPrompt`),
-  `internal/looper/engine.go:417` (`failureEvidence`),
-  `internal/looper/integration.go:65` (changed-files invariant),
-  `internal/looper/config.go:18` (`MaxRepairs`).
+- Code anchors: `internal/looper/agent.go` (`resourceEnv`, `planPrompt`,
+  `workerPrompt`), `internal/looper/process_unix.go` (`runProcess`),
+  `internal/looper/integration.go` (`repair`, `diagnose`, `logTail`,
+  changed-files invariant), and `internal/looper/config.go` (`MaxRepairs`).
 - `MANIFESTO.md` — the decision standard, quoted per section above.
