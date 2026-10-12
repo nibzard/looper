@@ -135,11 +135,13 @@ func observe(c Config, s *State) Observation {
 }
 
 // Preserve existing status fields; the observation is an additive contract.
-func statusReport(c Config, s *State) any {
+func statusReport(c Config, s *State, timing TimingReport, statistics ui.StatisticsView) any {
 	return struct {
 		*State
-		Observation Observation `json:"observation"`
-	}{s, observe(c, s)}
+		Observation Observation       `json:"observation"`
+		Timing      TimingReport      `json:"timing"`
+		Statistics  ui.StatisticsView `json:"statistics"`
+	}{s, observe(c, s), timing, statistics}
 }
 
 func inspectTask(c Config, store *Store, out io.Writer) error {
@@ -171,6 +173,11 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		timing, err := store.Timing(time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		taskTiming := timing.task(t.ID)
 		report := struct {
 			Version  int                 `json:"schema_version"`
 			Task     Task                `json:"task"`
@@ -178,11 +185,13 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 			Workers  []WorkerObservation `json:"workers"`
 			Checks   []CheckObservation  `json:"checks"`
 			Logs     []string            `json:"logs"`
-		}{observationVersion, t, attempts, workers, checks, logs}
+			Timing   TaskTimingReport    `json:"timing"`
+		}{observationVersion, t, attempts, workers, checks, logs, taskTiming}
 		if c.JSON {
 			return json.NewEncoder(out).Encode(report)
 		}
 		fmt.Fprintf(out, "%s  %s  %s\n", t.ID, t.Status, sanitize(t.Title))
+		printTaskTiming(out, taskTiming)
 		for _, b := range t.Blockers {
 			fmt.Fprintln(out, "Blocked:", sanitize(b))
 		}

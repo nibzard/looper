@@ -44,6 +44,16 @@ type Engine struct {
 
 	activity, activityDetail, activityLog string
 	activityUpdated                       string
+
+	// inputPending marks an idle wait for a corrected task file. The last
+	// accepted state and the user's file stay untouched while it is set.
+	inputPending bool
+	inputProblem string
+
+	// assessDeadline overrides the fixed assessment deadline for tests of the
+	// full pipeline; zero keeps the production deadline. It is set before the
+	// run starts and never mutated while workers are live.
+	assessDeadline time.Duration
 }
 
 // operation is the immutable execution configuration captured before each
@@ -114,6 +124,12 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 		lock.Close()
 		return nil, nil, err
 	}
+	if err = s.beginSession(info); err != nil {
+		removeController(dir, info.Session)
+		s.Close()
+		lock.Close()
+		return nil, nil, err
+	}
 	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, viewNotify: make(chan ui.ViewSnapshot, 1), checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs}
 	if !c.JSON {
 		width := func() int {
@@ -127,10 +143,14 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 	return engine, lock, nil
 }
 func (e *Engine) event(kind, message string) {
+	e.eventData(kind, message, nil)
+}
+
+func (e *Engine) eventData(kind, message string, data any) {
 	if e.err != nil {
 		return
 	}
-	id, err := e.Store.Event(kind, message, nil)
+	id, err := e.Store.Event(kind, message, data)
 	if err != nil {
 		e.err = err
 		return
@@ -138,7 +158,11 @@ func (e *Engine) event(kind, message string) {
 	e.eventCursor = id
 	e.viewDirty = true
 	if e.Config.JSON {
-		b, _ := json.Marshal(Event{Time: time.Now().UTC().Format(time.RFC3339), Kind: kind, Message: message})
+		var payload json.RawMessage
+		if data != nil {
+			payload, _ = json.Marshal(data)
+		}
+		b, _ := json.Marshal(Event{Time: time.Now().UTC().Format(time.RFC3339), Kind: kind, Message: message, Data: payload})
 		fmt.Fprintln(e.Output, string(b))
 	} else if e.Render != nil {
 		e.Render.Event(kind, message)
@@ -292,7 +316,7 @@ func (e *Engine) initializeState(ctx context.Context) error {
 					return err
 				}
 			}
-			tree, err := e.Repo.Snapshot(e.Config.Root)
+			tree, err := e.Repo.SnapshotFrom(e.Config.Root, s.Published)
 			if err != nil {
 				return err
 			}
@@ -335,7 +359,7 @@ func (e *Engine) initializeState(ctx context.Context) error {
 					a.Phase = "resume"
 				}
 			}
-			e.event("resume", "Resuming retained work.")
+			e.eventData("resume", e.resumeMessage(), e.previousExitData())
 			return e.save()
 		}
 		// With no in-flight work the editable plan and current working tree may
@@ -391,15 +415,20 @@ func (e *Engine) bootstrap(ctx context.Context, plans []capturedPlan) error {
 Return one JSON object: {"schema_version":1,"goal":"the existing project's intended outcome","source_files":["relative requirements files"],"tasks":[{"id":"T001","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":[]}]}.
 Only plan work grounded in the existing requirements. Include setup and executable verification where missing.
 Use dependencies. Separate external prerequisites from implementable work. Do not modify any files.`
-	supplied := ""
-	for _, p := range plans {
-		supplied += "\n--- Explicitly supplied plan document (" + p.Path + ") ---\n" + p.Text
-	}
-	if supplied != "" {
-		prompt += "\nThese plan documents are part of the project requirements and must be covered exactly once:" + supplied
-	}
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, filepath.Join(e.Dir, name), prompt, false)
+	dir := filepath.Join(e.Dir, name)
+	c, err := prepareAgentContext(e.Repo, work, dir, empty, nil, "", nil, documentsFromPlans(plans))
 	if err != nil {
+		return err
+	}
+	if c.NewRequirements != "" {
+		prompt += "\nThese plan documents are part of the project requirements and must be covered exactly once. Read every document in this index: " + c.NewRequirements
+	}
+	prompt += c.references()
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
+	if err != nil {
+		return err
+	}
+	if err = c.validate(); err != nil {
 		return err
 	}
 	var b Backlog
@@ -420,6 +449,10 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 }
 
 func (e *Engine) plan(ctx context.Context) error {
+	documents, err := e.appliedContext()
+	if err != nil {
+		return err
+	}
 	contracts := []string{}
 	for _, t := range e.State.Backlog.Tasks {
 		contracts = append(contracts, t.Contract())
@@ -439,8 +472,16 @@ func (e *Engine) plan(ctx context.Context) error {
 	defer e.Repo.Remove(work)
 	op := e.capture()
 	e.event("plan", "Planning independent tasks and executable checks...")
-	raw, err := e.runPlanner(ctx, op, work, filepath.Join(e.Dir, name), planPrompt(e.State.Backlog, e.importedScope()))
+	dir := filepath.Join(e.Dir, name)
+	c, err := prepareAgentContext(e.Repo, work, dir, e.State.Backlog, nil, "", documents, nil)
 	if err != nil {
+		return err
+	}
+	raw, err := e.runPlanner(ctx, op, work, dir, planPrompt(e.State.Backlog, c))
+	if err != nil {
+		return err
+	}
+	if err = c.validate(); err != nil {
 		return err
 	}
 	var p Plan
@@ -479,7 +520,7 @@ func (e *Engine) command(ctx context.Context, command, work, dir, name string) e
 		return ctx.Err()
 	}
 	defer func() { <-e.checkSlots }()
-	return runProcess(ctx, work, filepath.Join(dir, name+".log"), []string{"bash", "-lc", command}, nil, resourceEnv(dir))
+	return runShell(ctx, work, dir, name, command, resourceEnv(dir))
 }
 
 type workerResult struct {
@@ -497,7 +538,7 @@ type resultReceipt struct {
 	Commit   string  `json:"commit"`
 }
 
-func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog, p Plan, importedScope string) (r workerResult) {
+func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog, p Plan, documents []contextDocument) (r workerResult) {
 	r.ID = a.ID
 	defer func() {
 		if r.Err == nil && r.Summary != nil {
@@ -511,9 +552,19 @@ func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog
 			r.Err = ctx.Err()
 			return r
 		}
-		feedback += "\nWorkspace setup failed. Diagnose and repair the setup before completing the task. If it requires an external prerequisite, report blocked.\nCommand: " + p.Setup + "\n" + logTail(filepath.Join(dir, "setup.log"))
+		var launchErr *LaunchError
+		if errors.As(err, &launchErr) {
+			r.Err = err
+			return r
+		}
+		feedback += "\n" + commandFeedback("Workspace setup failed. Diagnose and repair the setup before completing the task. If it requires an external prerequisite, report blocked.", p.Setup, err, filepath.Join(dir, "setup.log"))
 	}
-	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, feedback, importedScope), true)
+	c, err := prepareAgentContext(e.Repo, a.Worktree, dir, b, &a.Task, feedback, documents, nil)
+	if err != nil {
+		r.Err = err
+		return r
+	}
+	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, c), true)
 	var summary Summary
 	if err == nil {
 		if err = json.Unmarshal(raw, &summary); err == nil {
@@ -544,6 +595,10 @@ func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog
 		}
 	}
 	if err != nil {
+		r.Err = err
+		return r
+	}
+	if err = c.validate(); err != nil {
 		r.Err = err
 		return r
 	}
@@ -650,6 +705,9 @@ func (e *Engine) attempt(id string) *Attempt {
 	return nil
 }
 func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*Attempt, error) {
+	if _, err := e.appliedContext(); err != nil {
+		return nil, err
+	}
 	var a *Attempt
 	for _, v := range e.State.Attempts {
 		if v.Task.ID == t.ID && v.Phase == "resume" {
@@ -720,13 +778,15 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 	if err := e.export(); err != nil {
 		return nil, err
 	}
-	e.launch(ctx, a, out)
-	return a, nil
+	return a, e.launch(ctx, a, out)
 }
-func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult) {
+func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult) error {
+	documents, err := e.appliedContext()
+	if err != nil {
+		return err
+	}
 	e.event("start", a.Task.ID+"  "+a.Task.Title)
 	snapshot, backlog, plan := clone(*a), clone(e.State.Backlog), clone(*e.State.Plan)
-	scope := e.importedScope()
 	op := e.capture()
 	e.wg.Add(1)
 	go func() {
@@ -737,12 +797,13 @@ func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult
 			workerCtx, cancel = context.WithTimeout(ctx, op.config.Timeout)
 		}
 		defer cancel()
-		result := e.execute(workerCtx, op, snapshot, backlog, plan, scope)
+		result := e.execute(workerCtx, op, snapshot, backlog, plan, documents)
 		select {
 		case out <- result:
 		case <-ctx.Done():
 		}
 	}()
+	return nil
 }
 
 func (e *Engine) hold(a *Attempt, reason string) error {
@@ -794,7 +855,7 @@ func (e *Engine) applyResult(a *Attempt) error {
 		if err := writeJSON(path, s); err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(withTiming(context.Background(), e.Store), 30*time.Second)
 		err := runProcess(ctx, e.Config.Root, filepath.Join(a.Directory, "hook.log"), []string{e.Config.Hook, t.ID, s.Status, path, a.ID}, nil, nil)
 		cancel()
 		if err != nil {
@@ -822,7 +883,7 @@ func mergeUnique(old, fresh []string) []string {
 }
 func (e *Engine) addFinding(f Finding) {
 	if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Details) == "" || strings.TrimSpace(f.Evidence) == "" {
-		e.event("finding", "Ignored a follow-up without a title, acceptance details, and evidence.")
+		e.event("finding", fmt.Sprintf("Ignored follow-up %q (%s): missing a title, acceptance details, or evidence.", shortText(sanitize(f.Title), 160), hashJSON(f)[:12]))
 		return
 	}
 	key := strings.ToLower(strings.Join(strings.Fields(f.Title), " "))
@@ -833,7 +894,7 @@ func (e *Engine) addFinding(f Finding) {
 	}
 	for _, d := range f.DependsOn {
 		if e.State.Backlog.Task(d) == nil {
-			e.event("finding", "Ignored follow-up with unknown dependency "+d)
+			e.event("finding", fmt.Sprintf("Ignored follow-up %q (%s): unknown dependency %s.", shortText(sanitize(f.Title), 160), hashJSON(f)[:12], sanitize(d)))
 			return
 		}
 	}

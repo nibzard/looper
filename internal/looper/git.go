@@ -127,6 +127,13 @@ func (r *Repository) Head() (string, string) {
 	return h, b
 }
 func (r *Repository) Snapshot(cwd string) (string, error) {
+	return r.SnapshotFrom(cwd, "HEAD")
+}
+
+// SnapshotFrom uses the expected tree to identify tracked files. The project
+// HEAD does not advance when Looper publishes, so it cannot identify ignored
+// files added by an integrated task.
+func (r *Repository) SnapshotFrom(cwd, base string, knownTrees ...string) (string, error) {
 	f, err := os.CreateTemp(r.Dir, "index-")
 	if err != nil {
 		return "", err
@@ -137,10 +144,24 @@ func (r *Repository) Snapshot(cwd string) (string, error) {
 	defer os.Remove(name)
 	defer os.Remove(name + ".lock")
 	e := map[string]string{"GIT_INDEX_FILE": name}
-	if _, err = gitText(cwd, "rev-parse", "--verify", "HEAD"); err != nil {
+	var knownIgnored []byte
+	for _, tree := range knownTrees {
+		if _, err = gitCommand(cwd, nil, e, "read-tree", tree); err != nil {
+			return "", err
+		}
+		paths, err := gitCommand(cwd, nil, e, "ls-files", "--cached", "--ignored", "--exclude-standard", "-z")
+		if err != nil {
+			return "", err
+		}
+		knownIgnored = append(knownIgnored, paths...)
+	}
+	if base == "HEAD" {
+		_, err = gitText(cwd, "rev-parse", "--verify", "HEAD")
+	}
+	if err != nil {
 		_, err = gitCommand(cwd, nil, e, "read-tree", "--empty")
 	} else {
-		_, err = gitCommand(cwd, nil, e, "read-tree", "HEAD")
+		_, err = gitCommand(cwd, nil, e, "read-tree", base)
 	}
 	if err != nil {
 		return "", err
@@ -149,6 +170,8 @@ func (r *Repository) Snapshot(cwd string) (string, error) {
 	for _, x := range r.Excluded {
 		args = append(args, ":(exclude)"+x)
 	}
+	// Remove private context from the temporary index below. An explicit
+	// exclusion for an ignored directory can make git add fail.
 	if _, err = gitCommand(cwd, nil, e, args...); err != nil {
 		return "", err
 	}
@@ -156,8 +179,14 @@ func (r *Repository) Snapshot(cwd string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	seedIgnored, err := gitCommand(cwd, nil, e, "ls-files", "--cached", "--ignored", "--exclude-standard", "-z")
+	if err != nil {
+		return "", err
+	}
+	ignored = append(ignored, seedIgnored...)
+	ignored = append(ignored, knownIgnored...)
 	for _, p := range strings.Split(string(ignored), "\x00") {
-		if p == "" || r.excluded(p) {
+		if p == "" || r.excluded(p) || r.privateContext(cwd, p) {
 			continue
 		}
 		if _, err = os.Lstat(filepath.Join(cwd, p)); err != nil {
@@ -173,7 +202,7 @@ func (r *Repository) Snapshot(cwd string) (string, error) {
 	}
 	var remove []byte
 	for _, p := range strings.Split(string(tracked), "\x00") {
-		if p != "" && r.excluded(p) {
+		if p != "" && (r.excluded(p) || r.privateContext(cwd, p)) {
 			remove = append(remove, []byte(p)...)
 			remove = append(remove, 0)
 		}

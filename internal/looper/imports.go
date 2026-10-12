@@ -2,6 +2,7 @@ package looper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,7 +91,10 @@ func loadCapturedPlans(record *ImportRecord) ([]capturedPlan, error) {
 	for i, artifact := range record.Artifacts {
 		b, err := os.ReadFile(artifact)
 		if err != nil {
-			return nil, fmt.Errorf("captured plan missing: %w", err)
+			return nil, fmt.Errorf("import %s captured plan unavailable: %s: %w", record.RequestID, artifact, err)
+		}
+		if i < len(record.Digests) && digest(b) != record.Digests[i] {
+			return nil, fmt.Errorf("import %s captured plan changed: %s", record.RequestID, artifact)
 		}
 		path := ""
 		if i < len(record.SourcePaths) {
@@ -273,10 +277,15 @@ type planImportAck struct {
 
 // processPlanImports drives queued receipts at loop boundaries: wait for
 // safe conditions, analyze, validate, and apply additively. A stop request
-// takes precedence; queued imports remain for the next run.
+// takes precedence; queued imports remain for the next run. While the task
+// file needs correction, new requests are still claimed and queued, but no
+// import applies until the input is valid again.
 func (e *Engine) processPlanImports(ctx context.Context) {
 	e.claimPlanImports()
 	if e.err != nil {
+		return
+	}
+	if e.inputPending {
 		return
 	}
 	for _, record := range e.State.Imports {
@@ -299,6 +308,12 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 			continue
 		}
 		if err := e.applyPlanImport(ctx, record); err != nil {
+			var bad *invalidBacklogError
+			if errors.As(err, &bad) {
+				// A corrected edit, not a new submission, unblocks this import.
+				e.event("import", "Plan import "+record.RequestID+" waits for a corrected task file.")
+				continue
+			}
 			e.event("import-error", fmt.Sprintf("Plan import %s failed: %v", record.RequestID, err))
 			record.Status = ImportFailed
 			record.Error = err.Error()
@@ -466,24 +481,22 @@ func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef
 	return added, proposal.Covered, nil
 }
 
-// importedScope renders applied import text for planning, workers, review,
-// and final review prompts.
-func (e *Engine) importedScope() string {
-	var b strings.Builder
+// appliedContext never drops accepted requirements when evidence is missing.
+func (e *Engine) appliedContext() ([]contextDocument, error) {
+	var documents []contextDocument
 	for _, r := range e.State.Imports {
 		if r.Status != ImportApplied {
 			continue
 		}
 		plans, err := loadCapturedPlans(r)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		for _, p := range plans {
-			b.WriteString("\n--- Imported requirements (" + r.RequestID + ") ---\n")
-			b.WriteString(p.Text)
+			documents = append(documents, contextDocument{Import: r.RequestID, Source: p.Path, Text: []byte(p.Text)})
 		}
 	}
-	return b.String()
+	return documents, nil
 }
 
 // waitForPlanImport polls a request's acknowledgement until it reaches a

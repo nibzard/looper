@@ -12,7 +12,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db                *sql.DB
+	session           string
+	dir               string
+	previous          *previousSession
+	shutdownAttempted bool
+}
 
 func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -26,14 +32,32 @@ func OpenStore(path string) (*Store, error) {
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
 CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, time TEXT NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS checks (id INTEGER PRIMARY KEY, time TEXT NOT NULL, attempt_id TEXT NOT NULL, revision TEXT NOT NULL, kind TEXT NOT NULL, result TEXT NOT NULL, artifact TEXT NOT NULL);`)
+CREATE TABLE IF NOT EXISTS checks (id INTEGER PRIMARY KEY, time TEXT NOT NULL, attempt_id TEXT NOT NULL, revision TEXT NOT NULL, kind TEXT NOT NULL, result TEXT NOT NULL, artifact TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS timing_metadata (id INTEGER PRIMARY KEY CHECK(id=1), recorded_since TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, pid INTEGER NOT NULL, identity TEXT NOT NULL, started TEXT NOT NULL, ended TEXT, outcome TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS processes (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, artifact TEXT NOT NULL, pid INTEGER NOT NULL, identity TEXT NOT NULL, started TEXT NOT NULL, ended TEXT, outcome TEXT NOT NULL, source TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS processes_session ON processes(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS processes_artifact_start ON processes(artifact,started);
+CREATE TABLE IF NOT EXISTS usage_reports (id TEXT PRIMARY KEY, artifact TEXT NOT NULL, started TEXT NOT NULL, recorded_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS usage_report_time ON usage_reports(recorded_at);
+CREATE UNIQUE INDEX IF NOT EXISTS usage_report_artifact_start ON usage_reports(artifact,started);`)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db}, nil
+	if _, err = db.Exec("INSERT OR IGNORE INTO timing_metadata(id,recorded_since) VALUES(1,?)", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db, dir: filepath.Dir(path)}, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	var endErr error
+	if s.session != "" && !s.shutdownAttempted {
+		_, endErr = s.db.Exec("UPDATE sessions SET ended=?,outcome='stopped' WHERE id=? AND ended IS NULL", time.Now().UTC().Format(time.RFC3339Nano), s.session)
+	}
+	return errors.Join(endErr, s.db.Close())
+}
 func (s *Store) Load() (*State, error) {
 	var b string
 	err := s.db.QueryRow("SELECT data FROM state WHERE id=1").Scan(&b)

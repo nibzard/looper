@@ -312,8 +312,16 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 		if s == nil {
 			return fmt.Errorf("no saved run")
 		}
+		timing, err := store.Timing(time.Now().UTC())
+		if err != nil {
+			return err
+		}
 		if c.JSON {
-			return json.NewEncoder(out).Encode(statusReport(c, s))
+			statistics, err := store.Statistics(time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(out).Encode(statusReport(c, s, timing, statistics))
 		}
 		done, blocked, total := 0, 0, 0
 		for _, t := range s.Backlog.Tasks {
@@ -332,6 +340,7 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 			}
 		}
 		if DetectMode(os.Stdin, out, c.Plain) == ModeInteractive {
+			printTiming(out, timing)
 			NewPresenter(ModeInteractive, out, func() int { return terminalWidth(fileOf(out)) }).StatusBoard(s, path)
 			return nil
 		}
@@ -345,6 +354,7 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 			}
 		}
 		fmt.Fprintln(out, "State:", path)
+		printTiming(out, timing)
 		return nil
 	}
 	after := c.After

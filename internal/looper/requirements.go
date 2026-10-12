@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -123,20 +122,19 @@ func (e *Engine) analyzeImport(ctx context.Context, plans []capturedPlan) (*impo
 	}
 	defer e.Repo.Remove(work)
 	op := e.capture()
-	backlog, _ := json.MarshalIndent(e.State.Backlog, "", "  ")
-	var newTexts []string
-	for _, p := range plans {
-		newTexts = append(newTexts, p.Text)
+	documents, err := e.appliedContext()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(e.Dir, name)
+	c, err := prepareAgentContext(e.Repo, work, dir, e.State.Backlog, nil, "", documents, documentsFromPlans(plans))
+	if err != nil {
+		return nil, err
 	}
 	prompt := fmt.Sprintf(`Analyze additional requirements for Looper.
-Project goal: %s
+Current accepted revision: %s
 
-Current accepted backlog (revision %s):
-%s
-
-Previously imported requirements:%s
-
-New requirements to import:
+New requirements index (read every document):
 %s
 
 Compare each new requirement with existing tasks and implemented behavior.
@@ -147,11 +145,14 @@ Do not regenerate the backlog and do not modify any files.
 Return one JSON object: {"additions":[{"id":"P1","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":["P1 or existing task ids"]}],"covered":[{"requirement":"...","task_id":"T003","evidence":"..."}],"conflicts":["explanation"]}.
 New tasks need concrete acceptance criteria; execution planning adds executable verification.
 Use temporary identifiers P1..Pn for additions; depends_on may reference them or existing task ids.`,
-		e.State.Backlog.Goal, e.State.Tip, backlog, orNone(e.importedScope()), strings.Join(newTexts, "\n\n---\n\n"))
+		e.State.Tip, c.NewRequirements)
+	prompt += c.references()
 	e.event("import", "Analyzing imported requirements with the review agent...")
-	dir := filepath.Join(e.Dir, name)
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
 	if err != nil {
+		return nil, err
+	}
+	if err = c.validate(); err != nil {
 		return nil, err
 	}
 	var proposal importProposal
@@ -173,11 +174,4 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 		return nil, fmt.Errorf("the analysis changed code; its result was not applied")
 	}
 	return &proposal, nil
-}
-
-func orNone(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return " none"
-	}
-	return "\n" + s
 }

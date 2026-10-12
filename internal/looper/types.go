@@ -403,14 +403,16 @@ const (
 )
 
 type Candidate struct {
-	Base      string `json:"base"`
-	Commit    string `json:"commit"`
-	Tree      string `json:"tree"`
-	Worktree  string `json:"worktree,omitempty"`
-	Before    string `json:"before,omitempty"`
-	AttemptID string `json:"attempt_id,omitempty"`
-	OK        bool   `json:"ok"`
-	Feedback  string `json:"feedback,omitempty"`
+	// Fatal launch errors stay transient; restart re-verifies retained work.
+	LaunchFailure error  `json:"-"`
+	Base          string `json:"base"`
+	Commit        string `json:"commit"`
+	Tree          string `json:"tree"`
+	Worktree      string `json:"worktree,omitempty"`
+	Before        string `json:"before,omitempty"`
+	AttemptID     string `json:"attempt_id,omitempty"`
+	OK            bool   `json:"ok"`
+	Feedback      string `json:"feedback,omitempty"`
 }
 type State struct {
 	Version       int             `json:"version"`

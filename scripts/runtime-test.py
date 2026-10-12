@@ -20,7 +20,7 @@ STUB = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys, time
 args=sys.argv[1:]
 claude="-p" in args
-prompt=args[args.index("-p")+1] if claude else sys.stdin.read()
+prompt=sys.stdin.read()
 cwd=pathlib.Path.cwd()
 todo=cwd/os.environ.get("TEST_TODO", "to-do.json")
 tasks=json.loads(todo.read_text())["tasks"]
@@ -39,14 +39,25 @@ if "Plan execution for Looper" in prompt:
 elif "review pass for Looper" in prompt:
     event("review")
     assert not (cwd/"forbidden.txt").exists()
-    data=json.loads(todo.read_text())
     if mode=="review_fail":
         sys.exit(7)
     if mode=="review_code":
         (cwd/"seed.txt").write_text("review changed code")
-    data["tasks"].append({"id":"PROJECT-DONE","title":"Project done","priority":5,"status":"done","tags":["project-done"]})
-    todo.write_text(json.dumps(data))
-    result={"status":"reviewed","summary":"checked","added_tasks":0,"files":[]}
+    if mode in ("review_backlog","review_goal"):
+        data=json.loads(todo.read_text())
+        if mode=="review_backlog":
+            data["tasks"].append({"id":"PROJECT-DONE","title":"Project done","priority":5,"status":"done","tags":["project-done"]})
+        else:
+            data["goal"]="a different goal"
+        todo.write_text(json.dumps(data))
+    complete="final review pass for Looper" in prompt
+    findings=[]
+    if mode=="review_finding" and not any(t["id"]=="T003" for t in tasks):
+        findings=[{"title":"Fix observed behavior","details":"Check added output","evidence":"Observed fixture failure","depends_on":[],"priority":1}]
+        complete=False
+    if mode=="review_incomplete":
+        complete=False
+    result={"status":"reviewed","summary":"checked","findings":findings,"complete":complete}
 elif "Recover the final task report" in prompt:
     task=next(t for t in tasks if t["id"] in prompt)
     event("recover",task["id"])
@@ -61,6 +72,18 @@ else:
     task=next(t for t in tasks if "Complete task "+t["id"]+":" in prompt)
     task_id=task["id"]
     event("start",task_id)
+    if mode=="timing_parallel":
+        deadline=time.monotonic()+10
+        while time.monotonic()<deadline:
+            try:
+                started=[json.loads(line) for line in events.read_text().splitlines()]
+                if sum(e["kind"]=="start" for e in started)==2:
+                    break
+            except json.JSONDecodeError:
+                pass
+            time.sleep(.01)
+        else:
+            raise RuntimeError("timing fixture did not start both workers")
     if mode=="resume_partial":
         assert (cwd/(task_id+".txt")).exists(), "partial work was lost"
     if mode=="interrupt":
@@ -97,10 +120,15 @@ else:
         pathlib.Path(args[args.index("--output-last-message")+1]).write_text("not json")
         sys.exit(0)
 if claude:
-    print(json.dumps({"structured_output":result,"result":json.dumps(result)}))
+    output={"structured_output":result,"result":json.dumps(result)}
+    if mode=="usage":
+        output.update(type="result",usage={"input_tokens":100,"cache_read_input_tokens":500,"output_tokens":20},total_cost_usd=0.01)
+    print(json.dumps(output))
 else:
     pathlib.Path(args[args.index("--output-last-message")+1]).write_text(json.dumps(result))
     print(json.dumps({"type":"result"}))
+    if mode=="usage":
+        print(json.dumps({"type":"turn.completed","usage":{"input_tokens":600,"cached_input_tokens":500,"output_tokens":20}}))
 '''
 
 
@@ -159,6 +187,17 @@ class ParallelTests(unittest.TestCase):
         with sqlite3.connect(next((self.path / "logs").glob("*/runtime/state.db"))) as db:
             return json.loads(db.execute("select data from state where id=1").fetchone()[0])
 
+    def controller_events(self, kind):
+        with sqlite3.connect(next((self.path / "logs").glob("*/runtime/state.db"))) as db:
+            rows = db.execute("select id,message,data from events where kind=? order by id", (kind,)).fetchall()
+        return [{"id": row[0], "message": row[1], "data": json.loads(row[2])} for row in rows]
+
+    def state_eventually(self):
+        try:
+            return self.state()
+        except Exception:
+            return None
+
     def test_parallel_and_exact_publication(self):
         self.run_loop()
         events = self.recorded()
@@ -185,6 +224,83 @@ class ParallelTests(unittest.TestCase):
         self.assertEqual((self.project / ".git/index").read_bytes(), index)
         self.assertEqual(self.git("show", ":seed.txt"), "staged")
         self.assertEqual((self.project / "seed.txt").read_text(), "unstaged\n")
+
+    def test_project_timing_is_durable_and_reported(self):
+        self.env["TEST_MODE"]="timing_parallel"
+        self.run_loop()
+        path = next((self.path / "logs").glob("*/runtime/state.db"))
+        with sqlite3.connect(path) as db:
+            sessions = db.execute("select id,started,ended,outcome from sessions").fetchall()
+            self.assertEqual(len(sessions), 1)
+            self.assertIsNotNone(sessions[0][2])
+            self.assertEqual(sessions[0][3], "stopped")
+            processes = db.execute("select session_id,attempt_id,ended,outcome from processes").fetchall()
+            self.assertGreaterEqual(len(processes), 6)
+            self.assertTrue(all(p[0] == sessions[0][0] and p[2] is not None for p in processes))
+            self.assertTrue(all(p[3] == "success" for p in processes))
+            attempts = {a["id"] for a in self.state()["attempts"]}
+            self.assertEqual({p[1] for p in processes if p[1]}, attempts)
+        result = subprocess.run([str(ROOT / "build/looper"), "status", "--json", str(self.todo)],
+                                cwd=self.project, env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        timing = json.loads(result.stdout)["timing"]
+        self.assertTrue(timing["available"])
+        self.assertTrue(timing["history_complete"])
+        self.assertEqual(timing["unknown_sessions"], 0)
+        self.assertEqual(timing["unknown_processes"], 0)
+        self.assertGreater(timing["active_seconds"], 0)
+        self.assertGreater(timing["worker_seconds"], timing["active_seconds"])
+        self.assertGreaterEqual(timing["elapsed_seconds"], timing["active_seconds"])
+        self.assertGreaterEqual(timing["controller_seconds"], timing["active_seconds"])
+
+        task_times = {t["task_id"]: t for t in timing["tasks"]}
+        self.assertEqual(set(task_times), {"T1", "T2"})
+        for task in task_times.values():
+            self.assertTrue(task["available"])
+            self.assertTrue(task["history_complete"])
+            self.assertGreater(task["worker_seconds"], 0)
+            self.assertGreater(task["check_seconds"], 0)
+            self.assertEqual(task["recorded_attempts"], 1)
+        inspected = subprocess.run([str(ROOT / "build/looper"), "inspect", "T1", "--json"],
+                                   cwd=self.project, env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+        self.assertEqual(json.loads(inspected.stdout)["timing"], task_times["T1"])
+        shutdown = self.controller_events("shutdown")[-1]["data"]
+        self.assertEqual(shutdown["reason"], "complete")
+        self.assertEqual(shutdown["exit_code"], 0)
+
+    def test_usage_statistics_survive_restart_without_duplicates(self):
+        self.env["TEST_MODE"]="usage"
+        self.run_loop(0,"--model","gpt-5.3-codex")
+        def statistics():
+            result=subprocess.run([str(ROOT/"build/looper"),"status","--json",str(self.todo)],
+                                  cwd=self.project,env=self.env,capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stderr)
+            return json.loads(result.stdout)["statistics"]
+        before=statistics()
+        self.assertGreater(before["usage_reports"],0)
+        self.assertEqual(before["tokens"],before["usage_reports"]*620)
+        self.assertEqual(before["priced_reports"],before["usage_reports"])
+        self.assertGreater(before["estimated_usd"],0)
+        # Startup imports completed process sidecars, including these reports.
+        # Their artifact and start time must keep the old totals unchanged.
+        self.run_loop(0,"--model","gpt-5.3-codex")
+        after=statistics()
+        self.assertEqual(after["tokens"]-before["tokens"],
+                         (after["usage_reports"]-before["usage_reports"])*620)
+        self.assertTrue(all(m["model"]=="gpt-5.3-codex" for m in after["models"]))
+
+    def test_claude_usage_statistics_keep_reported_cost_separate(self):
+        self.env["TEST_MODE"]="usage"
+        self.env["CLAUDE_MODEL"]="claude-sonnet-4-6"
+        self.run_loop(0,"--all","claude")
+        result=subprocess.run([str(ROOT/"build/looper"),"status","--json",str(self.todo)],
+                              cwd=self.project,env=self.env,capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        report=json.loads(result.stdout)["statistics"]
+        self.assertEqual(report["tokens"],report["usage_reports"]*620)
+        self.assertGreater(report["estimated_usd"],0)
+        self.assertAlmostEqual(report["reported_usd"],report["usage_reports"]*0.01)
 
     def test_repository_before_its_first_commit(self):
         self.git("checkout","--orphan","new-project")
@@ -323,14 +439,21 @@ class ParallelTests(unittest.TestCase):
                 self.assertIn("already running", self.run_loop(1))
                 # SIGINT cancels with retained work; SIGTERM drains and waits.
                 os.killpg(process.pid, signal.SIGINT)
-                process.wait(timeout=10)
+                self.assertEqual(process.wait(timeout=10), 130)
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
         self.env["TEST_MODE"]=""
+        shutdown = self.controller_events("shutdown")[-1]["data"]
+        self.assertEqual(shutdown["reason"], "cancelled")
+        self.assertEqual(shutdown["exit_code"], 130)
+        self.assertIn("context canceled", shutdown["error"])
         self.run_loop()
         self.assertEqual((self.project/"T1.txt").read_text(), "done")
+        resume = self.controller_events("resume")[-1]["message"]
+        self.assertIn(shutdown["session"], resume)
+        self.assertIn("cancelled", resume)
 
     def test_repeated_verification_failure_keeps_code_isolated(self):
         self.tasks(count=1)
@@ -345,6 +468,10 @@ class ParallelTests(unittest.TestCase):
         self.env["TEST_MODE"]="bad_plan"
         self.run_loop(1)
         self.assertFalse(any(e["kind"]=="start" for e in self.recorded()))
+        shutdown = self.controller_events("shutdown")[-1]["data"]
+        self.assertEqual(shutdown["reason"], "error")
+        self.assertEqual(shutdown["exit_code"], 1)
+        self.assertIn("verification command", shutdown["error"])
 
     def test_review_failure_and_unapproved_code_are_not_published(self):
         self.tasks(count=1)
@@ -352,6 +479,37 @@ class ParallelTests(unittest.TestCase):
         self.run_loop(1)
         self.assertEqual((self.project/"seed.txt").read_text(),"original\n")
         self.assertFalse(any("project-done" in t.get("tags",[]) for t in json.loads(self.todo.read_text())["tasks"]))
+
+    def test_final_review_requires_explicit_completion(self):
+        self.tasks(count=1)
+        self.env["TEST_MODE"]="review_incomplete"
+        self.run_loop(2)
+        self.assertFalse(self.state()["finished"])
+        self.assertEqual(json.loads(self.todo.read_text())["tasks"][0]["status"],"done")
+
+    def test_review_backlog_edit_rejects_the_review(self):
+        self.tasks(count=1)
+        self.env["TEST_MODE"]="review_backlog"
+        self.run_loop(1)
+        data=json.loads(self.todo.read_text())
+        self.assertEqual(len(data["tasks"]),1)
+        self.assertFalse(any("project-done" in t.get("tags",[]) for t in data["tasks"]))
+        self.assertFalse(self.state()["finished"])
+
+    def test_review_goal_edit_rejects_the_review(self):
+        self.tasks(count=1)
+        self.env["TEST_MODE"]="review_goal"
+        self.run_loop(1)
+        data=json.loads(self.todo.read_text())
+        self.assertEqual(len(data["tasks"]),1)
+
+    def test_review_finding_creates_and_completes_work(self):
+        self.env["TEST_MODE"]="review_finding"
+        self.run_loop()
+        tasks=json.loads(self.todo.read_text())["tasks"]
+        self.assertEqual(len(tasks),3)
+        self.assertTrue(all(t["status"]=="done" for t in tasks))
+        self.assertTrue(self.state()["finished"])
 
     def test_new_baseline_after_draining_the_previous_run(self):
         self.env["MAX_ITERATIONS"]="1"
@@ -377,8 +535,27 @@ class ParallelTests(unittest.TestCase):
                 pid=next(e["pid"] for e in self.recorded() if e["kind"]=="start")
                 process.kill()
                 process.wait(timeout=5)
+                self.assertEqual(self.controller_events("shutdown"), [])
+                db_path = next((self.path / "logs").glob("*/runtime/state.db"))
+                with sqlite3.connect(db_path) as db:
+                    previous = db.execute("select id from sessions order by rowid desc limit 1").fetchone()[0]
+                    last_event = db.execute("select max(id) from events").fetchone()[0]
                 self.env["TEST_MODE"]=""
                 self.run_loop()
+                recovery_event = self.controller_events("recovery")[-1]
+                recovery = recovery_event["message"]
+                self.assertIn(previous, recovery)
+                self.assertIn("uncleanly", recovery)
+                self.assertIn(str(last_event), recovery)
+                self.assertEqual(recovery_event["data"]["previous_session"], previous)
+                self.assertEqual(recovery_event["data"]["last_event_id"], last_event)
+                self.assertTrue(recovery_event["data"]["unclean"])
+                self.assertEqual(recovery_event["data"]["previous_exit_reason"], "unknown")
+                self.assertIn("uncleanly", self.controller_events("resume")[-1]["message"])
+                with sqlite3.connect(db_path) as db:
+                    outcome, ended = db.execute("select outcome,ended from sessions where id=?", (previous,)).fetchone()
+                self.assertEqual(outcome, "interrupted")
+                self.assertIsNone(ended)
                 # Reaped children can briefly remain zombies under a container init.
                 status=subprocess.run(["ps","-o","stat=","-p",str(pid)],capture_output=True,text=True).stdout.strip()
                 self.assertTrue(not status or status.startswith("Z"),status)
@@ -593,6 +770,64 @@ class ParallelTests(unittest.TestCase):
             finally:
                 if process.poll() is None: process.kill();process.wait()
 
+    def test_invalid_startup_input_fails(self):
+        self.tasks(count=1)
+        self.todo.write_text("{not json")
+        self.run_loop(1)
+
+    def test_continuous_run_survives_invalid_task_file(self):
+        self.tasks(count=1)
+        self.env["LOOPER_POLL_SECONDS"]="1"
+        command=self.command();command.remove("--once")
+        with (self.path/"wait-output").open("w") as output:
+            process=subprocess.Popen(command,cwd=self.project,env=self.env,stdout=output,stderr=output)
+            try:
+                self.wait_for(lambda: self.state_eventually() and self.state_eventually()["finished"])
+                original=self.todo.read_text()
+                starts_before=len([e for e in self.recorded() if e["kind"]=="start"])
+                # Malformed JSON keeps the run alive; the file is preserved.
+                self.todo.write_text("{broken")
+                self.wait_for(lambda:"needs correction" in (self.path/"wait-output").read_text())
+                time.sleep(2.5)
+                self.assertIsNone(process.poll())
+                self.assertEqual(self.todo.read_text(),"{broken")
+                self.assertEqual(len([e for e in self.recorded() if e["kind"]=="start"]),starts_before)
+                self.assertEqual((self.path/"wait-output").read_text().count("needs correction"),1)
+                # An invalid task status is a new problem and is reported once.
+                self.todo.write_text(json.dumps({"schema_version":1,"source_files":[],
+                    "tasks":[{"id":"T1","title":"Task 1","status":"bogus","priority":1}]}))
+                self.wait_for(lambda:(self.path/"wait-output").read_text().count("needs correction")>=2)
+                # Restoring the previous valid file clears the diagnostic.
+                self.todo.write_text(original)
+                self.wait_for(lambda:"accepted again" in (self.path/"wait-output").read_text())
+                self.assertIsNone(process.poll())
+                # A corrected backlog with a new task resumes without repeats.
+                data=json.loads(original)
+                data["tasks"].append({"id":"T2","title":"New work","status":"todo","priority":1})
+                self.todo.write_text(json.dumps(data))
+                self.wait_for(lambda:(self.project/"T2.txt").exists())
+                self.assertEqual(len([e for e in self.recorded() if e["kind"]=="start" and e.get("task")=="T1"]),1)
+                stop=subprocess.run([str(ROOT/"build/looper"),"stop"],cwd=self.project,env=self.env,capture_output=True,text=True)
+                self.assertEqual(stop.returncode,0,stop.stderr)
+                self.assertEqual(process.wait(timeout=15),0)
+            finally:
+                if process.poll() is None:process.kill();process.wait()
+
+    def test_interrupt_during_input_wait_returns_130(self):
+        self.tasks(count=1)
+        self.env["LOOPER_POLL_SECONDS"]="1"
+        command=self.command();command.remove("--once")
+        with (self.path/"interrupt-output").open("w") as output:
+            process=subprocess.Popen(command,cwd=self.project,env=self.env,stdout=output,stderr=output,start_new_session=True)
+            try:
+                self.wait_for(lambda: self.state_eventually() and self.state_eventually()["finished"])
+                self.todo.write_text("{broken")
+                self.wait_for(lambda:"needs correction" in (self.path/"interrupt-output").read_text())
+                os.killpg(process.pid,signal.SIGINT)
+                self.assertEqual(process.wait(timeout=10),130)
+            finally:
+                if process.poll() is None:os.killpg(process.pid,signal.SIGKILL);process.wait()
+
     def test_advisory_failure_triggers_review_without_claiming_failure(self):
         self.tasks(count=1)
         self.env["LOOPER_ASSESS_COMMAND"]="echo '{\"outcome\":\"fail\"}' > \"$LOOPER_ASSESS_REPORT\""
@@ -600,6 +835,14 @@ class ParallelTests(unittest.TestCase):
         self.assertEqual((self.project/"T1.txt").read_text(),"done")
         with sqlite3.connect(next((self.path/"logs").glob("*/runtime/state.db"))) as db:
             self.assertEqual(db.execute("select result from checks where kind='semantic'").fetchone()[0],"fail")
+
+    def test_nonzero_assessment_exit_stays_advisory(self):
+        self.tasks(count=1)
+        self.env["LOOPER_ASSESS_COMMAND"]="exit 3"
+        self.run_loop()
+        self.assertTrue(self.state()["finished"])
+        errors=list((self.path/"logs").glob("*/runtime/task-*/checks/*/assessment-error.json"))
+        self.assertEqual(len(errors),1,errors)
 
 if __name__ == "__main__":
     unittest.main()

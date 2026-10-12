@@ -73,6 +73,22 @@ A task dependency becomes ready only after integration. Work on unrelated
 tasks continues during repairs. Repeated failures trigger a fresh diagnosis.
 A task that still fails becomes blocked; its code and logs remain available.
 
+Reviews report gaps as structured findings and set `complete` explicitly when
+the goal is satisfied. The task file belongs to the controller: a review that
+edits it, including through a legacy `project-done` marker, is rejected
+whole. Existing markers still load and stay excluded from scheduling, but
+only an explicit `complete: true` response with every task done and no open
+finding finishes a goal.
+
+In a continuous run, an invalid task file at an idle boundary pauses the
+loop instead of stopping it. Looper keeps the last accepted state, leaves
+your file untouched, and waits for a corrected edit. The wait reports the
+file path, the problem, and the action, and clears when any valid edit
+arrives. Queued plan imports wait with it; requeue requests receive a
+conflict with a correction hint. Stop still drains with code 0, an interrupt
+returns 130, and invalid input at startup or under `--once` exits with
+code 1.
+
 Looper chooses a worker limit automatically, up to four workers. Setup and
 checks share one execution slot by default. The plan identifies files and
 resources that tasks can change to avoid conflicts. Looper checks the actual
@@ -80,8 +96,14 @@ Git changes during integration and sends conflicts back to a worker for
 repair. If you enable multiple check slots, checks can overlap. A result
 can publish only while the revision it was checked against remains current.
 
-Each process receives a unique `LOOPER_RESOURCE_PREFIX`, a private `TMPDIR`,
-and `LOOPER_ARTIFACT_DIR`. Use these for databases and other test resources.
+Each operation receives a unique `LOOPER_RESOURCE_PREFIX`. Its child
+processes receive a private `TMPDIR` and `LOOPER_ARTIFACT_DIR`. Use these
+for databases and other test resources.
+`TMPDIR` is a short directory under `/tmp`, with mode 0700, private to
+each child process. Looper removes it after the process exits or is
+cancelled. Store retained evidence in `LOOPER_ARTIFACT_DIR`; do not use
+`TMPDIR` to pass files between setup, workers, and checks. An abrupt
+controller termination can leave temporary directories behind.
 Let the operating system choose available server ports. Worktrees share Git
 metadata; they are workspace isolation, not a security sandbox.
 
@@ -113,7 +135,7 @@ tasks, recent events](docs/assets/tui.png)
 | State | Color | Meaning |
 | --- | --- | --- |
 | `RUNNING` | Green | The controller is active; the activity identifies its work. |
-| `WAITING` | Yellow | No tasks are ready. |
+| `WAITING` | Yellow | No tasks are ready, or the task file needs correction. |
 | `STOPPING` | Yellow | Current work finishes before the controller exits. |
 | `BLOCKED` | Red | Work needs attention. |
 | `COMPLETE` | Green | The goal is met; Looper waits for new work. |
@@ -126,8 +148,31 @@ Press Enter to inspect task details, dependencies, recovery instructions,
 changed files, and recorded checks. Wide terminals show the inspector beside
 the task list. Smaller terminals open it as a separate screen.
 
-Common keys: `l` opens task logs, `t` shows activity, `b` returns to the
-overview, and `d` shows the selected task's diff. Press `?` for all controls.
+Common keys: `l` opens task logs, `t` shows activity, and `p` shows statistics.
+Press `b` for the overview or `d` for the selected task's diff.
+Press `?` for all controls.
+
+The statistics view refreshes every five seconds. It shows elapsed time, active
+time, combined worker time, controller time, task integrations, repairs, and
+verification results. A daily chart compares worker hours with integrations,
+token usage, and estimated API cost. Wide terminals show totals beside the chart.
+Small terminals stack the sections; use the arrows or Page Down to scroll.
+
+Token totals come from Codex and Claude usage reports. Cached input and output
+remain separate. Looper does not estimate tokens from text length or infer a
+model from a CLI default. Usage becomes available when an agent report arrives.
+On startup, Looper imports retained reports without counting them twice.
+
+Dollar estimates use a pinned [Pydantic GenAI Prices](https://github.com/pydantic/genai-prices)
+v2 snapshot. Each stored report retains the pricing revision and date.
+The view shows the share of reports with known prices. Unknown models,
+nonstandard service tiers, and context tiers that cannot be inferred from
+aggregate usage remain unpriced. Agent-reported costs stay separate.
+API estimates do not represent invoices or subscription charges.
+
+Refresh model prices with `python3 scripts/update-prices.py`, then rebuild.
+The terminal interface works offline and never downloads prices during a run.
+See [the pricing notes](internal/looper/prices/README.md) for supported fields.
 
 <details>
 <summary>Complete key reference, planning view, and small screens</summary>
@@ -185,6 +230,22 @@ planning prompt tells both agents to identify commands without running
 builds, tests, benchmarks, or dataset generators. Planning has no timeout.
 Press Ctrl+C to interrupt and retain work.
 
+Looper sends Codex and Claude prompts through standard input. Each operation
+retains its exact `prompt.txt` and records transport and prompt size in
+`invocation.json`. Zcode still receives its prompt as an argument. Its prompt
+is visible through process inspection and can reach an execution limit.
+
+Large backlogs, imported requirements, and repair feedback stay in context
+files. Looper keeps durable copies beside the attempt and readable copies
+inside the private worktree. Small task contracts stay inline. Workers read
+requirements relevant to their task; final review covers every applied import.
+Missing or changed imported evidence stops the operation without dropping scope.
+Restore the recorded evidence before restarting.
+
+Planner prompts have a 4 KiB size target. Other prompts have a 16 KiB target.
+Exceeding a target does not reject work. These byte targets help compare runs;
+they are not model token limits. Reading context files also consumes tokens.
+
 In mobile terminals and tmux panes, the overview uses a compact summary.
 Task details remain available through the inspector. Use `j` and `k`,
 arrow keys, or Page Up and Page Down to navigate. The header and controls
@@ -231,10 +292,23 @@ export LOOPER_VERIFY_COMMAND='npm test && npm run build'
 looper
 ```
 
-Setup runs in each implementation and verification worktree. Checks must not
-leave changes to tracked source files or unignored generated files. Keep
-build output ignored. Looper checks the combined result, not just each
-worker's branch.
+Setup runs in each implementation and verification worktree. Setup and
+checks must leave tracked and unignored project files unchanged. Workers
+must include ignore rules and remove tracked build artifacts in their
+implementation. Looper checks product behavior in a fresh integrated
+worktree. Checks must not depend on Looper-private refs or worker commit
+history.
+
+Setup, verification, and assessment command bodies run from private script
+files beside their logs. Bash loads each script in a login shell with no
+positional arguments. Command bodies do not appear in process arguments.
+The script filename appears in `BASH_SOURCE`; a top-level `return` ends the
+script. Use `exit` when you need to end the shell.
+
+Looper checks arguments and environment sizes before launch. A launch failure
+identifies the recorded inputs and stops with retained work. It does not use
+implementation repair cycles. An agent that starts and exits unsuccessfully
+uses the existing failure handling.
 
 Reviews run after five integrations by default. They compare the product
 against requirements, exercise workflows, and report missing capabilities.
@@ -371,7 +445,10 @@ A `fail` or `review` result requests an independent product review. It does
 not reject a change by itself. The reviewer must reproduce a defect before
 adding a repair task. Provider errors remain visible in the records. Large
 evidence packets produce `review` without silent truncation. No advisory
-result replaces tests.
+result replaces tests. Each assessment command runs under a fixed 60-second
+controller deadline. A timed-out assessment records an advisory error beside
+its evidence and the verified result still publishes. An assessment that
+changes project files cannot publish.
 
 ## Development
 
@@ -423,10 +500,61 @@ controller.
 `schema_version: 1`. It reports controller ownership, the published view,
 session matching, and observations for active attempts.
 
+`status` also reports project timing. `status --json` includes a `timing`
+object with `schema_version: 1`. All durations use seconds:
+
+- `elapsed_seconds`: the span from the first recorded event or process to the
+  latest recorded activity. A live controller extends this span to now.
+- `active_seconds`: time with at least one supervised process running.
+  Overlapping processes count once.
+- `worker_seconds`: the sum of supervised process durations. Parallel work
+  counts for each process. This includes agents, setup, verification, and review.
+- `controller_seconds`: controller runtime, including idle waits.
+
+These values measure wall time, not processor use or human effort. The database
+stores controller sessions and process starts, ends, and outcomes. A normal stop
+records an end time. A crash leaves the end unknown. Dead processes do not accrue
+time while Looper is stopped. `unknown_sessions` and `unknown_processes` report
+those gaps; the totals include only known intervals and verified live processes.
+
+`recorded_since` identifies when database timing begins. On startup, Looper
+imports existing process timestamp files without counting them twice. Earlier
+controller durations remain unknown. `history_complete: false` identifies old
+history or missing end times. Before migration, read-only status reports
+`available: false` and null durations. Observers do not migrate the database.
+
+`timing.tasks` provides per-task durations from saved attempt and process records.
+`looper inspect T054 --json` returns the same task report in `timing`. Plain
+`inspect` also prints these durations:
+
+- `worker_seconds`: worker agent and worker setup time, including repairs.
+- `check_seconds`: integration setup, verification, and assessment time.
+- `other_seconds`: other task processes, including diagnosis and hooks.
+- `active_seconds`: task process intervals with overlaps counted once.
+- `elapsed_seconds`: the span between the first and last recorded task activity,
+  including gaps between attempts.
+
+Category totals count each process, including overlapping processes. The task
+report includes attempt counts and unknown process ends. Missing history sets
+`history_complete: false`. A task without process records has `available: false`
+and null durations. Project `worker_seconds` retains its broader definition above.
+
+`status --json` also includes a `statistics` object with `schema_version: 1`.
+It exposes project totals, usage coverage, model breakdowns, and fourteen
+UTC daily buckets used by the terminal statistics view. Missing costs are null.
+
 `events --json` prints one JSON event per line. Save its `id` and reconnect
 with `looper events --json --follow --after 123`. Without `--follow`, the
 command replays saved events. Worker activity includes the session, task,
 attempt, phase, and log path in `data`. Older events can omit `data`.
+
+A `shutdown` event records the controller session, reason, exit code, optional
+error, and last event ID. Reasons include `complete`, `drained`, `cancelled`,
+`error`, `panic`, `no_runnable_tasks`, and `dispatch_limit`. The session end and
+event commit together after supervised work stops. A restart links its `resume`
+event to the previous exit. If the previous session has no end record, a
+`recovery` event reports an unclean exit and the last recorded event ID. The
+cause remains unknown because an external kill cannot record its own cause.
 
 `inspect` returns a task's blockers, retained attempts, repair feedback,
 verification records, and local log paths. Unknown task IDs return an error.

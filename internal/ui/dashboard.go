@@ -21,6 +21,7 @@ const (
 	ModeLog
 	ModeTasks
 	ModeInspect
+	ModeStatistics
 )
 
 // ExitAction reports why the dashboard stopped. The wrapper may run a form
@@ -33,16 +34,17 @@ type ExitAction struct {
 // engine package. Controlling mode supplies Snapshot; observer mode supplies
 // Poll. Callbacks return errors for display; they never crash the view.
 type Controls struct {
-	Snapshot  <-chan ViewSnapshot
-	Poll      func() *ViewSnapshot
-	Events    func(after int64, limit int) []JournalEvent
-	Drain     func() error
-	Diff      func(attemptID string) (string, error)
-	Log       func(path string) (string, error)
-	WorkerLog func(attemptID string) (string, string, error)
-	AddPlan   func(path string) error
-	Inspect   func(taskID string) (TaskDetail, error)
-	Requeue   func(taskID, revision string) error
+	Snapshot   <-chan ViewSnapshot
+	Poll       func() *ViewSnapshot
+	Events     func(after int64, limit int) []JournalEvent
+	Drain      func() error
+	Diff       func(attemptID string) (string, error)
+	Log        func(path string) (string, error)
+	WorkerLog  func(attemptID string) (string, string, error)
+	AddPlan    func(path string) error
+	Inspect    func(taskID string) (TaskDetail, error)
+	Statistics func() (StatisticsView, error)
+	Requeue    func(taskID, revision string) error
 	// Done reports that the local controller exited (controlling mode).
 	Done func() bool
 	// Cancel stops the local controller with retained work (controlling mode).
@@ -70,32 +72,36 @@ var (
 type tickMsg struct{}
 
 type model struct {
-	ctrl        Controls
-	snap        *ViewSnapshot
-	staleView   bool
-	events      []JournalEvent
-	cursor      int64
-	mode        int
-	width       int
-	height      int
-	selected    string // attempt ID, preserved across row changes
-	scroll      int
-	diffText    string
-	diffFor     string
-	diffView    viewport.Model
-	message     string
-	err         string
-	dialog      string // "", "drain", "exit", "add-plan"
-	drainAsked  bool
-	planPath    string
-	tailView    viewport.Model
-	logPath     string
-	logText     string
-	logAttempt  string
-	logTask     string
-	showHistory bool
-	showDetails bool
-	workspace   workspaceState
+	ctrl              Controls
+	snap              *ViewSnapshot
+	staleView         bool
+	events            []JournalEvent
+	cursor            int64
+	mode              int
+	width             int
+	height            int
+	selected          string // attempt ID, preserved across row changes
+	scroll            int
+	diffText          string
+	diffFor           string
+	diffView          viewport.Model
+	message           string
+	err               string
+	dialog            string // "", "drain", "exit", "add-plan"
+	drainAsked        bool
+	planPath          string
+	tailView          viewport.Model
+	logPath           string
+	logText           string
+	logAttempt        string
+	logTask           string
+	showHistory       bool
+	showDetails       bool
+	workspace         workspaceState
+	statistics        *StatisticsView
+	statisticsError   string
+	statisticsAt      time.Time
+	statisticsLoading bool
 }
 
 func RunDashboard(c Controls) (ExitAction, error) {
@@ -156,6 +162,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == ModeLog {
 			m.refreshLog()
 		}
+		if m.mode == ModeStatistics {
+			m.refreshStatistics()
+		}
 		return m, nil
 	case ViewSnapshot:
 		m.preserveTaskSelection()
@@ -163,6 +172,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.staleView = false
 		m.syncTasks()
 		return m, m.waitSnapshot()
+	case statisticsMsg:
+		m.statisticsLoading = false
+		m.statisticsAt = time.Now()
+		if msg.err != nil {
+			m.statisticsError = msg.err.Error()
+		} else {
+			m.statistics, m.statisticsError = &msg.view, ""
+		}
+		if m.mode == ModeStatistics {
+			m.refreshStatistics()
+		}
+		return m, nil
 	case taskDetailMsg:
 		if msg.taskID == m.workspace.detailID && msg.sequence == m.workspace.sequence {
 			m.workspace.loading = false
@@ -226,7 +247,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				detailCmd = m.loadTaskDetail(t.ID)
 			}
 		}
-		return m, tea.Batch(detailCmd, tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} }))
+		var statisticsCmd tea.Cmd
+		if !m.statisticsLoading && time.Since(m.statisticsAt) >= 5*time.Second {
+			statisticsCmd = m.loadStatistics()
+			m.statisticsLoading = statisticsCmd != nil
+		}
+		return m, tea.Batch(detailCmd, statisticsCmd, tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} }))
 	case tea.KeyMsg:
 		return m.keys(msg)
 	}
@@ -355,6 +381,16 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.eventText()))
 		m.tailView.GotoBottom()
 		return m, nil
+	case "p":
+		m.mode = ModeStatistics
+		m.refreshStatistics()
+		m.tailView.GotoTop()
+		if !m.statisticsLoading {
+			cmd := m.loadStatistics()
+			m.statisticsLoading = cmd != nil
+			return m, cmd
+		}
+		return m, nil
 	case "v":
 		if m.mode == ModeBoard {
 			m.showDetails = !m.showDetails
@@ -380,7 +416,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.mode == ModeDiff {
 			m.diffView.LineUp(1)
-		} else if m.mode == ModeTail || m.mode == ModeLog || m.mode == ModeHelp {
+		} else if m.mode == ModeTail || m.mode == ModeLog || m.mode == ModeHelp || m.mode == ModeStatistics {
 			if m.mode == ModeTail {
 				m.pauseActivity()
 			}
@@ -392,7 +428,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		if m.mode == ModeDiff {
 			m.diffView.LineDown(1)
-		} else if m.mode == ModeTail || m.mode == ModeLog || m.mode == ModeHelp {
+		} else if m.mode == ModeTail || m.mode == ModeLog || m.mode == ModeHelp || m.mode == ModeStatistics {
 			m.tailView.LineDown(1)
 			if m.mode == ModeTail && m.tailView.AtBottom() {
 				m.followActivity()
@@ -589,6 +625,9 @@ func StatusLabel(v *ViewSnapshot, stale bool) (string, lipgloss.Style) {
 	if v.Draining {
 		return "STOPPING", blockedStyle.Bold(true)
 	}
+	if v.State == "waiting" {
+		return "WAITING", blockedStyle.Bold(true)
+	}
 	working := len(v.Attempts) > 0 || v.Counters.InFlight+v.Counters.Checking > 0
 	if v.State != "" || working {
 		return "RUNNING", okStyle.Bold(true)
@@ -611,6 +650,9 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 	}
 	if v.Draining {
 		return "Finishing active work"
+	}
+	if v.State == "waiting" {
+		return "Correct task file"
 	}
 	if v.State == "planning" {
 		return "PLANNING"
@@ -672,6 +714,8 @@ func (m model) renderView() string {
 		return m.tasksScreen()
 	case ModeInspect:
 		return m.inspectorScreen()
+	case ModeStatistics:
+		return m.statisticsScreen()
 	default:
 		return m.boardScreen()
 	}
@@ -993,7 +1037,7 @@ func (m model) footer() string {
 	if m.selectedAttempt() != "" {
 		nav = "[j/k] Select"
 	}
-	keys = append(keys, "[t] Events", nav)
+	keys = append(keys, "[t] Events", "[p] Statistics", nav)
 	if m.width < 80 || m.height < 24 || m.showDetails {
 		details := "[v] Details"
 		if m.showDetails {
@@ -1045,6 +1089,7 @@ Keys (letters work in either case)
   [pgup/pgdn]       scroll the board or current view
   [d]               diff of the selected attempt's worktree
   [t/b]             current-run events and board views
+  [p]               project statistics: time, tokens, and API estimates
   [h]               toggle recent history in the events view
   [l]               selected worker or planner log (refreshes each second)
   [x]               request a drain (active work finishes)
