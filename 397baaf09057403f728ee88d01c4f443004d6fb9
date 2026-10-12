@@ -1,0 +1,2 @@
+Verify process identity and cleanup recovery on a Darwin runtime. Darwin
+arm64 compilation passes; this session validates execution only on Linux.
