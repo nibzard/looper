@@ -1,0 +1,12 @@
+# Context
+
+## Why This Way
+Kept working notes and local agent instructions out of the 0.8.0
+release commit so the release tree stayed identical to the verified
+candidate. The release runbook excludes these files from the
+release; committing them separately preserves "commit all" without
+touching the verified tree.
+
+## Gotchas
+- CLAUDE.md and AGENTS.md are symlinks to .agents/AGENTS.md.
+- .axinbox/ remains untracked on purpose (live write token).
