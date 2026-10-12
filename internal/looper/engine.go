@@ -539,13 +539,22 @@ type resultReceipt struct {
 }
 
 func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog, p Plan, documents []contextDocument) (r workerResult) {
+	if op.config.Setup != "" {
+		p.Setup = op.config.Setup
+	}
 	r.ID = a.ID
+	dir := filepath.Join(a.Directory, fmt.Sprintf("work-%02d-%s", a.Repairs, identifier("session")))
+	ctx, finish, err := beginResourceOperation(ctx, dir)
+	if err != nil {
+		r.Err = &LaunchError{"resource ownership", err}
+		return r
+	}
+	defer finish()
 	defer func() {
 		if r.Err == nil && r.Summary != nil {
 			r.Err = writeJSON(filepath.Join(a.Directory, "receipt.json"), resultReceipt{a.Base, a.Task.Contract(), a.Repairs, *r.Summary, r.Commit})
 		}
 	}()
-	dir := filepath.Join(a.Directory, fmt.Sprintf("work-%02d-%s", a.Repairs, identifier("session")))
 	feedback := a.Feedback
 	if err := e.command(ctx, p.Setup, a.Worktree, dir, "setup"); err != nil {
 		if ctx.Err() != nil {
@@ -847,6 +856,7 @@ func (e *Engine) applyResult(a *Attempt) error {
 		return err
 	}
 	e.event("result", fmt.Sprintf("%s  %s | %s", t.ID, s.Status, s.Summary))
+	e.sweepResources()
 	for _, b := range s.Blockers {
 		e.event("blocker", "  "+b)
 	}

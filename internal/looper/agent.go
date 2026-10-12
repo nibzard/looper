@@ -76,6 +76,11 @@ func (a Agent) Run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 
 // run reports process starts and retry delays on the caller's goroutine.
 func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary bool, progress func(string, string)) (json.RawMessage, error) {
+	ctx, finish, err := beginResourceOperation(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
@@ -338,7 +343,7 @@ func tail(b []byte, n int) []byte {
 }
 func resourceEnv(dir string) map[string]string {
 	id := digest([]byte(dir))[:20]
-	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir}
+	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir, "LOOPER_RESOURCE_CLEANUP_FILE": filepath.Join(dir, resourceCleanupFile)}
 }
 
 func workerPrompt(b Backlog, t Task, c agentContext) string {
@@ -361,6 +366,8 @@ Setup and verification must leave tracked and unignored project files unchanged.
 Include ignore rules for generated output in your implementation. Remove tracked build artifacts when necessary.
 Do not edit the backlog, other worktrees, shared Git refs, or repository configuration. Do not push.
 Use LOOPER_RESOURCE_PREFIX for private databases and temporary resources. Bind servers to free ports.
+Register cleanup for external resources in LOOPER_RESOURCE_CLEANUP_FILE before creating them. Make cleanup idempotent and check ownership before removal. Looper runs cleanup after this operation finishes; interrupted work retains resources until recovery completes.
+Preserve cleanup already registered by setup. For Docker containers, set labels io.looper.resource-prefix=$LOOPER_RESOURCE_PREFIX and io.looper.artifact=$LOOPER_ARTIFACT_DIR. The registered Docker cleanup can then find each owned container. Keep shared services outside this cleanup.
 Do not weaken acceptance criteria or remove failing tests to claim success.
 If an external prerequisite is missing, report blocked with an explicit unblock condition.
 Return JSON: task_id, status (done or blocked), summary, files (array), blockers (array),
