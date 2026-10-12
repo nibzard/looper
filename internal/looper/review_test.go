@@ -49,6 +49,23 @@ func doneBacklog(extra ...Task) Backlog {
 const reviewComplete = `{"status":"reviewed","summary":"checked","findings":[],"complete":true}`
 const reviewIncomplete = `{"status":"reviewed","summary":"checked","findings":[],"complete":false}`
 
+func TestReviewPublishesLogIdentity(t *testing.T) {
+	e, _ := reviewEngine(t, reviewComplete, nil, doneBacklog())
+	if err := e.review(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	events, err := e.Store.RecentEvents(-1, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind == "review-activity" && strings.Contains(event.Message, "Log:") {
+			return
+		}
+	}
+	t.Fatal("review never publishes its log identity")
+}
+
 func TestFinalReviewNeedsExplicitCompletion(t *testing.T) {
 	e, _ := reviewEngine(t, reviewIncomplete, nil, doneBacklog())
 	if err := e.review(context.Background(), true); err != nil {

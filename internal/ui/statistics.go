@@ -38,20 +38,22 @@ type StatisticsView struct {
 	CacheRead         int64             `json:"cache_read_tokens"`
 	EstimatedUSD      *float64          `json:"estimated_usd"`
 	ReportedUSD       *float64          `json:"reported_usd"`
+	ReportedCostBasis string            `json:"reported_cost_basis,omitempty"`
 	PricingDate       string            `json:"pricing_date,omitempty"`
 	Models            []ModelStatistics `json:"models"`
 	Days              []DailyStatistics `json:"days"`
 }
 type ModelStatistics struct {
-	Model        string   `json:"model"`
-	Input        int64    `json:"input_tokens"`
-	Output       int64    `json:"output_tokens"`
-	CacheRead    int64    `json:"cache_read_tokens"`
-	CacheWrite   int64    `json:"cache_write_tokens"`
-	EstimatedUSD *float64 `json:"estimated_usd"`
-	ReportedUSD  *float64 `json:"reported_usd"`
-	Reports      int      `json:"reports"`
-	Priced       int      `json:"priced_reports"`
+	Model             string   `json:"model"`
+	Input             int64    `json:"input_tokens"`
+	Output            int64    `json:"output_tokens"`
+	CacheRead         int64    `json:"cache_read_tokens"`
+	CacheWrite        int64    `json:"cache_write_tokens"`
+	EstimatedUSD      *float64 `json:"estimated_usd"`
+	ReportedUSD       *float64 `json:"reported_usd"`
+	ReportedCostBasis string   `json:"reported_cost_basis,omitempty"`
+	Reports           int      `json:"reports"`
+	Priced            int      `json:"priced_reports"`
 }
 type DailyStatistics struct {
 	Date          string   `json:"date"`
@@ -135,6 +137,11 @@ func (m model) statisticsText() string {
 		lines = append(lines, fmt.Sprintf("API estimate %s   %d/%d reports priced", statUSD(s.EstimatedUSD), s.PricedReports, s.UsageReports))
 		if s.ReportedUSD != nil {
 			lines = append(lines, "Agent-reported estimate "+statUSD(s.ReportedUSD))
+			basis := s.ReportedCostBasis
+			if basis == "" {
+				basis = "unknown"
+			}
+			lines = append(lines, "Reported cost basis: "+plainText(basis))
 		}
 	}
 	lines = append(lines, fmt.Sprintf("Usage coverage: %d reports / %d agent runs", s.UsageReports, s.AgentRuns))

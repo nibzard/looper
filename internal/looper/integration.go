@@ -378,7 +378,7 @@ The final review must cover the original goal and every applied import, includin
 	if len(evidence) > 0 {
 		prompt += "\nAdvisory semantic reports and their evidence packets are in these directories:\n" + strings.Join(evidence, "\n") + "\nThese reports are unvalidated signals. Independently reproduce suspected defects before adding tasks."
 	}
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
+	raw, err := e.runReviewAgent(ctx, op, work, dir, prompt, 30*time.Second)
 	if err != nil {
 		return err
 	}

@@ -185,6 +185,9 @@ func (s *Store) Statistics(now time.Time) (ui.StatisticsView, error) {
 			}
 		}
 		addUSD(&out.ReportedUSD, report.ReportedUSD)
+		if report.ReportedUSD != nil {
+			mergeCostBasis(&out.ReportedCostBasis, report.ReportedCostBasis)
+		}
 		if report.PricingDate > out.PricingDate {
 			out.PricingDate = report.PricingDate
 			if len(out.PricingDate) > 10 {
@@ -216,6 +219,9 @@ func (s *Store) Statistics(now time.Time) (ui.StatisticsView, error) {
 			out.Tokens += u.Input + u.Output
 			addUSD(&model.EstimatedUSD, u.EstimatedUSD)
 			addUSD(&model.ReportedUSD, u.ReportedUSD)
+			if u.ReportedUSD != nil {
+				mergeCostBasis(&model.ReportedCostBasis, u.ReportedCostBasis)
+			}
 			addUSD(&out.EstimatedUSD, u.EstimatedUSD)
 			if u.EstimatedUSD == nil {
 				allPriced = false

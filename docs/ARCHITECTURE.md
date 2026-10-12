@@ -29,6 +29,16 @@ They report missing history explicitly. Startup imports existing Looper process
 metadata by artifact path and start time, so retries remain separate and repeated
 imports do not duplicate durations.
 
+Go build metadata identifies the executable revision and modified-source state.
+Controller metadata exposes this identity to observers. The session start and a
+structured `session` event commit together, retaining build identity without
+changing the timing table schema. Source archives report an unknown revision.
+
+Review supervision uses the controller goroutine for log metadata and heartbeat
+writes. The agent retains its normal tools and result contract. Cancellation
+waits for the agent process before workspace cleanup. Heartbeats expose paths,
+byte counts, and timestamps; they do not copy transcript contents into events.
+
 Task timing joins process records to saved attempts. Artifact paths distinguish
 worker operations, integration checks, and other task operations. Repairs retain
 their task identity. Category totals sum durations; active time merges overlaps.

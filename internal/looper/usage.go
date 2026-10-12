@@ -13,29 +13,32 @@ import (
 )
 
 type UsageRecord struct {
-	Model        string   `json:"model"`
-	Provider     string   `json:"provider,omitempty"`
-	Input        int64    `json:"input_tokens"` // Includes cache reads and writes.
-	Output       int64    `json:"output_tokens"`
-	CacheRead    int64    `json:"cache_read_tokens"`
-	CacheWrite   int64    `json:"cache_write_tokens"`
-	CacheWrite1h int64    `json:"cache_write_1h_tokens"`
-	Reasoning    int64    `json:"reasoning_tokens"` // A subset of output, not extra tokens.
-	WebSearches  int64    `json:"web_searches"`
-	EstimatedUSD *float64 `json:"estimated_usd"`
-	ReportedUSD  *float64 `json:"reported_usd"`
+	Model             string   `json:"model"`
+	Provider          string   `json:"provider,omitempty"`
+	Input             int64    `json:"input_tokens"` // Includes cache reads and writes.
+	Output            int64    `json:"output_tokens"`
+	CacheRead         int64    `json:"cache_read_tokens"`
+	CacheWrite        int64    `json:"cache_write_tokens"`
+	CacheWrite1h      int64    `json:"cache_write_1h_tokens"`
+	Reasoning         int64    `json:"reasoning_tokens"` // A subset of output, not extra tokens.
+	WebSearches       int64    `json:"web_searches"`
+	EstimatedUSD      *float64 `json:"estimated_usd"`
+	ReportedUSD       *float64 `json:"reported_usd"`
+	ReportedCostBasis string   `json:"reported_cost_basis,omitempty"`
+	AgentProvider     string   `json:"agent_provider,omitempty"`
 }
 
 type UsageReport struct {
-	Version         int           `json:"schema_version"`
-	Agent           string        `json:"agent"`
-	Started         string        `json:"started"`
-	Time            string        `json:"time"`
-	Models          []UsageRecord `json:"models"`
-	ReportedUSD     *float64      `json:"reported_usd"`
-	PricingRevision string        `json:"pricing_revision"`
-	PricingDate     string        `json:"pricing_date"`
-	Source          string        `json:"source"`
+	Version           int           `json:"schema_version"`
+	Agent             string        `json:"agent"`
+	Started           string        `json:"started"`
+	Time              string        `json:"time"`
+	Models            []UsageRecord `json:"models"`
+	ReportedUSD       *float64      `json:"reported_usd"`
+	ReportedCostBasis string        `json:"reported_cost_basis,omitempty"`
+	PricingRevision   string        `json:"pricing_revision"`
+	PricingDate       string        `json:"pricing_date"`
+	Source            string        `json:"source"`
 }
 
 func tokenField(m map[string]json.RawMessage, key string) (int64, bool) {
@@ -87,6 +90,11 @@ func parseClaudeUsage(model string, raw json.RawMessage, camel bool) (UsageRecor
 	u.Input += u.CacheRead + u.CacheWrite
 	if camel {
 		u.ReportedUSD = usdField(fields["costUSD"])
+		_ = json.Unmarshal(fields["costBasis"], &u.ReportedCostBasis)
+		_ = json.Unmarshal(fields["provider"], &u.AgentProvider)
+		if u.ReportedUSD != nil && u.ReportedCostBasis == "" {
+			u.ReportedCostBasis = "unknown"
+		}
 		u.Reasoning, _ = tokenField(fields, "thinkingTokens")
 		u.WebSearches, _ = tokenField(fields, "webSearchRequests")
 	} else {
@@ -195,13 +203,31 @@ func parseUsage(agent, fallback string, raw []byte, at time.Time) UsageReport {
 	report.PricingRevision, report.PricingDate = provenance.Commit, provenance.Retrieved
 	for i := range report.Models {
 		u := &report.Models[i]
+		if report.ReportedUSD != nil {
+			mergeCostBasis(&report.ReportedCostBasis, u.ReportedCostBasis)
+		}
 		estimate, provider := estimateUsage(*u, at)
 		u.Provider = provider
 		if !nonstandard {
 			u.EstimatedUSD = estimate
 		}
 	}
+	if report.ReportedUSD != nil && report.ReportedCostBasis == "" {
+		report.ReportedCostBasis = "unknown"
+	}
 	return report
+}
+
+// Missing provenance never becomes a verified rate basis during aggregation.
+func mergeCostBasis(total *string, basis string) {
+	if basis == "" {
+		basis = "unknown"
+	}
+	if *total == "" {
+		*total = basis
+	} else if *total != basis {
+		*total = "mixed"
+	}
 }
 
 func (s *Store) saveUsage(artifact string, p ProcessObservation, agent, model, source string, raw []byte) error {

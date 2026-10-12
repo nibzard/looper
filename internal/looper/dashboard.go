@@ -332,9 +332,9 @@ func plannerLog(dir, path string) (string, error) {
 		return "", err
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) != 2 || !strings.HasPrefix(parts[0], "plan-") ||
+	if len(parts) != 2 || (!strings.HasPrefix(parts[0], "plan-") && !strings.HasPrefix(parts[0], "review-")) ||
 		!strings.HasPrefix(parts[1], "events-") || !strings.HasSuffix(parts[1], ".jsonl") {
-		return "", fmt.Errorf("invalid planner log path")
+		return "", fmt.Errorf("invalid controller log path")
 	}
 	return readDashboardLog(path)
 }

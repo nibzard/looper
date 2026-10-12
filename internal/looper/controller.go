@@ -14,12 +14,13 @@ import (
 // repository lock stays authoritative: metadata locates the controller, and a
 // process ID alone is never trusted because IDs get reused.
 type ControllerInfo struct {
-	Version int    `json:"version"`
-	Session string `json:"session"`
-	PID     int    `json:"pid"`
-	Root    string `json:"root"`
-	Mode    string `json:"mode"`
-	Started string `json:"started"`
+	Version int        `json:"version"`
+	Session string     `json:"session"`
+	PID     int        `json:"pid"`
+	Root    string     `json:"root"`
+	Mode    string     `json:"mode"`
+	Started string     `json:"started"`
+	Build   *BuildInfo `json:"build,omitempty"`
 }
 
 // ControllerModeForeground marks an interactive run; detached marks a daemon.
@@ -34,10 +35,12 @@ func controllerPath(dir string) string { return filepath.Join(dir, "controller.j
 // publishController writes controller metadata. It runs while the repository
 // lock is held; only the current session may remove its own record.
 func publishController(dir, mode string) (*ControllerInfo, error) {
+	build := currentBuild()
 	info := &ControllerInfo{
 		Version: ControllerVersion, Session: identifier("run"),
 		PID: os.Getpid(), Root: mustWD(), Mode: mode,
 		Started: time.Now().UTC().Format(time.RFC3339Nano),
+		Build:   &build,
 	}
 	if err := writeJSON(controllerPath(dir), info); err != nil {
 		return nil, err
