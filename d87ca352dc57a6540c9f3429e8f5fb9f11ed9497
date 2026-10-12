@@ -1,0 +1,10 @@
+# TODO for 0.8.0 follow-ups
+
+- Tag v0.8.0, GitHub release, and Homebrew formula update are NOT
+  done; the user authorized commit and push only.
+- Darwin runtime validation still pending (arm64 compile passes).
+- Live Zcode transport test still pending.
+- 17 confirmed simplify-review findings remain unapplied
+  (docs/SIMPLIFY-REVIEW-2026-10-12.md).
+- Proposed circuit breaker for identical execution failures
+  (NOTES.md, run monitoring section) is not implemented.
