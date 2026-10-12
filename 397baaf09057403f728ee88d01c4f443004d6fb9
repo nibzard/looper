@@ -1,0 +1,5 @@
+The user requests all current Looper changes committed and pushed. This
+commit includes the resource lifecycle fix, retained integration diagnostics,
+startup command precedence, regression tests, documentation, and diagnosis
+notes. The installed controller uses this code from the pre-commit build;
+its build stamp still reports the earlier revision with modified sources.
