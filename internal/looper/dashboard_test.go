@@ -12,7 +12,7 @@ import (
 )
 
 func TestDashboardControllerCompletion(t *testing.T) {
-	for _, mode := range []string{"complete", "error", "drain"} {
+	for _, mode := range []string{"complete", "error", "drain", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			c := preparedRepo(t, "--once")
 			c.CodexBin, c.ClaudeBin = "/bin/false", "/bin/false"
@@ -23,12 +23,18 @@ func TestDashboardControllerCompletion(t *testing.T) {
 				}
 				want = 1
 			}
-			if mode == "drain" {
+			if mode == "drain" || mode == "cancel" {
 				c.Once = false
 				c.Poll = time.Hour
 			}
-			var stderr strings.Builder
+			if mode == "cancel" {
+				want = 130
+			}
+			var stdout, stderr strings.Builder
 			dashboard := func(controls ui.Controls) (ui.ExitAction, error) {
+				if mode == "cancel" {
+					controls.Cancel()
+				}
 				if mode == "drain" {
 					// Wait until initialization has published the first snapshot.
 					select {
@@ -58,11 +64,20 @@ func TestDashboardControllerCompletion(t *testing.T) {
 				return ui.ExitAction{}, nil
 			}
 			finished := make(chan int, 1)
-			go func() { finished <- runDashboardController(c, io.Discard, &stderr, dashboard) }()
+			go func() { finished <- runDashboardController(c, &stdout, &stderr, dashboard) }()
 			select {
 			case code := <-finished:
 				if code != want {
 					t.Fatalf("exit %d, want %d: %s", code, want, stderr.String())
+				}
+				if mode == "drain" && (!strings.Contains(stdout.String(), "Drain complete") || !strings.Contains(stdout.String(), "looper tui")) {
+					t.Fatalf("silent or unexplained drain: %q", stdout.String())
+				}
+				if mode == "cancel" && !strings.Contains(stdout.String(), "Interrupted") {
+					t.Fatalf("silent cancellation: %q", stdout.String())
+				}
+				if mode != "drain" && strings.Contains(stdout.String(), "Drain complete") {
+					t.Fatalf("incorrect drain claim for %s: %q", mode, stdout.String())
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("dashboard wrapper hung after controller completion")
@@ -86,5 +101,30 @@ func TestIdleControllerDoesNotPlanWithoutWork(t *testing.T) {
 	code, err := e.Run(ctx)
 	if code != 130 || err != context.DeadlineExceeded {
 		t.Fatalf("idle controller attempted work: exit %d, %v", code, err)
+	}
+}
+
+func TestDashboardExitUsesOwnSessionRecord(t *testing.T) {
+	store := timingStore(t)
+	if _, err := store.Event("shutdown", "older drain", sessionExit{Session: "drained", Reason: "drained", ExitCode: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Event("shutdown", "newer completion", sessionExit{Session: "completed", Reason: "complete", ExitCode: 0}); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	printDashboardExit(&out, store, "drained", 0)
+	if !strings.Contains(out.String(), "Drain complete") {
+		t.Fatalf("wrong session: %q", out.String())
+	}
+	out.Reset()
+	printDashboardExit(&out, store, "completed", 0)
+	if !strings.Contains(out.String(), "all planned work is complete") {
+		t.Fatalf("completion: %q", out.String())
+	}
+	out.Reset()
+	printDashboardExit(&out, store, "unknown", 0)
+	if strings.Contains(out.String(), "cleanly") || !strings.Contains(out.String(), "inspect") {
+		t.Fatalf("invented exit reason: %q", out.String())
 	}
 }

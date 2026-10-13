@@ -14,6 +14,7 @@ type ViewSnapshot struct {
 	Started         string         `json:"started,omitempty"`
 	Now             string         `json:"now,omitempty"`
 	State           string         `json:"state,omitempty"`
+	ActivityAgent   string         `json:"activity_agent,omitempty"`
 	ActivityDetail  string         `json:"activity_detail,omitempty"`
 	ActivityUpdated string         `json:"activity_updated,omitempty"`
 	ActivityLog     string         `json:"activity_log,omitempty"`
@@ -32,6 +33,12 @@ type ViewSnapshot struct {
 	Draining        bool           `json:"draining,omitempty"`
 	Finished        bool           `json:"finished,omitempty"`
 	Stale           bool           `json:"stale,omitempty"`
+	// Bootstrapping marks the phase before the controller publishes its
+	// first view. The observer synthesizes the snapshot and fills the
+	// bootstrap evidence below; ActivityLog names the agent event stream.
+	Bootstrapping        bool    `json:"bootstrapping,omitempty"`
+	BootstrapBytes       int64   `json:"bootstrap_bytes,omitempty"`
+	BootstrapIdleSeconds float64 `json:"bootstrap_idle_seconds,omitempty"`
 }
 
 // ViewCounters carries board counters. Missing timing fields render as

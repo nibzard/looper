@@ -44,6 +44,7 @@ type Engine struct {
 
 	activity, activityDetail, activityLog string
 	activityUpdated                       string
+	activityAgent                         string
 
 	// inputPending marks an idle wait for a corrected task file. The last
 	// accepted state and the user's file stay untouched while it is set.
@@ -118,7 +119,7 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 	// Controller identity publishes under the repository lock. Settings files
 	// from earlier sessions clear here; plan-import requests survive.
 	clearSessionFiles(dir)
-	info, err := publishController(dir, ControllerModeForeground)
+	info, err := publishController(dir, ControllerModeForeground, c.ReviewAgent)
 	if err != nil {
 		s.Close()
 		lock.Close()

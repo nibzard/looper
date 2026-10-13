@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -102,15 +103,20 @@ type model struct {
 	statisticsError   string
 	statisticsAt      time.Time
 	statisticsLoading bool
+	spin              spinner.Model
+	bootstrapBytes    int64
+	bootstrapGrew     bool
 }
 
 func RunDashboard(c Controls) (ExitAction, error) {
 	m := model{ctrl: c, mode: ModeBoard, cursor: -1, message: c.Notice, diffView: viewport.New(0, 0), tailView: viewport.New(0, 0)}
+	m.spin = spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(busyStyle))
 	if c.Snapshot == nil && c.Poll == nil {
 		return ExitAction{}, fmt.Errorf("dashboard needs a snapshot source")
 	}
 	if c.Poll != nil {
 		m.snap = c.Poll()
+		m.trackBootstrap(m.snap)
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	out, err := p.Run()
@@ -170,6 +176,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preserveTaskSelection()
 		m.snap = &msg
 		m.staleView = false
+		m.trackBootstrap(&msg)
 		m.syncTasks()
 		return m, m.waitSnapshot()
 	case statisticsMsg:
@@ -213,6 +220,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if snap := m.ctrl.Poll(); snap != nil {
 				m.snap = snap
 				m.staleView = false
+				m.trackBootstrap(snap)
 			} else {
 				m.staleView = true
 			}
@@ -252,7 +260,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			statisticsCmd = m.loadStatistics()
 			m.statisticsLoading = statisticsCmd != nil
 		}
-		return m, tea.Batch(detailCmd, statisticsCmd, tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} }))
+		cmds := []tea.Cmd{detailCmd, statisticsCmd, tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })}
+		if m.spinActive() {
+			cmds = append(cmds, m.spin.Tick)
+		}
+		return m, tea.Batch(cmds...)
+	case spinner.TickMsg:
+		// A frozen spinner is information: the stream stopped growing.
+		if !m.spinActive() || msg.ID != m.spin.ID() {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 	case tea.KeyMsg:
 		return m.keys(msg)
 	}
@@ -342,6 +362,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "l":
+		m.err = ""
 		m.logAttempt, m.logTask, m.logPath = "", "", ""
 		if id := m.selectedAttempt(); id != "" && m.ctrl.WorkerLog != nil {
 			m.logAttempt = id
@@ -610,6 +631,49 @@ func (m model) selectedAttempt() string {
 	return m.snap.Attempts[0].ID
 }
 
+// trackBootstrap records stream growth between polls. The spinner animates
+// only while the bootstrap agent keeps producing output.
+func (m *model) trackBootstrap(v *ViewSnapshot) {
+	if v == nil || !v.Bootstrapping {
+		m.bootstrapBytes, m.bootstrapGrew = 0, false
+		return
+	}
+	m.bootstrapGrew = v.BootstrapBytes > m.bootstrapBytes
+	m.bootstrapBytes = v.BootstrapBytes
+}
+
+// spinActive reports recent agent output. A short grace period keeps the
+// spinner steady between sparse writes.
+func (m model) spinActive() bool {
+	return m.snap != nil && m.snap.Bootstrapping && !m.staleView &&
+		(m.bootstrapGrew || m.snap.BootstrapIdleSeconds < 5)
+}
+
+// byteLabel sizes the bootstrap event stream in familiar units.
+func byteLabel(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// coarseAge formats idle seconds the way elapsed session time is formatted.
+func coarseAge(seconds float64) string {
+	d := max(time.Duration(0), time.Duration(seconds*float64(time.Second)))
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
 // StatusLabel reports controller state separately from its current activity.
 // Text labels remain useful when the terminal disables color.
 func StatusLabel(v *ViewSnapshot, stale bool) (string, lipgloss.Style) {
@@ -620,7 +684,10 @@ func StatusLabel(v *ViewSnapshot, stale bool) (string, lipgloss.Style) {
 		return "STOPPED", dimStyle.Bold(true)
 	}
 	if v == nil {
-		return "CONNECTING", blockedStyle.Bold(true)
+		return "LOADING", blockedStyle.Bold(true)
+	}
+	if v.Bootstrapping {
+		return "BOOTSTRAPPING", busyStyle.Bold(true)
 	}
 	if v.Draining {
 		return "STOPPING", blockedStyle.Bold(true)
@@ -650,6 +717,9 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 	}
 	if v.Draining {
 		return "Finishing active work"
+	}
+	if v.Bootstrapping {
+		return "Creating first tasks"
 	}
 	if v.State == "waiting" {
 		return "Correct task file"
@@ -721,6 +791,43 @@ func (m model) renderView() string {
 	}
 }
 
+// bootstrapHeaderLine carries the spinner and stream evidence under the title.
+func (m model) bootstrapHeaderLine() string {
+	items := []string{m.spin.View() + " Reading project requirements and creating the first tasks"}
+	if m.snap.ActivityAgent != "" {
+		items = append(items, "Agent: "+plainText(m.snap.ActivityAgent))
+	}
+	switch {
+	case m.snap.BootstrapBytes <= 0:
+		items = append(items, "starting the bootstrap agent")
+	case m.snap.BootstrapIdleSeconds > 60:
+		items = append(items, "stream "+byteLabel(m.snap.BootstrapBytes), "no output for "+coarseAge(m.snap.BootstrapIdleSeconds))
+	default:
+		items = append(items, "stream "+byteLabel(m.snap.BootstrapBytes), "last output "+coarseAge(m.snap.BootstrapIdleSeconds)+" ago")
+	}
+	return dimStyle.Render(wrapItems(items, " · ", m.width))
+}
+
+// bootstrapPanel replaces the empty board while no view is published. It
+// separates "agent works" from "agent stalled" using stream evidence.
+func (m model) bootstrapPanel() string {
+	var b strings.Builder
+	b.WriteString(busyStyle.Render(m.spin.View()+" Bootstrapping — the controller starts after the first tasks exist") + "\n")
+	switch {
+	case m.snap.BootstrapBytes <= 0:
+		b.WriteString(dimStyle.Render("  preparing the bootstrap agent...") + "\n")
+	case m.snap.BootstrapIdleSeconds > 60:
+		stalled := fmt.Sprintf("  no agent output for %s — the stream may be stalled; interrupt the run if it does not resume", coarseAge(m.snap.BootstrapIdleSeconds))
+		b.WriteString(blockedStyle.Render(truncate(stalled, m.width)) + "\n")
+	default:
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  agent stream %s · last output %s ago", byteLabel(m.snap.BootstrapBytes), coarseAge(m.snap.BootstrapIdleSeconds))) + "\n")
+	}
+	if m.snap.ActivityLog != "" {
+		b.WriteString(dimStyle.Render("  [l] open the agent log") + "\n")
+	}
+	return b.String()
+}
+
 func (m model) header() string {
 	if m.hasWorkspace() {
 		return m.orientationHeader()
@@ -731,6 +838,9 @@ func (m model) header() string {
 		parts = append(parts, dimStyle.Render(m.elapsed()))
 	}
 	head := wrapItems(parts, "   ", m.width)
+	if m.snap != nil && m.snap.Bootstrapping && !m.staleView {
+		return head + "\n" + m.bootstrapHeaderLine()
+	}
 	var details []string
 	if m.snap != nil {
 		details = append(details, fmt.Sprintf("%d/%d complete", m.snap.Counters.Done, m.snap.Counters.Total))
@@ -747,6 +857,9 @@ func (m model) header() string {
 		if len(m.snap.Attempts) == 0 {
 			if a := activityLabel(m.snap, m.staleView); a != "" {
 				details = append(details, a)
+				if m.snap.ActivityAgent != "" {
+					details = append(details, "Agent: "+plainText(m.snap.ActivityAgent))
+				}
 			}
 		}
 	}
@@ -845,6 +958,10 @@ func (m model) boardContent() string {
 		b.WriteString(dimStyle.Render("No snapshot yet. Waiting for the controller...\n"))
 		return b.String()
 	}
+	if m.snap.Bootstrapping && !m.staleView {
+		b.WriteString(m.bootstrapPanel())
+		b.WriteString("\n")
+	}
 	if len(m.snap.Attempts) > 0 || m.staleView {
 		b.WriteString(sectionStyle.Render("Working") + "\n")
 		for _, a := range m.snap.Attempts {
@@ -914,6 +1031,14 @@ func indentText(text string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+func attemptLabel(a AttemptView) string {
+	label := PhaseLabel(a.Phase)
+	if a.Agent != "" {
+		label += " · " + plainText(a.Agent)
+	}
+	return label
+}
+
 func (m model) attemptRow(a AttemptView) string {
 	prefix := "  "
 	style := textStyle
@@ -921,7 +1046,7 @@ func (m model) attemptRow(a AttemptView) string {
 		prefix = "› "
 		style = selectStyle
 	}
-	first := prefix + a.TaskID + "  " + PhaseLabel(a.Phase)
+	first := prefix + a.TaskID + "  " + attemptLabel(a)
 	if a.Repairs > 0 {
 		first += fmt.Sprintf(" · repair %d", a.Repairs)
 	}
@@ -1074,14 +1199,17 @@ func (m model) diffScreen() string {
 }
 
 const helpText = `Run state
-  RUNNING    controller is working (green)
-  WAITING    no ready tasks (yellow)
-  STOPPING   finishing active work (yellow)
-  BLOCKED    needs attention (red)
-  COMPLETE   goal met; waiting for new work (green)
-  STOPPED    no active controller (gray)
+  RUNNING       controller is working (green)
+  BOOTSTRAPPING controller alive, first snapshot not yet published (blue)
+  WAITING       no ready tasks (yellow)
+  STOPPING      finishing active work (yellow)
+  BLOCKED       needs attention (red)
+  COMPLETE      goal met; waiting for new work (green)
+  STOPPED       no active controller (gray)
 
 RUNNING confirms the controller is active. It does not prove agent progress.
+BOOTSTRAPPING spins while the bootstrap agent produces output; a frozen
+spinner with growing idle time reports a stalled agent stream.
 
 Keys (letters work in either case)
   [j/k], arrows     select workers; scroll at the ends
@@ -1203,7 +1331,7 @@ func (m *model) refreshLog() {
 	}
 	m.sizeViewports()
 	bottom := m.tailView.AtBottom()
-	m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.logText))
+	m.tailView.SetContent(lipgloss.NewStyle().Width(m.width).Render(readableLog(m.logText)))
 	if bottom {
 		m.tailView.GotoBottom()
 	}
@@ -1226,7 +1354,16 @@ func (m model) logHeader() string {
 
 func (m model) logScreen() string {
 	if m.hasWorkspace() {
-		return m.workspaceViewportScreen(m.tailView, m.logTask+" logs · "+logFileName(m.logPath))
+		label := m.logTask + " logs · " + logFileName(m.logPath)
+		if m.snap != nil {
+			for _, task := range m.snap.Tasks {
+				if task.ID == m.logTask && task.Status == "done" {
+					label += " · completed task"
+					break
+				}
+			}
+		}
+		return m.workspaceViewportScreen(m.tailView, label)
 	}
 	header := m.logHeader()
 	footer := wrapItems([]string{"[b] Board", "[j/k] Scroll", "[esc] Back"}, " · ", m.width)

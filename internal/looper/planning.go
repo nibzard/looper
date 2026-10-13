@@ -18,9 +18,10 @@ func (e *Engine) runPlanner(ctx context.Context, op operation, work, dir, prompt
 	updates := make(chan progress)
 	done := make(chan result, 1)
 	e.activity, e.activityDetail = "planning", "Starting the planning agent"
+	e.activityAgent = op.config.ReviewAgent
 	e.publishView(false)
 	defer func() {
-		e.activity, e.activityDetail, e.activityLog, e.activityUpdated = "", "", "", ""
+		e.activity, e.activityDetail, e.activityLog, e.activityUpdated, e.activityAgent = "", "", "", "", ""
 		e.publishView(false)
 	}()
 	go func() {

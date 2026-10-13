@@ -458,25 +458,29 @@ func (m model) orientationHeader() string {
 		fresh = "disconnected · last known state"
 	}
 	project := truncate(plainText(v.Project), max(1, min(28, m.width/3)))
-	line := titleStyle.Render("LOOPER") + "  " + style.Render(label) + " · " + project
+	line := titleStyle.Render("LOOPER") + "  " + style.Render(label) + dimStyle.Render(" · ") + sectionStyle.Render(project)
 	lines := []string{truncate(line, m.width)}
 	if m.width >= 100 {
-		lines[0] = truncate(line+" · "+role+" · "+fresh, m.width)
+		lines[0] = truncate(line+dimStyle.Render(" · "+role+" · "+fresh), m.width)
 	} else {
-		lines = append(lines, truncate(role+" · "+fresh, m.width))
+		lines = append(lines, dimStyle.Render(truncate(role+" · "+fresh, m.width)))
 	}
 	if v.Goal != "" {
-		lines = append(lines, truncate("Goal: "+plainText(v.Goal), m.width))
+		lines = append(lines, truncate(dimStyle.Render("Goal: ")+textStyle.Render(plainText(v.Goal)), m.width))
 	}
 	operation := activityLabel(v, m.staleView)
 	if operation == "" {
 		operation = "Unknown"
 	}
-	if v.State != "" && v.State != "waiting" && v.ActivityDetail != "" {
-		operation += " · " + plainText(v.ActivityDetail)
+	operation = busyStyle.Bold(true).Render(operation)
+	if v.ActivityAgent != "" {
+		operation += " · " + sectionStyle.Render("Agent: "+plainText(v.ActivityAgent))
 	}
-	lines = append(lines, truncate("Operation: "+operation, m.width))
-	summary := fmt.Sprintf("%d/%d complete · %d implementing · %d checking · %d blocked · %d ready", v.Counters.Done, v.Counters.Total, v.Counters.InFlight, v.Counters.Checking, v.Counters.Blocked, len(v.Ready))
+	if v.State != "" && v.State != "waiting" && v.ActivityDetail != "" {
+		operation += " · " + dimStyle.Render(plainText(v.ActivityDetail))
+	}
+	lines = append(lines, truncate(dimStyle.Render("Operation: ")+operation, m.width))
+	summary := strings.Join([]string{okStyle.Render(fmt.Sprintf("%d/%d complete", v.Counters.Done, v.Counters.Total)), busyStyle.Render(fmt.Sprintf("%d implementing", v.Counters.InFlight)), busyStyle.Render(fmt.Sprintf("%d checking", v.Counters.Checking)), blockedStyle.Render(fmt.Sprintf("%d blocked", v.Counters.Blocked)), textStyle.Render(fmt.Sprintf("%d ready", len(v.Ready)))}, dimStyle.Render(" · "))
 	if m.width < 70 {
 		summary = fmt.Sprintf("%d/%d complete · %d active · %d blocked", v.Counters.Done, v.Counters.Total, len(v.Attempts), v.Counters.Blocked)
 	}
@@ -492,7 +496,7 @@ func (m model) orientationHeader() string {
 		}
 	}
 	if m.height >= 20 {
-		lines = append(lines, truncate(timing, m.width))
+		lines = append(lines, dimStyle.Render(truncate(timing, m.width)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -596,7 +600,7 @@ func (m model) overviewRows() []overviewRow {
 			if m.width >= 120 && a.ProcessStarted != "" {
 				evidence += " · process age " + ageLabel(a.ProcessStarted, m.referenceTime())
 			}
-			taskRow(t, PhaseLabel(a.Phase)+" · "+evidence+" · "+plainText(a.Title))
+			taskRow(t, attemptLabel(*a)+" · "+evidence+" · "+plainText(a.Title))
 		}
 		if len(shown) < len(active) {
 			add(fmt.Sprintf("  %d more active tasks · [u] Tasks", len(active)-len(shown)))
@@ -625,9 +629,9 @@ func (m model) overviewRows() []overviewRow {
 		}
 	}
 	capacity := fmt.Sprintf("Queue: %d ready · %d waiting for dependencies · %d queued for checks", len(m.snap.Ready), waiting, queued)
-	add(truncate(capacity, m.width))
+	add(dimStyle.Render(truncate(capacity, m.width)))
 	if m.snap.WorkerLimit > 0 && m.width >= 80 && budget >= 18 {
-		add(fmt.Sprintf("Capacity: %d/%d implementing · %d/%d checking", m.snap.Counters.InFlight, m.snap.WorkerLimit, m.snap.Counters.Checking, m.snap.CheckLimit))
+		add(dimStyle.Render(fmt.Sprintf("Capacity: %d/%d implementing · %d/%d checking", m.snap.Counters.InFlight, m.snap.WorkerLimit, m.snap.Counters.Checking, m.snap.CheckLimit)))
 	}
 	if t := m.workspaceTask(); t != nil && taskPhase(*t) == "ready" {
 		taskRow(*t, "ready · "+plainText(t.Title))
@@ -637,7 +641,7 @@ func (m model) overviewRows() []overviewRow {
 		if m.snap.ActivityUpdated != "" {
 			output = "Last output " + ageLabel(m.snap.ActivityUpdated, m.referenceTime()) + " ago"
 		}
-		add(output)
+		add(dimStyle.Render(output))
 	}
 	add("")
 	add(sectionStyle.Render("Recent outcomes"))
@@ -746,6 +750,9 @@ func (m model) workspaceFooter() string {
 		exit = "exit"
 	}
 	hints := []struct{ key, label string }{{"b", "overview"}, {"u", "tasks"}, {"t", "activity"}, {"p", "statistics"}, {"?", "help"}, {"q", exit}}
+	if m.mode == ModeLog || m.mode == ModeDiff {
+		hints = []struct{ key, label string }{{"esc", "back"}, {"j/k", "scroll"}, {"b", "overview"}, {"?", "help"}, {"q", exit}}
+	}
 	if m.mode == ModeStatistics {
 		hints = []struct{ key, label string }{{"b", "overview"}, {"j/k", "scroll"}, {"t", "activity"}, {"?", "help"}, {"q", exit}}
 	}

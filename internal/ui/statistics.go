@@ -111,12 +111,12 @@ func (m model) statisticsText() string {
 	}
 	s := m.statistics
 	lines := []string{
-		sectionStyle.Render("Project effort"),
+		titleStyle.Render("Project effort"),
 		fmt.Sprintf("Elapsed %s   Active %s", statDuration(s.ElapsedSeconds), statDuration(s.ActiveSeconds)),
 		fmt.Sprintf("Workers %s   Controller %s", statDuration(s.WorkerSeconds), statDuration(s.ControllerSeconds)),
 		fmt.Sprintf("%d/%d tasks complete   %d integrations", s.TasksDone, s.TasksTotal, s.Integrations),
 		fmt.Sprintf("%d attempts   %d repairs   %d sessions", s.Attempts, s.Repairs, s.Sessions),
-		fmt.Sprintf("Checks: %d passed / %d failed", s.ChecksPassed, s.ChecksFailed),
+		"Checks: " + okStyle.Render(fmt.Sprintf("%d passed", s.ChecksPassed)) + " / " + checkFailureText(s.ChecksFailed),
 	}
 	if m.statisticsError != "" {
 		lines = append([]string{errorStyle.Render("Last refresh failed: " + plainText(m.statisticsError))}, lines...)
@@ -124,7 +124,7 @@ func (m model) statisticsText() string {
 	if !s.HistoryComplete {
 		lines = append(lines, blockedStyle.Render(fmt.Sprintf("Partial history: older data / %d unknown ends", s.UnknownEnds)))
 	}
-	lines = append(lines, "", sectionStyle.Render("Tokens and API cost"))
+	lines = append(lines, "", titleStyle.Render("Tokens and API cost"))
 	if s.UsageReports == 0 {
 		lines = append(lines, "Token usage unknown: no agent usage reports yet.")
 	} else {
@@ -166,7 +166,7 @@ func (m model) statisticsText() string {
 	}
 
 	if len(s.Models) > 0 {
-		lines = append(lines, "", sectionStyle.Render("Models · recorded token usage"))
+		lines = append(lines, "", titleStyle.Render("Models · recorded token usage"))
 		for _, u := range s.Models {
 			lines = append(lines, fmt.Sprintf("%s  %s tokens  %s API", plainText(u.Model), statCount(u.Input+u.Output), statUSD(u.EstimatedUSD)))
 			lines = append(lines, dimStyle.Render(fmt.Sprintf("  In %s / Out %s / Cached %s · %d/%d priced", statCount(u.Input), statCount(u.Output), statCount(u.CacheRead), u.Priced, u.Reports)))
@@ -182,17 +182,29 @@ func statisticsChart(days []DailyStatistics, width, height int) string {
 	if height < 32 && len(days) > 7 {
 		days = days[len(days)-7:]
 	}
-	lines := []string{sectionStyle.Render(fmt.Sprintf("Daily effort · last %d days · UTC", len(days)))}
+	lines := []string{titleStyle.Render(fmt.Sprintf("Daily effort · last %d days · UTC", len(days)))}
+	emptyDays := 0
+	for emptyDays < len(days)-1 {
+		day := days[emptyDays]
+		if day.WorkerSeconds != 0 || day.Integrations != 0 || day.Reports != 0 || day.Tokens != 0 || day.EstimatedUSD != nil {
+			break
+		}
+		emptyDays++
+	}
+	if emptyDays > 0 {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("%d earlier days: no recorded effort or usage", emptyDays)))
+		days = days[emptyDays:]
+	}
 	maxWork := 0.0
 	for _, day := range days {
 		maxWork = math.Max(maxWork, day.WorkerSeconds)
 	}
 	narrow := width < 45
-	barWidth := max(3, min(20, width-38))
+	barWidth := max(3, min(20, width-37))
 	if narrow {
 		barWidth = max(3, min(12, width-23))
 	} else {
-		lines = append(lines, dimStyle.Render("Date    Worker hours    Done  Tokens API USD"))
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("%-5s %-*s %6s %4s %6s %7s", "Date", barWidth, "Effort", "Hours", "Done", "Tokens", "API USD")))
 	}
 	for _, day := range days {
 		bar := ""
@@ -214,7 +226,7 @@ func statisticsChart(days []DailyStatistics, width, height int) string {
 			if day.EstimatedUSD != nil {
 				cost = statUSD(day.EstimatedUSD)
 			}
-			lines = append(lines, fmt.Sprintf("%s %-*s %5.1fh %2d %6s %7s", date, barWidth, bar, day.WorkerSeconds/3600, day.Integrations, tokens, cost))
+			lines = append(lines, fmt.Sprintf("%s %s %5.1fh %4d %6s %7s", date, busyStyle.Render(fmt.Sprintf("%-*s", barWidth, bar)), day.WorkerSeconds/3600, day.Integrations, tokens, cost))
 		}
 	}
 	lines = append(lines, dimStyle.Render("Bars: combined worker hours. ? = unknown."))
@@ -244,4 +256,12 @@ func (m model) loadStatistics() tea.Cmd {
 
 func (m *model) refreshStatistics() {
 	m.tailView.SetContent(lipgloss.NewStyle().Width(max(1, m.width)).Render(m.statisticsText()))
+}
+
+func checkFailureText(n int) string {
+	text := fmt.Sprintf("%d failed", n)
+	if n > 0 {
+		return errorStyle.Render(text)
+	}
+	return dimStyle.Render(text)
 }

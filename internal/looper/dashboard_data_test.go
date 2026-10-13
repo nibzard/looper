@@ -2,6 +2,7 @@ package looper
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +24,69 @@ func TestSnapshotAllTasksAndRecoveryAreIndependent(t *testing.T) {
 	e.State.Attempts[0].Repairs = 12
 	if v.Tasks[2].Blockers[0] != "no credentials" || v.Blocked[0].Reasons[0] != "no credentials" || v.Tasks[3].DependsOn[0] != "T3" || v.Tasks[1].Attempt.Repairs != 0 {
 		t.Fatal("presentation snapshot aliases owner state")
+	}
+}
+
+func TestObserverViewReportsBootstrapBeforeFirstSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	info := ControllerInfo{Version: ControllerVersion, Session: "run-live", PID: os.Getpid(), Mode: ControllerModeForeground, BootstrapAgent: "claude"}
+	if err := writeJSON(controllerPath(dir), &info); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	o := &observer{store: store}
+	if v := o.view(dir, "run-live"); v == nil || !v.Bootstrapping || v.ActivityLog != "" || v.ActivityAgent != "claude" {
+		t.Fatalf("streamless bootstrap must still report the phase: %+v", v)
+	}
+	stream := filepath.Join(dir, "bootstrap-1", "events-00.jsonl")
+	if err := os.MkdirAll(filepath.Dir(stream), 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("{\"type\":\"assistant\"}\n")
+	if err := os.WriteFile(stream, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	v := o.view(dir, "run-live")
+	if v == nil || !v.Bootstrapping || v.Session != "run-live" {
+		t.Fatalf("missing bootstrap snapshot: %+v", v)
+	}
+	if v.ActivityLog != stream || v.BootstrapBytes != int64(len(content)) || v.BootstrapIdleSeconds < 0 {
+		t.Fatalf("missing stream evidence: %+v", v)
+	}
+	// A stale view from an earlier session must not mask the live bootstrap.
+	stale := &ui.ViewSnapshot{Version: ui.ViewVersion, Session: "run-old"}
+	if err := writeJSON(viewPath(dir), stale); err != nil {
+		t.Fatal(err)
+	}
+	if v = o.view(dir, "run-live"); v == nil || !v.Bootstrapping {
+		t.Fatalf("stale view hid the bootstrap: %+v", v)
+	}
+	// The current view still wins once the controller publishes it.
+	current := &ui.ViewSnapshot{Version: ui.ViewVersion, Session: "run-live", State: "planning"}
+	if err := writeJSON(viewPath(dir), current); err != nil {
+		t.Fatal(err)
+	}
+	if v = o.view(dir, "run-live"); v == nil || v.Bootstrapping || v.State != "planning" {
+		t.Fatalf("published view not served: %+v", v)
+	}
+	dead := exec.Command("true")
+	if err := dead.Start(); err != nil {
+		t.Fatal(err)
+	}
+	gone := dead.Process.Pid
+	if err := dead.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	info.PID = gone
+	if err := writeJSON(controllerPath(dir), &info); err != nil {
+		t.Fatal(err)
+	}
+	if v = o.view(dir, "run-live"); v != nil {
+		t.Fatalf("dead owner produced a snapshot: %+v", v)
 	}
 }
 
