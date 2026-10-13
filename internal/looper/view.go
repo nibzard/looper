@@ -37,14 +37,15 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		Now:         time.Now().UTC().Format(time.RFC3339),
 		EventCursor: e.eventCursor,
 		State:       e.activity, ActivityDetail: e.activityDetail, ActivityLog: e.activityLog, ActivityUpdated: e.activityUpdated,
-		Draining: draining,
+		ActivityAgent: e.activityAgent,
+		Draining:      draining,
 		// The completion banner stays hidden while input needs correction,
 		// even when the last accepted state was finished.
 		Finished: e.State.Finished && !e.inputPending,
 	}
 	if e.inputPending {
 		v.State, v.ActivityDetail = "waiting", e.inputProblem
-		v.ActivityLog, v.ActivityUpdated = "", ""
+		v.ActivityLog, v.ActivityUpdated, v.ActivityAgent = "", "", ""
 	}
 	if e.controller != nil {
 		v.Session, v.Mode, v.Started = e.controller.Session, e.controller.Mode, e.controller.Started

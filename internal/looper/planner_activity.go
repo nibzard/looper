@@ -3,6 +3,7 @@ package looper
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -11,9 +12,12 @@ import (
 // plannerActivity extracts observable actions, not private reasoning or tool output.
 func plannerActivity(line []byte) []string {
 	var event struct {
-		Type    string `json:"type"`
-		IsError bool   `json:"is_error"`
-		Message struct {
+		Type       string `json:"type"`
+		Subtype    string `json:"subtype"`
+		Attempt    int    `json:"attempt"`
+		MaxRetries int    `json:"max_retries"`
+		IsError    bool   `json:"is_error"`
+		Message    struct {
 			Content []struct {
 				Type    string `json:"type"`
 				Name    string `json:"name"`
@@ -35,6 +39,9 @@ func plannerActivity(line []byte) []string {
 		return nil
 	}
 	var actions []string
+	if event.Type == "system" && event.Subtype == "api_retry" {
+		actions = append(actions, fmt.Sprintf("API retry %d/%d · waiting for the provider", event.Attempt, event.MaxRetries))
+	}
 	for _, block := range event.Message.Content {
 		if block.Type == "tool_use" {
 			detail := block.Input.File

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -132,7 +133,8 @@ func TestRunStateAndActivity(t *testing.T) {
 		stale                  bool
 		state, activity, color string
 	}{
-		{"connecting", nil, false, "CONNECTING", "", "11"},
+		{"loading", nil, false, "LOADING", "", "11"},
+		{"bootstrapping", &ViewSnapshot{Bootstrapping: true}, false, "BOOTSTRAPPING", "Creating first tasks", "12"},
 		{"planning", &ViewSnapshot{State: "planning"}, false, "RUNNING", "PLANNING", "10"},
 		{"reviewing", &ViewSnapshot{State: "reviewing", Finished: true}, false, "RUNNING", "REVIEWING", "10"},
 		{"implementing", &ViewSnapshot{Counters: ViewCounters{InFlight: 1}}, false, "RUNNING", "IMPLEMENTING", "10"},
@@ -154,6 +156,66 @@ func TestRunStateAndActivity(t *testing.T) {
 				t.Fatalf("unexpected state %s / %s / %v", state, activityLabel(tt.v, tt.stale), style.GetForeground())
 			}
 		})
+	}
+}
+
+func TestBootstrapBoardShowsStreamEvidence(t *testing.T) {
+	base := ViewSnapshot{
+		Bootstrapping: true, Started: time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339),
+		ActivityLog: "runtime/bootstrap-1/events-00.jsonl", BootstrapBytes: 24576, BootstrapIdleSeconds: 3,
+	}
+	m := model{width: 80, height: 24, snap: &base}
+	m.spin = spinner.New(spinner.WithSpinner(spinner.Dot))
+	view := m.View()
+	for _, want := range []string{"BOOTSTRAPPING", "Bootstrapping", "stream 24.0 KB", "last output 3s ago", "[l] open the agent log"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q: %s", want, view)
+		}
+	}
+	stalled := base
+	stalled.BootstrapIdleSeconds = 250
+	m.snap = &stalled
+	view = m.View()
+	if !strings.Contains(view, "no agent output for 4m10s") || !strings.Contains(view, "no output for 4m10s") {
+		t.Fatalf("stalled stream must replace the steady line: %s", view)
+	}
+	if m.spinActive() {
+		t.Fatal("a stalled stream must freeze the spinner")
+	}
+	// A dead controller stops all bootstrap rendering even with old evidence.
+	m.staleView = true
+	view = m.View()
+	if strings.Contains(view, "Bootstrapping") || strings.Contains(view, "STOPPED") == false {
+		t.Fatalf("stale view must report the stopped controller: %s", view)
+	}
+}
+
+func TestBootstrapSpinnerFollowsStreamGrowth(t *testing.T) {
+	current := &ViewSnapshot{Bootstrapping: true, BootstrapBytes: 100, BootstrapIdleSeconds: 1}
+	m := model{ctrl: Controls{Poll: func() *ViewSnapshot { return current }}, width: 80, height: 24}
+	m.spin = spinner.New(spinner.WithSpinner(spinner.Dot))
+	next, _ := m.Update(tickMsg{})
+	m = next.(model)
+	if !m.spinActive() {
+		t.Fatal("a growing stream must animate the spinner")
+	}
+	current.BootstrapBytes, current.BootstrapIdleSeconds = 100, 4
+	next, _ = m.Update(tickMsg{})
+	m = next.(model)
+	if !m.spinActive() {
+		t.Fatal("the grace period must bridge sparse writes")
+	}
+	current.BootstrapIdleSeconds = 60
+	next, _ = m.Update(tickMsg{})
+	m = next.(model)
+	if m.spinActive() {
+		t.Fatal("an idle stream must freeze the spinner")
+	}
+	current.BootstrapBytes = 5000
+	next, _ = m.Update(tickMsg{})
+	m = next.(model)
+	if !m.spinActive() {
+		t.Fatal("resumed writes must restart the spinner")
 	}
 }
 

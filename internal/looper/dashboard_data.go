@@ -21,6 +21,9 @@ func dashboardControllerAlive(info *ControllerInfo) bool {
 }
 
 // view enriches a published copy. Observers never read the owner's mutable state.
+// Before the controller publishes its first view, a live owner yields a
+// bootstrap snapshot so that dashboards can show agent liveness instead of
+// reporting no controller.
 func (o *observer) view(dir, session string) *ui.ViewSnapshot {
 	info, err := readController(dir)
 	if err != nil || info.Session != session || !dashboardControllerAlive(info) {
@@ -28,7 +31,7 @@ func (o *observer) view(dir, session string) *ui.ViewSnapshot {
 	}
 	v := LoadView(dir)
 	if v == nil || v.Session != session {
-		return nil
+		return bootstrapView(dir, session, info)
 	}
 	for i := range v.Attempts {
 		enrichAttempt(&v.Attempts[i])
@@ -55,6 +58,52 @@ func (o *observer) view(dir, session string) *ui.ViewSnapshot {
 	}
 	v.Pace = o.pace
 	v.RecentOutcomes = o.outcomes
+	return v
+}
+
+// bootstrapStream is append-only evidence of bootstrap agent liveness: the
+// newest event file, its size, and how long ago it last grew.
+type bootstrapStream struct {
+	log   string
+	bytes int64
+	idle  time.Duration
+}
+
+// latestBootstrap finds the newest bootstrap agent event stream. Retained
+// attempts from earlier sessions sort behind the current one by write time.
+func latestBootstrap(dir string) *bootstrapStream {
+	paths, _ := filepath.Glob(filepath.Join(dir, "bootstrap-*", "events-*.jsonl"))
+	var newest string
+	var stamp time.Time
+	var size int64
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if newest == "" || info.ModTime().After(stamp) {
+			newest, stamp, size = path, info.ModTime(), info.Size()
+		}
+	}
+	if newest == "" {
+		return nil
+	}
+	return &bootstrapStream{log: newest, bytes: size, idle: time.Since(stamp)}
+}
+
+// bootstrapView synthesizes the pre-controller snapshot from the recorded
+// owner and the bootstrap agent stream.
+func bootstrapView(dir, session string, info *ControllerInfo) *ui.ViewSnapshot {
+	v := &ui.ViewSnapshot{
+		Version: ui.ViewVersion, Session: session, Started: info.Started,
+		Now: time.Now().UTC().Format(time.RFC3339), Bootstrapping: true,
+		ActivityAgent: info.BootstrapAgent,
+	}
+	if bs := latestBootstrap(dir); bs != nil {
+		v.ActivityLog = bs.log
+		v.BootstrapBytes = bs.bytes
+		v.BootstrapIdleSeconds = bs.idle.Seconds()
+	}
 	return v
 }
 

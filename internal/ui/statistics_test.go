@@ -152,3 +152,19 @@ func TestStatisticsRefreshUsesAsyncCommand(t *testing.T) {
 		t.Fatal("refresh overlap state was lost")
 	}
 }
+
+func TestDailyChartColumnAlignment(t *testing.T) {
+	days := []DailyStatistics{{Date: "2026-10-13", WorkerSeconds: 7200, Integrations: 5, Reports: 1, Tokens: 15200000}}
+	lines := strings.Split(ansi.Strip(statisticsChart(days, 72, 40)), "\n")
+	if strings.Index(lines[1], "Done") != lipgloss.Width(lines[2][:strings.Index(lines[2], "5 ")])-3 {
+		t.Fatalf("daily columns must share widths:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestDailyChartSummarizesEmptyLeadIn(t *testing.T) {
+	days := []DailyStatistics{{Date: "2026-10-11"}, {Date: "2026-10-12"}, {Date: "2026-10-13", WorkerSeconds: 7200, Reports: 1}}
+	text := ansi.Strip(statisticsChart(days, 72, 40))
+	if !strings.Contains(text, "2 earlier days: no recorded effort or usage") || strings.Contains(text, "10-11") || !strings.Contains(text, "10-13") {
+		t.Fatalf("empty days obscure recorded work: %s", text)
+	}
+}

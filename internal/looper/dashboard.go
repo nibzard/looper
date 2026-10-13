@@ -3,6 +3,7 @@ package looper
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -131,7 +132,38 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	if finish.err != nil && ctx.Err() == nil {
 		fmt.Fprintln(stderr, "Error:", finish.err)
 	}
+	// Bubble Tea has restored the normal terminal by now. Keep the outcome
+	// visible in scrollback instead of leaving it only in the alternate screen.
+	printDashboardExit(out, observer.store, info.Session, finish.code)
 	return finish.code
+}
+
+func printDashboardExit(out io.Writer, store *Store, session string, code int) {
+	var raw string
+	var exit sessionExit
+	err := store.db.QueryRow("SELECT data FROM events WHERE kind='shutdown' AND json_extract(data, '$.session')=? ORDER BY id DESC LIMIT 1", session).Scan(&raw)
+	if err == nil {
+		err = json.Unmarshal([]byte(raw), &exit)
+	}
+	if err != nil || exit.Session != session || exit.ExitCode != code {
+		fmt.Fprintf(out, "Looper exited with code %d. Run looper events to inspect the exit details.\n", code)
+		return
+	}
+	switch exit.Reason {
+	case "drained":
+		fmt.Fprintln(out, "Drain complete. Active work finished; Looper stopped cleanly.")
+		fmt.Fprintln(out, "Run looper tui again with your usual agent settings to resume remaining work.")
+	case "cancelled":
+		fmt.Fprintln(out, "Interrupted. Work is retained. Run looper tui with your usual agent settings to resume.")
+	case "complete":
+		fmt.Fprintln(out, "Looper finished: all planned work is complete.")
+	case "no_runnable_tasks":
+		fmt.Fprintln(out, "Looper stopped: no runnable tasks. Run looper status to review remaining work.")
+	case "dispatch_limit":
+		fmt.Fprintln(out, "Looper stopped: dispatch limit reached. Run looper tui to continue.")
+	default:
+		fmt.Fprintf(out, "Looper stopped: %s (exit %d). Run looper events for details.\n", sanitize(exit.Reason), code)
+	}
 }
 
 // submitPlansToActive submits startup plans to the controller that already
@@ -307,7 +339,10 @@ func attemptDiff(dir, attemptID string) (string, error) {
 			return "", fmt.Errorf("the attempt has no worktree to diff")
 		}
 		if _, err := os.Stat(a.Worktree); err != nil {
-			return "", fmt.Errorf("the worktree was removed")
+			if os.IsNotExist(err) && a.Phase == "done" {
+				return fmt.Sprintf("%s completed. Its temporary worktree was cleaned up after integration.\nA live diff is no longer available. Press [esc] to return, then [l] for retained logs.", a.TaskID), nil
+			}
+			return "", fmt.Errorf("%s diff unavailable: cannot access its worktree: %w", a.TaskID, err)
 		}
 		patch, err := gitCommand(a.Worktree, nil, nil, "diff", "--no-ext-diff", "--no-textconv", a.Base, "--")
 		if err != nil {
@@ -325,14 +360,15 @@ func attemptDiff(dir, attemptID string) (string, error) {
 	return "", fmt.Errorf("unknown attempt %s", attemptID)
 }
 
-// plannerLog accepts only planner output files within this runtime directory.
+// plannerLog accepts only controller agent output files within this runtime
+// directory: planner, review, and bootstrap streams.
 func plannerLog(dir, path string) (string, error) {
 	rel, err := filepath.Rel(dir, path)
 	if err != nil {
 		return "", err
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) != 2 || (!strings.HasPrefix(parts[0], "plan-") && !strings.HasPrefix(parts[0], "review-")) ||
+	if len(parts) != 2 || (!strings.HasPrefix(parts[0], "plan-") && !strings.HasPrefix(parts[0], "review-") && !strings.HasPrefix(parts[0], "bootstrap-")) ||
 		!strings.HasPrefix(parts[1], "events-") || !strings.HasSuffix(parts[1], ".jsonl") {
 		return "", fmt.Errorf("invalid controller log path")
 	}
@@ -359,13 +395,18 @@ func readDashboardLog(path string) (string, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 16000))
 	var readable []string
+	structured := false
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		structured = structured || json.Valid(line)
 		if actions := plannerActivity(line); len(actions) > 0 {
 			readable = append(readable, actions...)
 		}
 	}
 	if len(readable) > 0 {
 		return strings.Join(readable, "\n"), err
+	}
+	if strings.HasSuffix(path, ".jsonl") && structured {
+		return "No readable actions in the latest agent output. Progress is unknown.", err
 	}
 	return sanitize(string(data)), err
 }

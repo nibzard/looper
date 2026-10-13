@@ -388,3 +388,20 @@ func TestWorkspaceInspectorRetainsOnDemandPurpose(t *testing.T) {
 		t.Fatal("published summary erased on-demand acceptance text")
 	}
 }
+
+func TestOverviewNamesAgents(t *testing.T) {
+	m := workspaceFixture()
+	for _, width := range []int{45, 80, 100, 160} {
+		m.width = width
+		view := ansi.Strip(m.View())
+		if !strings.Contains(view, "implementing · codex") {
+			t.Fatalf("worker agent missing at width %d:\n%s", width, view)
+		}
+		m.snap.State, m.snap.ActivityAgent = "planning", "claude"
+		m.snap.ActivityDetail = "Read /a/very/long/path/to/project/requirements.md"
+		if header := ansi.Strip(m.orientationHeader()); !strings.Contains(header, "Operation: PLANNING · Agent: claude") {
+			t.Fatalf("planner agent missing at width %d:\n%s", width, header)
+		}
+		m.snap.State, m.snap.ActivityAgent = "", ""
+	}
+}

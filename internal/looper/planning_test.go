@@ -32,6 +32,9 @@ func TestPlannerPublishesWhileWaitingAndCancels(t *testing.T) {
 			if v.State != "planning" || v.ActivityLog == "" {
 				continue
 			}
+			if v.ActivityAgent != "claude" {
+				t.Fatalf("planning agent missing: %+v", v)
+			}
 			if first == "" {
 				first = v.Now
 				continue
@@ -53,7 +56,7 @@ func TestPlannerPublishesWhileWaitingAndCancels(t *testing.T) {
 		t.Fatal("planner did not stop")
 	}
 	v := LoadView(e.Dir)
-	if v.State != "" || v.ActivityLog != "" {
+	if v.State != "" || v.ActivityLog != "" || v.ActivityAgent != "" {
 		t.Fatalf("planning activity retained: %+v", v)
 	}
 	log, err := plannerLog(e.Dir, filepath.Join(e.Dir, "plan-test", "events-00.jsonl"))
@@ -74,6 +77,17 @@ func TestPlannerLogBoundsAndSanitizes(t *testing.T) {
 	text, err := plannerLog(dir, path)
 	if err != nil || len(text) > 16000 || strings.Contains(text, "\x1b") || !strings.HasSuffix(text, "end") {
 		t.Fatalf("invalid log tail: %d, %v", len(text), err)
+	}
+	bootstrap := filepath.Join(dir, "bootstrap-test", "events-00.jsonl")
+	if err := os.MkdirAll(filepath.Dir(bootstrap), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bootstrap, []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}]}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	text, err = plannerLog(dir, bootstrap)
+	if err != nil || !strings.Contains(text, "Read README.md") {
+		t.Fatalf("bootstrap log rejected: %q, %v", text, err)
 	}
 	if _, err := plannerLog(dir, filepath.Join(dir, "..", "secret")); err == nil {
 		t.Fatal("accepted outside log")

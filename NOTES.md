@@ -773,3 +773,293 @@ The shared development PostgreSQL service remains outside cleanup. Unknown
 unattached volumes also remain untouched. The final controller uses configured
 commands at each execution boundary, even while its persisted plan still shows
 the previous setup during replanning. No backlog status is edited manually.
+
+## Barista bootstrap failure, 2026-10-13, 11:57 local
+
+The user reports `looper` in barista failing at bootstrap with
+`execution: exit status 1`. The bootstrap event log
+(`~/.looper/barista-ec294870/runtime/bootstrap-35de505f7f0949b9/events-00.jsonl`)
+shows the spawned `claude` CLI failed its first API call with HTTP 400,
+"Credit balance is too low" (`billing_error`, request
+`req_011Cfz37kF1SLYTgq1pEgBkq`). The profile pins `agent: claude`, which
+authenticates through `ANTHROPIC_API_KEY`. Not a Looper or project defect:
+the Anthropic API account behind that key has no remaining credit. Fix on
+the user side by topping up the balance or switching the agent, then rerun.
+The bootstrap died before task creation, so a fresh run starts clean.
+
+Resolution: run `CLAUDE_BIN=claude-zai looper`. Looper resolves the claude
+agent command from `CLAUDE_BIN` (config.go), so the user's existing Z.AI
+wrapper supplies the token, base URL, and GLM model mapping. The `pass`
+entry resolves without prompting. Caveat: the wrapper calls `pass show` per
+agent invocation; a cold gpg-agent cache could block a headless run.
+
+### Follow-up diagnosis after the rerun, 12:01 to 12:18 local
+
+Four sessions in `state.db`, none reaching a controller:
+
+- 11:57 `run-39e9fe669896fa8f`: the billing failure above, status failed.
+- 12:01:43 `run-4f39faa5451b464d`: cancelled after 4.7 s, hooks and init
+  only. Model glm-5.3[1m], apiKeySource none, so the wrapper was active.
+- 12:01:51 `run-c7732d328275a1d1`: cancelled after 16 minutes. This is the
+  real attempt. The bootstrap agent worked normally for about 2.5 minutes
+  (32 assistant messages, 20 tool results, reading the design and code),
+  with the last timestamped event at 10:04:23Z. The log then shows 5,222
+  `thinking_tokens` ticker events with no further assistant output and one
+  `api_retry` (error "unknown") at line 7518, spanning 13.5 minutes until
+  the user interrupted. The turn stalled mid-completion on the gateway.
+- 12:18:03 `run-005db0f2f6f1eb17`: cancelled after 1.9 s.
+
+No Looper defect: sessions, processes, and cancellation are recorded
+correctly, the barista tree is clean, and no backlog was created. The
+wrapper's `API_TIMEOUT_MS=3000000` (50 minutes) removes timeout pressure,
+so a stalled gateway stream hangs until a human interrupts instead of
+erroring and retrying. A post-mortem probe through the same wrapper
+returned promptly, so the stall was transient. Next step for the user:
+rerun `CLAUDE_BIN=claude-zai looper` in barista. Optional hardening:
+shorten `API_TIMEOUT_MS` in `~/bin/claude-zai` so dead streams fail fast.
+
+### TUI shows STOPPED during bootstrap, 12:24 local
+
+The successful rerun (session `run-2fc4e78638cb970b`, foreground) displays
+"LOOPER STOPPED" in the TUI header while the bootstrap agent works. Cause:
+`StatusLabel` (internal/ui/dashboard.go) reports STOPPED when the poll
+returns no published controller view, and no view exists until the engine
+starts after bootstrap. The run history lines come from state.db, so they
+update while the banner claims STOPPED. Improvement candidate: a distinct
+BOOTSTRAPPING label while `controller.json` names a live process that has
+not yet published a view. The 12:24 bootstrap streamed about 9 KB/s on
+glm-5.3 through the wrapper, healthy unlike the earlier stall.
+
+### Bootstrap visibility implementation, 2026-10-13
+
+Implements the improvement above, authorized by the user as "implement all":
+a distinct BOOTSTRAPPING state, an evidence-driven braille spinner, and
+last-activity age in the TUI.
+
+- The observer synthesizes a snapshot before the controller publishes its
+  first view: a live owner from `controller.json` plus a missing or stale
+  `view.json` yields a bootstrap view carrying the newest
+  `bootstrap-*/events-*.jsonl` path, size, and idle seconds
+  (internal/looper/dashboard_data.go). A dead owner still reports nothing,
+  so STOPPED keeps its meaning.
+- The TUI shows BOOTSTRAPPING with a `bubbles` braille Dot spinner that
+  animates only while the bootstrap event stream grows between polls, with
+  a five second grace period for sparse writes. A stalled stream freezes
+  the spinner and states "no agent output for Xm" after one minute. The
+  board panel names the stream size, output age, and the [l] log shortcut.
+- `plannerLog` accepts bootstrap streams, so [l] shows readable bootstrap
+  agent activity through the existing activity parser.
+- Coverage: label table case, board evidence and stall rendering, spinner
+  growth lifecycle through `Update`, observer synthesis including stale
+  view and dead owner cases, and bootstrap log path validation.
+
+Uncommitted; no install or publication.
+
+## Barista diagnosis, 2026-10-13, 11:21 to 11:24Z
+
+Looper-diagnose observation of `/Users/air/dev/barista`, requested by the
+user. Installed Looper 0.8.2, revision `397baaf09057`, modified false. No
+fault is established. The run is healthy.
+
+- Session `run-5b6a18d9ff145e6c` (PID 62187, `looper tui`, foreground)
+  owns the project. It started at 11:18:40Z. Controller ownership and view
+  matching are true.
+- Board: 3 done, 52 todo, 0 blocked. T010 ("Brewing data framework") is in
+  flight with zero repairs.
+- The worker is active. Its agent stream grew from 1,568 to 23,789
+  estimated thinking tokens during the observation, at roughly 113 tokens
+  per second, with no `api_retry` events. This is a long thinking phase on
+  a large task, not the gateway stall seen earlier the same day.
+- The previous session `run-2fc4e78638cb970b` ended uncleanly. Resume
+  events 201 and 202 record `previous_exit_reason: "unknown"` with last
+  event 199. The detection and the retained-work resume worked as designed.
+  No shutdown event exists, so the end was a hard kill or a closed
+  terminal, not a SIGINT drain. Cause on the user side; no Looper defect.
+- Usage at observation: 5.9M tokens, 2.46 USD estimated against 7.66 USD
+  reported. This matches the known estimated-versus-reported provenance
+  difference already documented. No new finding.
+
+Next useful evidence if the run misbehaves later: the same status, doctor,
+and event commands, plus the worker stream tail to separate generation
+from a ticker-only stall.
+
+## Test suite status on Darwin, 2026-10-13, 13:35Z
+
+Correction to the diagnosis above: the unclean end of
+`run-2fc4e78638cb970b` at about 13:07 local was caused by this Looper
+development session, not the user. A `pkill -f "looper.t"` meant to stop a
+stuck test binary also matched `looper tui` and killed the live barista
+controller. Retained-work recovery behaved as designed; the 13:18 session
+resumed with no lost work. Lesson recorded: process patterns must not
+match live controllers.
+
+Full-suite findings while validating the bootstrap visibility work:
+
+- The `internal/ui` package passes with the new bootstrap coverage.
+- The `internal/looper` package fails on Darwin at clean HEAD 397baaf
+  (verified by stashing the working tree and reproducing). The failures
+  are independent of the bootstrap visibility change.
+- Failure class 1, path duality: TestParse* compare a `/var/folders/...`
+  root against a `/private/var/folders/...` spelling of the same
+  directory. Darwin resolves the `/var` symlink where the flag path does
+  not. Nine config tests fail on string comparison.
+- Failure class 2, publication guard: TestRunPublishesAfterAssessmentTimeout,
+  TestRunNonzeroAssessmentExitStillPublishes,
+  TestRunWithoutAssessmentAddsNoProcess,
+  TestCancelDuringAssessmentResumesVerification, and
+  TestLargeTaskRunsFromCompleteSnapshot report runtime files
+  (`plan-*`, `state.db-*`, `index-*.lock`) inside tree comparisons, so
+  publication refuses to apply candidates. Likely the same root: symlink
+  evaluation confuses repo-root or worktree boundaries on Darwin.
+- Failure class 3, daemon fixture hang: TestRunDaemonReadinessAndCleanup
+  blocks on an `__exec codex exec` helper that never returns. The first
+  timed-out run also left a detached test daemon behind; both were
+  cleaned up. A wedged run may also swallow the Go test timeout.
+- Prior validation of this tree ran on Linux. Darwin runtime validation
+  was already an open follow-up; these are that follow-up arriving.
+
+The bootstrap visibility change remains uncommitted with green UI tests,
+a green build, and clean vet. Fixing the Darwin suite is separate work
+that needs its own decision.
+
+## Barista drain after sleep diagnosis, 2026-10-13, 13:08–13:10Z
+
+Requested diagnosis using looper-diagnose; no restart, cancellation, project
+edit, or implementation requested. Installed and running build: 0.8.2,
+397baaf09057, unmodified. Session run-5b6a18d9ff145e6c, controller PID 62187.
+
+- Observed: controller ownership and view matching remain true, draining=true,
+  5/62 done, T009 implementing. Event cursor stays 536 across observations;
+  last tool event is Bash at 12:31:19Z. Worker log stays 7,433,348 bytes,
+  last modified 13:00:27Z, ending with api_retry (unknown error, attempt 1/10).
+  No new output is observed after full wake. This supports a quiet API wait,
+  not proof of a permanently hung process or a known network failure cause.
+- macOS power log: clamshell sleep 14:31:44 local, intermittent dark wakes,
+  full lid wake 15:06:25. Sleep plausibly interrupted the API connection;
+  causation is not established. claude-zai sets API_TIMEOUT_MS=3000000
+  (50 minutes), so a quiet request can wait a long time before failing.
+- Controller, supervisor PID 57957 (matching 14:13:52 start), and Claude child
+  PID 57958 remain alive. T009 has retained modified and newly created files
+  in its private worktree, but no completed check or integration record.
+- Confirmed Looper defect: doctor says worker_process_missing and status
+  reports running=false for that live process. controller.go runIdentityCommand
+  only reads Linux /proc; Darwin sidecars lack identity. observeWorker requires
+  a nonempty matching identity and mistakes unknown for absent. Expected:
+  platform-appropriate identity checks and explicit unknown evidence.
+  Smallest fix: Darwin identity implementation shared with observation/timing;
+  verify current-process observation on macOS plus exited and reused PID cases.
+- Visibility defect: fresh STOPPING snapshots and Finishing active work hide
+  the old worker activity and API retry. Expected: drain identifies the pending
+  task, last output age and latest retry/wait evidence without asserting progress.
+  Verify with a quiet stub worker during drain; snapshot refresh alone must not
+  imply worker progress. Drain intentionally stops scheduling new tasks and
+  waits for active work; waking does not clear drain.
+
+Papercut reports: pc_01M4TP48PG72TBV66284QT3VM9 (drain visibility),
+pc_01M4TP48Q844MED6GA2WX1HVVZ (Darwin false missing-process warning).
+No live processes were signaled or restarted. Recovery, if requested, should
+use a controlled interrupt retaining work followed by resume; avoid broad
+process-name matching and account for the broken Darwin signal identity check.
+
+### Drain resolved; log and statistics readability, 2026-10-13, 13:11–13:15Z
+
+User asks whether Claude logs were checked, why the overview says the worktree
+was removed, and requests easier logs/statistics formatting. Rechecked the
+Looper-owned Claude stream (not private agent transcripts). At 13:11:24Z it
+still ended in the same API retry, with no growth since 13:00:27Z. It then
+recovered without intervention: event 537 at 13:11:56Z is fresh Bash activity;
+538–539 record structured output and a result at 13:13:01Z. T009 passes its
+executable check at 13:13:19Z (90 tests per retained result), integrates as event
+545, and events 546–547 record a clean drained shutdown with exit 0. Two
+follow-ups were added, leaving six completed tasks out of 64. No restart needed.
+
+The worktree message originates only from attemptDiff. Successful tasks remove
+their temporary worktrees in engine.result; retained logs remain available.
+The user's log screen selects completed T010, while the overview names active
+T009. T009's worktree was present during diagnosis. The original selection that
+triggered the error is not retained, so T010 is likely, not proven. The global,
+unqualified error persists on the overview and incorrectly suggests work loss.
+
+Changes in this turn (preserve preceding uncommitted bootstrap work):
+- Completed-task missing worktrees open an informational diff view naming the
+  task and explaining cleanup, with directions to retained logs. Other stat
+  errors retain the actual cause and task ID instead of claiming removal.
+- API retry records become readable activity. Structured-only logs without
+  recognized actions show an unknown-progress explanation rather than raw JSON;
+  plain-text tool output remains available.
+- Log presentation collapses repeated blank lines and highlights suites,
+  summaries, passes, failures, and retries. All nonempty text remains available.
+  Log/diff footers show back and scroll shortcuts; completed task logs are labeled.
+- Statistics headings and effort bars have color, checks distinguish success
+  and failure, daily headers share the data column widths, and leading days
+  without recorded effort or usage are summarized rather than filling the chart.
+
+Two new regression cases failed before the changes (cleanup error and raw retry
+JSON). The full internal/ui suite passes, including viewport sizes and scrolling;
+focused Looper diff/log/activity tests pass. go vet on both packages and diff
+whitespace checks pass. Inspected the rendered 100x24 statistics fixture. Full
+Darwin suite remains subject to the previously documented unrelated failures.
+No install, commit, publication, or live-run mutation. The Darwin process identity
+bug remains a separate unresolved issue; these edits do not fix process absent.
+Papercuts: pc_01M4TPDZCFBXF1CDV9NXTDZE1C and pc_01M4TPDZD6DC0FDDWSB49RDJCN.
+
+### Clear terminal outcome after TUI drain, 2026-10-13
+
+The user shows the local TUI returning silently to the shell at 15:13:20 and
+asks whether it died. Events 546–547 confirm the clean drain at 15:13:19;
+runDashboardController discarded normal engine output and printed only errors
+after Bubble Tea restored the terminal. The clean shutdown was invisible in
+shell scrollback. Papercut pc_01M4TQESVAK9AHDV8SN8A72NBX.
+
+The local dashboard wrapper now prints its recorded session exit reason after
+returning from the TUI. Drain says active work finished and Looper stopped
+cleanly, followed by a resume command with a reminder to use the usual agent
+settings. Cancellation says work is retained; completion, no runnable tasks,
+and dispatch limit have distinct messages. Missing or inconsistent exit records
+fall back to the actual exit code and an events command, never an invented
+success reason. Existing error output and exit codes are preserved. The query
+matches the exact controller session, so another session cannot supply its reason.
+
+Regression: drain and cancellation tests fail before the change due to empty
+terminal output, then pass afterward. Focused local-dashboard drain, cancel,
+error, session matching, completion-message and missing-record checks pass;
+go vet and diff whitespace checks pass. The pre-existing full controller
+completion fixture fails on this Darwin machine: despite its intended finished
+state, it enters review and tries /bin/false (absent here). That unrelated
+fixture issue is not changed. No installation, restart, or publication.
+
+### Agent identity and overview hierarchy, 2026-10-13
+
+User requests the current agent name and easier scanning of the overview,
+with a screenshot of planning in barista. Planning/review snapshots now carry
+an activity_agent; planning uses the captured operation configuration, and
+clears the name when it ends. Controller metadata retains the bootstrap agent
+for observers before the first snapshot. Worker rows show each attempt's agent.
+
+The operation and agent appear before long activity paths. The overview uses
+bold operation/project labels, green completion, blue work counts, yellow
+blockers, and dim metadata, paths, queue/capacity and timing. Text labels stay
+available without color. Existing unrelated working-tree changes are preserved.
+
+Validation: full internal/ui suite; focused snapshot, planner, observer,
+bootstrap and build checks; go vet for UI and Looper; diff whitespace check.
+Agent visibility is checked at widths 45, 80, 100 and 160. No installation,
+commit, publication or live-controller restart. The previously recorded full
+Darwin suite failures remain outside this change.
+
+### Startup label wording, 2026-10-13
+
+Replace CONNECTING with LOADING while the TUI waits for its first snapshot.
+The user pointed out that connecting suggests network activity; loading
+describes fetching the initial presentation state for local and attached views.
+Updated the existing state-label test; internal/ui tests pass.
+
+### Commit and local installation validation, 2026-10-13
+
+User authorizes committing all pending work, pushing main, building and
+installing. Full UI suite, focused Looper dashboard/log/planner/bootstrap/
+observer/snapshot/build checks, dashboard drain/cancel/error cases, and
+go vet ./... pass. A broader selection reproduces the documented Darwin
+failures in TestLargeTaskRunsFromCompleteSnapshot (runtime paths entering
+publication comparisons) and TestDashboardControllerCompletion/complete
+(absent /bin/false). These pre-existing issues remain unresolved.

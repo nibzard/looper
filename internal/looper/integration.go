@@ -368,8 +368,9 @@ func (e *Engine) review(ctx context.Context, final bool) error {
 		return err
 	}
 	e.activity = "reviewing"
+	e.activityAgent = e.Config.ReviewAgent
 	e.publishView(false)
-	defer func() { e.activity = ""; e.publishView(false) }()
+	defer func() { e.activity, e.activityAgent = "", ""; e.publishView(false) }()
 	name := identifier("review")
 	work, err := e.Repo.Workspace(name, e.State.Tip, e.State.Backlog)
 	if err != nil {

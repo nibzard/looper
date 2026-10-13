@@ -22,7 +22,7 @@ func TestVersionJSONIdentifiesBuild(t *testing.T) {
 
 func TestControllerRetainsBuildIdentity(t *testing.T) {
 	s := timingStore(t)
-	info, err := publishController(t.TempDir(), ControllerModeForeground)
+	info, err := publishController(t.TempDir(), ControllerModeForeground, "claude")
 	if err != nil {
 		t.Fatal(err)
 	}
