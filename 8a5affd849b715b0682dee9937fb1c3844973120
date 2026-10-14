@@ -1,1 +1,3 @@
 Version-only release commit. Release content is dccaee5. The release runbook checks pass: make test includes all 55 runtime fixtures, static analysis, installer checks, packaging, and skill checks. Focused race tests passed on the same controller source. Prepare local installation and push the branch; GitHub release publication is separate.
+
+Local installation succeeds at /home/agent/.local/bin/looper. The installed binary and build artifact have identical SHA-256 checksums and report release 0.9.0, revision 8a5affd849b715b0682dee9937fb1c3844973120, modified false. main and context notes are pushed to origin. No tag, GitHub release, or controller restart is performed.
