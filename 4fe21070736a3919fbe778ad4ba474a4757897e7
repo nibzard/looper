@@ -1,0 +1,1 @@
+Post-mortem of the 2026-10-13 commonstate run wedge, recorded because the looper-side follow-ups (verify timeout, streamed verify output, partial capture, dead-check resource reclaim) stay open. Commonstate-side fixes closed as T215 (98dc0b3) and PR #1 (0d3f57c).
