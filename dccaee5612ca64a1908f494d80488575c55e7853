@@ -1,0 +1,1 @@
+Recover orchestration defects at drained controller boundaries. Reuse the existing agent runner, retained task work, and export journal. Persist consultation limits and command corrections across restart. Preserve product requirements and operator ownership. Validation before release preparation: make test passes with 55 runtime fixtures; focused race tests pass.
