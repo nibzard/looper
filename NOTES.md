@@ -1104,3 +1104,22 @@ suite's operations port to ephemeral; the runner-level per-test timeout
 nibzard/commonstate from branch fix/port-collision-hang, commit 0d3f57c.
 The looper-side follow-ups above (verify timeout, streamed output, partial
 capture) remain open.
+
+## Release 0.8.3, 2026-10-14
+
+The user runs the release runbook and picks 0.8.3 from HEAD. The untagged
+0.8.0 through 0.8.2 stay untagged by choice, so v0.8.3 is the first published
+tag since v0.7.1. The 0.8.3 notes state that those entries are included.
+
+Release notes land first (a67821f). The full suite passes on that tree: go
+test, vet, build stamp checks, 55 runtime tests in 100.7 seconds, package
+smoke, and skill regression. The version bump follows as its own commit
+(80ba239). The release helper repeats the full suite against the bumped tree
+(55 runtime tests in 107.7 seconds) before publishing.
+
+Publication: tag v0.8.3 on 80ba239, main and tag pushed, GitHub release
+created from docs/release-notes/0.8.3.md, and the tag archive downloaded,
+verified, and hashed into Formula/looper.rb as f48cbdd. The installed binary
+reports release 0.8.3, revision f48cbdd, modified false. That revision adds
+only the formula change to the tagged content. Existing controllers keep
+their previous executable.
