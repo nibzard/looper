@@ -1063,3 +1063,44 @@ go vet ./... pass. A broader selection reproduces the documented Darwin
 failures in TestLargeTaskRunsFromCompleteSnapshot (runtime paths entering
 publication comparisons) and TestDashboardControllerCompletion/complete
 (absent /bin/false). These pre-existing issues remain unresolved.
+
+## Commonstate check wedge, 2026-10-13, 06:35Z
+
+The commonstate controller (run-ac9291e173998d32) sat idle from 03:40 to 05:54
+local time because one check's verify command hung forever. Findings from the
+post-mortem:
+
+- The check ran `pnpm test` in worktree check-5e2945f97f4982f6 at integrate
+  commit 0624940. A CLI test failed with EADDRINUSE on the fixed default
+  operations port 127.0.0.1:9090 (a concurrent review session's `shared-work
+  serve` held it). The failing start path leaks the already-bound main
+  listener, so the test process never exits; `node --test` has no default
+  timeout, so the suite hangs. Reproduced end to end outside the daemon.
+- The verify process had no timeout and no liveness watchdog: "1 checking"
+  persisted for ~3 hours while no task could finish, and the dead check held
+  its leased Postgres container for the same period.
+- Session cleanup retried and logged "context deadline exceeded" on every
+  task completion while the check hung; it could not reclaim the task's
+  resources until the verify process died.
+- The verify log lagged about 30 lines behind the process (buffered recursive
+  pnpm output), so the log looked frozen mid-suite and the spec reporter's
+  failure detail (printed only at run end) was never captured. The recorded
+  failure evidence carries no cause.
+- I unblocked the run by signaling the stuck runner; the signal killed the
+  parent (no --report-signal installed on that process), the check was
+  recorded as failed, and the controller began repairing T151 although T151's
+  own work was sound. The repair re-provisions the benchmark VM pair.
+
+Follow-ups for looper: add a configurable timeout (or progress watchdog) to
+check verify commands; flush or tail verify output so the log tracks the
+process; capture partial output on abnormal termination so failure evidence
+names the failing test; make sure a dead check's leased resources are
+reclaimed without waiting for the next completion.
+
+Resolution addendum, 2026-10-13: the commonstate-side follow-ups are closed.
+Task T215 (98dc0b3) fixed the leaked-listener catch path and moved the CLI
+suite's operations port to ephemeral; the runner-level per-test timeout
+(--test-timeout, SHARED_WORK_TEST_TIMEOUT_MILLIS override) landed as PR #1 on
+nibzard/commonstate from branch fix/port-collision-hang, commit 0d3f57c.
+The looper-side follow-ups above (verify timeout, streamed output, partial
+capture) remain open.
