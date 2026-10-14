@@ -18,13 +18,46 @@ You need Go 1.22 or later, Git, Bash, and an authenticated `codex`,
 no Python, Node, or SQLite command at runtime. Repository tests use Python.
 The optional Measuretwice adapter uses Node.
 
+Install the latest published release with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nibzard/looper/main/scripts/install-latest.sh | bash
+```
+
+This downloads the release source from GitHub and builds it with Go. It
+requires Bash, curl, tar, Git, and Go 1.22 or later. It installs the binary
+in `~/.local/bin` without sudo. Run the same command to update. Existing
+controllers keep their current binary until you restart them.
+
+To inspect the script first or select an installation directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nibzard/looper/main/scripts/install-latest.sh -o /tmp/looper-install.sh
+bash /tmp/looper-install.sh --bin-dir "$HOME/.local/bin"
+```
+
+Use `--version v0.8.3` to select a release. Add `--with-skills` to install
+that release's bundled skills; older releases can include the old skill names.
+The latest release can lag behind `main`. To build the current source:
+
 1. Install the command:
 
    ```sh
    git clone https://github.com/nibzard/looper.git
    cd looper
-   ./install.sh --skip-skills
+   ./install.sh
    ```
+
+   This installs `looper-diagnose` and `looper-backlog`. Use `--skip-skills`
+   to install only the binary.
+   Add `--with-workflow-skills` to also install `git-commit` and
+   `github-release`. Skills are optional; Looper enforces task contracts
+   without them. The release skill prefers the project's release process.
+
+   Earlier installations used `todo-json-manager`, `git-conventional-commit`,
+   and `release-runbook`. Remove those old directories from your skills
+   directory after preserving any local edits. Installation does not remove
+   or rename existing user skills.
 
 2. In your project's repository root, describe the intended outcome and
    exclusions in a file such as `PROJECT.md`.

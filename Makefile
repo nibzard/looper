@@ -19,6 +19,7 @@ smoke: build
 test: build
 	go test ./...
 	go vet ./...
+	python3 scripts/install-latest-test.py
 	python3 scripts/build-test.py
 	python3 scripts/runtime-test.py
 	./scripts/package-smoke.sh

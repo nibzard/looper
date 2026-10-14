@@ -193,3 +193,20 @@ func shortText(s string, limit int) string {
 	}
 	return s + "..."
 }
+
+// Bootstrap context belongs to one operation and is not a project source.
+// Reject it before persisting a backlog that later worktrees cannot read.
+func (r *Repository) validateBootstrapSources(sources []string) error {
+	for _, source := range sources {
+		path := filepath.Clean(source)
+		if filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("bootstrap source %q must be a project-relative path, not private context or an external path", source)
+		}
+		for _, base := range []string{r.contextPath(), ".looper-context"} {
+			if path == base || strings.HasPrefix(path, base+string(filepath.Separator)) {
+				return fmt.Errorf("bootstrap source %q refers to Looper-private context; list project requirement files instead", source)
+			}
+		}
+	}
+	return nil
+}

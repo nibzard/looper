@@ -1123,3 +1123,45 @@ verified, and hashed into Formula/looper.rb as f48cbdd. The installed binary
 reports release 0.8.3, revision f48cbdd, modified false. That revision adds
 only the formula change to the tagged content. Existing controllers keep
 their previous executable.
+
+
+## GitPickle bootstrap sources and skill scope, 2026-10-14
+
+GitPickle session run-0f555d74014a88ae accepted a bootstrap source pointing
+at to-do.json.context/bootstrap-73c63b41735051bf/backlog.json. The retained
+snapshot contains an empty backlog. Removing the bootstrap worktree made
+that source unavailable to T001. This is a source validation defect, not
+missing product requirements.
+
+Bootstrap now rejects private context paths, absolute paths, and paths
+outside the project before saving the backlog. The prompt explains source
+ownership. A stub-agent regression reproduced acceptance before the fix.
+Existing run state and contracts are not rewritten by this change.
+
+Rename todo-json-manager to looper-backlog, git-conventional-commit to
+git-commit, and release-runbook to github-release. Narrow backlog guidance
+to Looper and prefer existing project release processes. Default installation
+includes only looper-diagnose and looper-backlog; --with-workflow-skills adds
+the generic helpers. Existing global skill copies are not removed implicitly.
+Preserve the checkout's existing follow-up scheduling edits.
+
+Validation: make test passes, including all Go tests, vet, build stamp checks,
+55 runtime tests, package smoke, and skill helper checks. All four skill
+manifests pass quick_validate.py. The bootstrap regression fails before the
+fix and passes afterward; path tests include custom backlog names and valid
+project context files. No live-agent skill activation evaluation was run.
+No binary or global skills were installed, and no active run was changed.
+
+## Latest-release installer, 2026-10-14
+
+The user requests commit, push, build, and installation, plus a curl entrypoint
+for future release installs. scripts/install-latest.sh resolves GitHub's latest
+release redirect and downloads that tag's source archive over HTTPS. It builds
+with the release's installer. The current v0.8.3 release has no binary assets.
+The default installs only the binary; --with-skills opts into that release's
+bundled skill policy. A pinned --version skips latest-release discovery.
+
+Eight isolated tests verify argument handling, download failures, invalid
+redirects and tags, missing installers, failed builds, and temporary cleanup.
+The README distinguishes released code from main. Existing unrelated
+follow-up scheduling edits remain outside this commit and installation.

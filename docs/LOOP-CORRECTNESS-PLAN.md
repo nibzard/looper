@@ -32,7 +32,7 @@ separate in [EXPERIMENT-PLAN.md](../EXPERIMENT-PLAN.md).
 ## 1 Use one completion contract
 
 Primary files: `internal/looper/integration.go`, `scripts/runtime-test.py`, and
-`skills/todo-json-manager/SKILL.md`.
+`skills/looper-backlog/SKILL.md`.
 
 Remove the review path that accepts task additions through edits to the private
 backlog. Review findings come from the structured `findings` response.
