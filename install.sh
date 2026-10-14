@@ -15,6 +15,7 @@ Options:
   --skills-dir <path>  Override skills dir (default: <CODEX_HOME>/skills)
   --skip-bin           Skip installing the binary
   --skip-skills        Skip installing skills
+  --with-workflow-skills  Also install git-commit and github-release
   --dry-run            Print actions without making changes
   -h, --help           Show help
 USAGE
@@ -30,6 +31,7 @@ SKILLS_DIR_OVERRIDE=""
 CODEX_HOME_OVERRIDE=""
 INSTALL_BIN=1
 INSTALL_SKILLS=1
+WORKFLOW_SKILLS=0
 DRY_RUN=0
 PREFIX_MODE=0
 
@@ -58,6 +60,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --skip-skills)
             INSTALL_SKILLS=0
+            shift
+            ;;
+        --with-workflow-skills)
+            WORKFLOW_SKILLS=1
             shift
             ;;
         --dry-run)
@@ -154,7 +160,13 @@ fi
 
 if [ "$INSTALL_SKILLS" -eq 1 ]; then
     run mkdir -p "$SKILLS_DIR"
-    run cp -a "$SRC_SKILLS"/. "$SKILLS_DIR"/
+    selected_skills=(looper-diagnose looper-backlog)
+    if [ "$WORKFLOW_SKILLS" -eq 1 ]; then
+        selected_skills+=(git-commit github-release)
+    fi
+    for skill in "${selected_skills[@]}"; do
+        run cp -a "$SRC_SKILLS/$skill" "$SKILLS_DIR/"
+    done
 fi
 
 if [ "$INSTALL_BIN" -eq 1 ]; then

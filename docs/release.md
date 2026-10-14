@@ -1,8 +1,8 @@
 # Release runbook
 
 This file records the project's release rules and lessons. The
-`release-runbook` skill drives an agent session through the same steps, and
-`skills/release-runbook/scripts/release.sh` publishes when authorized.
+`github-release` skill drives an agent session through the same steps, and
+`skills/github-release/scripts/release.sh` publishes when authorized.
 Preparation alone never authorizes publication.
 
 ## Versioning

@@ -1,6 +1,6 @@
 ---
-name: release-runbook
-description: Prepare or publish a software release when requested, including version updates, final checks, tags, GitHub releases, and Homebrew formulas. Preparation alone does not authorize publication.
+name: github-release
+description: Prepare or publish a GitHub release when requested, with optional Homebrew updates. Preparation alone does not authorize publication.
 ---
 
 # Prepare and publish a release
@@ -35,7 +35,8 @@ before retrying. Do not delete or replace a published tag to recover.
 
 ## Helper
 
-Use [scripts/release.sh](scripts/release.sh) from this skill's directory.
+Prefer the project's existing release process. When it has no suitable process,
+use the optional [scripts/release.sh](scripts/release.sh) helper from this skill's directory.
 Run it with the target repository as the working directory.
 The helper publishes a release; use it only within authorized scope.
 For preparation alone, perform steps 1 through 4 without this helper.

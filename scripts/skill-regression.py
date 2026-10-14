@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = ROOT / 'skills/release-runbook/scripts/release.sh'
+RELEASE = ROOT / 'skills/github-release/scripts/release.sh'
 LIVE_TEST = ROOT / '.codex/skills/looper-live-test/scripts/run-live-test.sh'
 TOOL = r'''#!/usr/bin/env python3
 import hashlib

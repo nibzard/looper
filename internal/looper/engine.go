@@ -415,6 +415,7 @@ func (e *Engine) bootstrap(ctx context.Context, plans []capturedPlan) error {
 	prompt := `Bootstrap a development backlog for Looper. Read repository instructions and project specifications.
 Return one JSON object: {"schema_version":1,"goal":"the existing project's intended outcome","source_files":["relative requirements files"],"tasks":[{"id":"T001","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":[]}]}.
 Only plan work grounded in the existing requirements. Include setup and executable verification where missing.
+List only project requirement files in source_files. Never list Looper-private context or backlog snapshots; supplied plan documents are retained separately.
 Use dependencies. Separate external prerequisites from implementable work. Do not modify any files.`
 	dir := filepath.Join(e.Dir, name)
 	c, err := prepareAgentContext(e.Repo, work, dir, empty, nil, "", nil, documentsFromPlans(plans))
@@ -437,6 +438,9 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 		return err
 	}
 	if err = b.Validate(); err != nil {
+		return err
+	}
+	if err = e.Repo.validateBootstrapSources(b.Sources); err != nil {
 		return err
 	}
 	after, err := e.Repo.Snapshot(work)
