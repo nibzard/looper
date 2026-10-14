@@ -1,1 +1,3 @@
 GitPickle bootstrap retained an empty private backlog as a project source. Reject such references before persistence. Release installation uses source archives because v0.8.3 has no binary assets. Existing follow-up scheduling changes are intentionally excluded. Full validation runs in a clean worktree before push.
+
+Validation passed in a clean worktree: make test, including Go tests, vet, 8 installer cases, 55 runtime tests, package smoke, build checks, and skill helper checks. A real latest-release download built and installed v0.8.3 into a temporary directory successfully.
