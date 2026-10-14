@@ -1,0 +1,1 @@
+Version-only release commit. Release content is dccaee5. The release runbook checks pass: make test includes all 55 runtime fixtures, static analysis, installer checks, packaging, and skill checks. Focused race tests passed on the same controller source. Prepare local installation and push the branch; GitHub release publication is separate.
