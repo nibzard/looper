@@ -203,3 +203,27 @@ func TestWorkerStreamKeepsStructuredResult(t *testing.T) {
 		t.Fatalf("missing process completion: %+v", process)
 	}
 }
+
+func TestStatusReportsDifferentRunningBuild(t *testing.T) {
+	e, _ := diagnosisEngine(t, diagnosisProposal)
+	e.controller.Build = &BuildInfo{Release: "old", Revision: "old-running"}
+	if err := writeJSON(controllerPath(e.Dir), e.controller); err != nil {
+		t.Fatal(err)
+	}
+	o := observe(e.Config, e.State)
+	if !o.BuildMismatch || o.Executable != currentBuild() || o.Controller.Build.Revision != "old-running" {
+		t.Fatalf("mismatch missing: %+v", o)
+	}
+	c := e.Config
+	c.Command = "status"
+	c.Plain = true
+	var out bytes.Buffer
+	if err := inspect(context.Background(), c, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"Installed:", "Running:", "old-running", "until restart"} {
+		if !strings.Contains(out.String(), text) {
+			t.Fatalf("missing %s: %s", text, out.String())
+		}
+	}
+}

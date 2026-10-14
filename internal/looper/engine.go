@@ -70,6 +70,15 @@ type operation struct {
 // from it. It runs on the owner goroutine before dispatching a goroutine.
 func (e *Engine) capture() operation {
 	c := e.Config
+	if e.State != nil && e.State.RecoveredCommands != nil {
+		r := e.State.RecoveredCommands
+		if c.Setup == r.BeforeSetup {
+			c.Setup = r.Setup
+		}
+		if c.Verify == r.BeforeVerify {
+			c.Verify = r.Verify
+		}
+	}
 	return operation{config: c, agent: Agent{c}}
 }
 
@@ -394,6 +403,10 @@ func (e *Engine) initializeState(ctx context.Context) error {
 }
 
 func (e *Engine) bootstrap(ctx context.Context, plans []capturedPlan) error {
+	return e.bootstrapResponse(ctx, plans, "")
+}
+
+func (e *Engine) bootstrapResponse(ctx context.Context, plans []capturedPlan, correction string) error {
 	head, _ := e.Repo.Head()
 	tree, err := e.Repo.Snapshot(e.Config.Root)
 	if err != nil {
@@ -426,6 +439,9 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 		prompt += "\nThese plan documents are part of the project requirements and must be covered exactly once. Read every document in this index: " + c.NewRequirements
 	}
 	prompt += c.references()
+	if correction != "" {
+		prompt += "\nYour previous source list was rejected: " + correction + "\nReturn a corrected backlog. Do not include private context sources."
+	}
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
 	if err != nil {
 		return err
@@ -441,6 +457,17 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 		return err
 	}
 	if err = e.Repo.validateBootstrapSources(b.Sources); err != nil {
+		if correction == "" {
+			after, captureErr := e.Repo.Snapshot(work)
+			if captureErr != nil {
+				return captureErr
+			}
+			if after != tree {
+				return fmt.Errorf("bootstrap changed code; its result was not applied")
+			}
+			e.event("bootstrap-correction", "Rejected private source; requesting one corrected backlog.")
+			return e.bootstrapResponse(ctx, plans, err.Error())
+		}
 		return err
 	}
 	after, err := e.Repo.Snapshot(work)
@@ -496,7 +523,8 @@ func (e *Engine) plan(ctx context.Context) error {
 	if e.Config.Setup != "" {
 		p.Setup = e.Config.Setup
 	}
-	if err = p.Validate(e.State.Backlog, e.Config.Verify); err != nil {
+	e.recoveryCommands(&p)
+	if err = p.Validate(e.State.Backlog, op.config.Verify); err != nil {
 		return err
 	}
 	tree, err := e.Repo.Snapshot(work)
@@ -792,7 +820,10 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 	if err := e.export(); err != nil {
 		return nil, err
 	}
-	return a, e.launch(ctx, a, out)
+	if err := e.launch(ctx, a, out); err != nil {
+		return a, err
+	}
+	return a, e.recoveryDispatch(t)
 }
 func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult) error {
 	documents, err := e.appliedContext()
@@ -844,6 +875,7 @@ func (e *Engine) applyResult(a *Attempt) error {
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if s.Status == "done" {
 		a.Phase = "done"
+		e.recoveryProgress(t.ID)
 		e.State.Integrated++
 		e.State.Finished = false
 		e.successes++
@@ -853,6 +885,7 @@ func (e *Engine) applyResult(a *Attempt) error {
 		}
 	} else {
 		a.Phase = "blocked"
+		e.recoveryBlocked(t.ID)
 	}
 	for _, f := range s.Followups {
 		e.addFinding(f)
@@ -895,36 +928,4 @@ func mergeUnique(old, fresh []string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-func (e *Engine) addFinding(f Finding) {
-	if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Details) == "" || strings.TrimSpace(f.Evidence) == "" {
-		e.event("finding", fmt.Sprintf("Ignored follow-up %q (%s): missing a title, acceptance details, or evidence.", shortText(sanitize(f.Title), 160), hashJSON(f)[:12]))
-		return
-	}
-	key := strings.ToLower(strings.Join(strings.Fields(f.Title), " "))
-	for _, t := range e.State.Backlog.Tasks {
-		if strings.ToLower(strings.Join(strings.Fields(t.Title), " ")) == key {
-			return
-		}
-	}
-	for _, d := range f.DependsOn {
-		if e.State.Backlog.Task(d) == nil {
-			e.event("finding", fmt.Sprintf("Ignored follow-up %q (%s): unknown dependency %s.", shortText(sanitize(f.Title), 160), hashJSON(f)[:12], sanitize(d)))
-			return
-		}
-	}
-	priority := f.Priority
-	if priority < 1 || priority > 5 {
-		priority = 2
-	}
-	n := len(e.State.Backlog.Tasks) + 1
-	id := fmt.Sprintf("T%03d", n)
-	for e.State.Backlog.Task(id) != nil {
-		n++
-		id = fmt.Sprintf("T%03d", n)
-	}
-	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, Task{ID: id, Title: f.Title, Priority: priority, Status: "todo", Details: f.Details + "\nEvidence: " + f.Evidence, DependsOn: f.DependsOn})
-	e.State.PlanSignature = ""
-	e.State.Finished = false
-	e.event("finding", id+"  Added follow-up: "+f.Title)
 }

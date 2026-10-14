@@ -284,6 +284,22 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			if e.inputPending {
 				e.resumeFromInputWait()
 			}
+			if len(e.State.Backlog.Ready()) == 0 {
+				recovered, err := e.recoverRun(ctx)
+				if err != nil {
+					return 1, err
+				}
+				if recovered {
+					continue
+				}
+				data, err := os.ReadFile(e.Config.Todo)
+				if err != nil {
+					return 1, err
+				}
+				if digest(data) != e.State.ExportHash {
+					continue
+				}
+			}
 			ready := e.State.Backlog.Ready()
 			final := len(ready) == 0
 			if e.State.ReviewPending || (final && e.State.ReviewedTip != e.State.Tip) {

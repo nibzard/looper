@@ -89,8 +89,22 @@ else:
     if mode=="interrupt":
         (cwd/(task_id+".txt")).write_text("partial")
         time.sleep(30)
+    elif mode=="pipeline" and task_id=="T2":
+        # Keep the unrelated worker active until its successor starts. A fixed
+        # sleep tests disk speed instead of whether dispatch waits for workers.
+        deadline=time.monotonic()+15
+        while time.monotonic()<deadline:
+            try:
+                started=[json.loads(line) for line in events.read_text().splitlines()]
+                if any(e["kind"]=="start" and e["task"]=="T3" for e in started):
+                    break
+            except json.JSONDecodeError:
+                pass
+            time.sleep(.01)
+        else:
+            raise RuntimeError("successor did not start while the unrelated worker was active")
     else:
-        time.sleep(2 if mode=="pipeline" and task_id=="T2" else (0.2 if task_id=="T1" else 0.5))
+        time.sleep(0.2 if task_id=="T1" else 0.5)
     if mode=="pipeline" and task_id=="T3":
         assert (cwd/"T1.txt").read_text()=="done"
     if mode=="conflict":
