@@ -1,0 +1,1 @@
+Written by the release-runbook helper. The sha256 is the checksum of the downloaded v0.8.3 tag archive, verified as a valid gzip tar before hashing.
