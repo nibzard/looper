@@ -83,11 +83,27 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 		return c
 	}
 	tree, err := e.Repo.Snapshot(c.Worktree)
-	if err != nil || tree != c.Tree {
+	if err != nil {
 		c.OK = false
-		c.Feedback = "Verification changed project files or failed to capture its result.\n"
-		if err != nil {
-			c.Feedback += err.Error()
+		c.Feedback = "Verification command passed, but snapshot capture failed: " + err.Error()
+		return c
+	}
+	if tree != c.Tree {
+		c.OK = false
+		comparison, diffErr := gitCommand(e.Repo.Root, nil, nil, "diff", "--no-ext-diff", "--name-status", c.Tree, tree, "--")
+		path := filepath.Join(dir, "file-changes.txt")
+		if diffErr == nil {
+			diffErr = atomicWrite(path, comparison, 0600)
+		}
+		c.Feedback = "Verification command passed, but changed project files.\n"
+		if diffErr != nil {
+			c.Feedback += "Cannot retain file comparison: " + diffErr.Error()
+		} else {
+			lines := strings.Split(strings.TrimSpace(string(comparison)), "\n")
+			if len(lines) > 20 {
+				lines = append(lines[:20], "... additional paths in the artifact")
+			}
+			c.Feedback += strings.Join(lines, "\n") + "\nArtifacts: " + path
 		}
 		return c
 	}
@@ -188,7 +204,14 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 			return e.hold(a, "The same failure persists after a fresh diagnosis. "+feedback)
 		}
 		a.Diagnosed = true
+		if err := e.save(); err != nil {
+			return err
+		}
 		if d, ok := e.diagnose(ctx, a, feedback); ok {
+			if d.RunRepair != nil {
+				e.State.PendingRunRepair = &pendingRunRepair{Identity: e.recoveryIdentity(), Proposal: d}
+				return e.hold(a, feedback)
+			}
 			feedback = "An independent diagnosis by the review agent found this root cause: " + d.RootCause +
 				"\nEvidence: " + d.Evidence +
 				"\nUse a different approach: " + d.FixApproach + "\n" + feedback
@@ -225,22 +248,32 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 
 // diagnosis is the structured result of one repair consultation.
 type diagnosis struct {
-	RootCause   string `json:"root_cause"`
-	Evidence    string `json:"evidence"`
-	FixApproach string `json:"fix_approach"`
+	RunRepair   *runRepair `json:"run_repair,omitempty"`
+	RootCause   string     `json:"root_cause"`
+	Evidence    string     `json:"evidence"`
+	FixApproach string     `json:"fix_approach"`
 }
 
 // diagnose asks the review agent for an independent, read-only explanation of
 // a repeated failure, so the next repair starts from a cause instead of the
-// same evidence. The consultation runs in the retained worktree; a changed
-// snapshot or any error discards the result and the caller repairs as before.
+// same evidence. The consultation uses an isolated copy of the retained work.
+// Changed snapshots or unusable results leave the existing repair path intact.
 func (e *Engine) diagnose(ctx context.Context, a *Attempt, feedback string) (diagnosis, bool) {
 	before, err := e.Repo.Snapshot(a.Worktree)
 	if err != nil {
 		return diagnosis{}, false
 	}
+	commit, err := e.Repo.Commit(before, []string{a.Base}, "Inspect retained failure")
+	if err != nil {
+		return diagnosis{}, false
+	}
+	work, err := e.Repo.Workspace(identifier("diagnose"), commit, e.State.Backlog)
+	if err != nil {
+		return diagnosis{}, false
+	}
+	defer e.Repo.Remove(work)
 	dir := filepath.Join(a.Directory, fmt.Sprintf("diagnose-%02d-%s", a.Repairs, identifier("session")))
-	c, err := prepareAgentContext(e.Repo, a.Worktree, dir, e.State.Backlog, &a.Task, feedback, nil, nil)
+	c, err := prepareAgentContext(e.Repo, work, dir, e.State.Backlog, &a.Task, feedback, nil, nil)
 	if err != nil {
 		return diagnosis{}, false
 	}
@@ -248,7 +281,11 @@ func (e *Engine) diagnose(ctx context.Context, a *Attempt, feedback string) (dia
 Failure feedback file: %s
 Return one JSON object: {"root_cause":"why the current approach keeps failing","evidence":"files or logs that show the cause","fix_approach":"a different approach that resolves the cause"}.`, a.Task.ID, a.Directory, c.Feedback)
 	op := e.capture()
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, a.Worktree, dir, prompt, false)
+	if e.State.Plan != nil {
+		prompt += fmt.Sprintf("\nEffective run setup: %q\nEffective run verification: %q\n", e.effectiveRecoveryPlan().Setup, e.effectiveRecoveryPlan().Verify)
+	}
+	prompt += `If the task cannot repair a proven orchestration contract defect, include optional run_repair {"remove_sources":[],"setup":"dependency setup","verify":"meaningful current-stage check","reopen":["` + a.Task.ID + `"],"deferred_tasks":[]}. Remove only proven empty bootstrap context; preserve requirements and external blockers. Otherwise omit run_repair.`
+	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
 	if err != nil {
 		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation failed; repairing with the recorded evidence.")
 		return diagnosis{}, false
@@ -257,12 +294,19 @@ Return one JSON object: {"root_cause":"why the current approach keeps failing","
 		return diagnosis{}, false
 	}
 	var d diagnosis
-	if json.Unmarshal(raw, &d) != nil || strings.TrimSpace(d.RootCause) == "" || strings.TrimSpace(d.FixApproach) == "" {
+	if decodeDiagnosis(raw, &d) != nil || strings.TrimSpace(d.RootCause) == "" || strings.TrimSpace(d.FixApproach) == "" {
 		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation returned no usable cause; repairing with the recorded evidence.")
 		return diagnosis{}, false
 	}
 	if after, err := e.Repo.Snapshot(a.Worktree); err != nil || after != before {
 		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation changed files; its result was discarded.")
+		return diagnosis{}, false
+	}
+	var inspected Backlog
+	if err := readJSON(filepath.Join(work, e.Repo.Excluded[0]), &inspected); err != nil || hashJSON(inspected) != hashJSON(e.State.Backlog) {
+		return diagnosis{}, false
+	}
+	if after, err := e.Repo.Snapshot(work); err != nil || after != before {
 		return diagnosis{}, false
 	}
 	e.event("diagnosis", fmt.Sprintf("%s  Independent diagnosis: %s", a.Task.ID, d.RootCause))
@@ -407,11 +451,11 @@ Exercise complete user workflows where possible. Compare the integrated product 
 not only task summaries. Verify suspected defects with code or executable evidence.
 Capture missing capabilities and missing ownership. Respect the project goal and exclusions.
 Do not modify any files, weaken checks, or invent unrelated improvements.
-Return JSON {"status":"reviewed","summary":"...","findings":[{"title":"...","details":"acceptance criteria","evidence":"observed facts and file or command","depends_on":[],"priority":1}],"complete":false}.
+Return JSON {"status":"reviewed","summary":"...","findings":[{"title":"...","details":"acceptance criteria","evidence":"observed facts and file or command","depends_on":[],"priority":1,"owner":"agent","key":"stable-outcome-key","existing_task_id":""}],"complete":false}.
 Set complete true only when the intended goal is satisfied and no required work is blocked or unfinished.
 Report gaps as findings only. Do not edit the task file or add tasks yourself; Looper owns task changes and rejects a review that edits the backlog.
 Duplicate findings already tracked in the backlog must not become new tasks.
-The final review must cover the original goal and every applied import, including imports that added no new tasks.`, kind, e.State.Tip, c.Backlog)
+The final review must cover the original goal and every applied import, including imports that added no new tasks.`+"\n"+findingInstructions, kind, e.State.Tip, c.Backlog)
 	prompt += c.references()
 	prompt += "Read every document in the applied requirements index before declaring completion. Do not limit review to requirements selected by workers.\n"
 	if len(evidence) > 0 {

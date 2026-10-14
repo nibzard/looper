@@ -48,3 +48,38 @@ func TestBootstrapSourcePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestBootstrapAcceptsOneCorrectedResponse(t *testing.T) {
+	b := testBacklog()
+	b.Sources = []string{"to-do.json.context/bootstrap-old/backlog.json"}
+	raw, _ := json.Marshal(b)
+	bin, _ := fakeAgent(t, string(raw))
+	script, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sources = []string{}
+	corrected, _ := json.Marshal(b)
+	t.Setenv("LOOPER_FAKE_CORRECTED", string(corrected))
+	script = []byte(strings.Replace(string(script), `result="$LOOPER_FAKE_RESULT"`, `result="$LOOPER_FAKE_RESULT"
+if printf '%s' "$p" | grep -q 'previous source list was rejected'; then result="$LOOPER_FAKE_CORRECTED"; fi`, 1))
+	if err = os.WriteFile(bin, script, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := repoConfig(t, "run")
+	c.CodexBin = bin
+	c.ReviewAgent = "codex"
+	e, lock, err := NewEngine(c, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	defer e.Store.Close()
+	if err = e.bootstrap(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var accepted Backlog
+	if err = readJSON(c.Todo, &accepted); err != nil || len(accepted.Sources) != 0 {
+		t.Fatalf("correction not accepted: %+v %v", accepted, err)
+	}
+}

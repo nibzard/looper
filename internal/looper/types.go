@@ -163,6 +163,19 @@ func (t Task) Contract() string {
 	t.Blockers = nil
 	t.UpdatedAt = ""
 	t.UnblockWhen = ""
+	// Finding identity is controller metadata, not an acceptance criterion.
+	// Keep operator ownership in the contract: changing it changes who can act.
+	tags := make([]string, 0, len(t.Tags))
+	for _, tag := range t.Tags {
+		if !strings.HasPrefix(tag, findingKeyPrefix) {
+			tags = append(tags, tag)
+		}
+	}
+	if len(tags) == 0 {
+		t.Tags = nil
+	} else {
+		t.Tags = tags
+	}
 	return hashJSON(t)
 }
 func hashJSON(v any) string  { data, _ := json.Marshal(v); return digest(data) }
@@ -196,7 +209,7 @@ func (b Backlog) Ready() []Task {
 	}
 	var ready []Task
 	for _, t := range b.Tasks {
-		if t.Marker() || (t.Status != "todo" && t.Status != "doing") {
+		if t.Marker() || t.OperatorOnly() || (t.Status != "todo" && t.Status != "doing") {
 			continue
 		}
 		ok := true
@@ -323,11 +336,14 @@ func overlaps(a, b Scope) bool {
 }
 
 type Finding struct {
-	Title     string   `json:"title"`
-	Details   string   `json:"details"`
-	Evidence  string   `json:"evidence"`
-	DependsOn []string `json:"depends_on,omitempty"`
-	Priority  int      `json:"priority"`
+	Owner          string   `json:"owner,omitempty"`
+	Key            string   `json:"key,omitempty"`
+	ExistingTaskID string   `json:"existing_task_id,omitempty"`
+	Title          string   `json:"title"`
+	Details        string   `json:"details"`
+	Evidence       string   `json:"evidence"`
+	DependsOn      []string `json:"depends_on,omitempty"`
+	Priority       int      `json:"priority"`
 }
 type Summary struct {
 	TaskID      string    `json:"task_id"`
@@ -415,28 +431,31 @@ type Candidate struct {
 	Feedback      string `json:"feedback,omitempty"`
 }
 type State struct {
-	Version       int             `json:"version"`
-	Root          string          `json:"root"`
-	Todo          string          `json:"todo"`
-	Head          string          `json:"head"`
-	Branch        string          `json:"branch"`
-	Ref           string          `json:"ref"`
-	Tip           string          `json:"tip"`
-	Published     string          `json:"published"`
-	Backlog       Backlog         `json:"backlog"`
-	ExportHash    string          `json:"export_hash"`
-	ExportBefore  string          `json:"export_before,omitempty"`
-	ExportPending bool            `json:"export_pending,omitempty"`
-	Attempts      []*Attempt      `json:"attempts"`
-	Plan          *Plan           `json:"plan,omitempty"`
-	PlanSignature string          `json:"plan_signature,omitempty"`
-	Publication   *Candidate      `json:"publication,omitempty"`
-	Imports       []*ImportRecord `json:"imports,omitempty"`
-	Finished      bool            `json:"finished"`
-	Integrated    int             `json:"integrated"`
-	ReviewedAt    int             `json:"reviewed_at"`
-	ReviewedTip   string          `json:"reviewed_tip,omitempty"`
-	ReviewPending bool            `json:"review_pending,omitempty"`
+	PendingRunRepair  *pendingRunRepair `json:"pending_run_repair,omitempty"`
+	Recoveries        []RunRecovery     `json:"recoveries,omitempty"`
+	RecoveredCommands *RecoveryCommands `json:"recovered_commands,omitempty"`
+	Version           int               `json:"version"`
+	Root              string            `json:"root"`
+	Todo              string            `json:"todo"`
+	Head              string            `json:"head"`
+	Branch            string            `json:"branch"`
+	Ref               string            `json:"ref"`
+	Tip               string            `json:"tip"`
+	Published         string            `json:"published"`
+	Backlog           Backlog           `json:"backlog"`
+	ExportHash        string            `json:"export_hash"`
+	ExportBefore      string            `json:"export_before,omitempty"`
+	ExportPending     bool              `json:"export_pending,omitempty"`
+	Attempts          []*Attempt        `json:"attempts"`
+	Plan              *Plan             `json:"plan,omitempty"`
+	PlanSignature     string            `json:"plan_signature,omitempty"`
+	Publication       *Candidate        `json:"publication,omitempty"`
+	Imports           []*ImportRecord   `json:"imports,omitempty"`
+	Finished          bool              `json:"finished"`
+	Integrated        int               `json:"integrated"`
+	ReviewedAt        int               `json:"reviewed_at"`
+	ReviewedTip       string            `json:"reviewed_tip,omitempty"`
+	ReviewPending     bool              `json:"review_pending,omitempty"`
 }
 
 // Reject unknown plan fields instead of silently dropping user requirements.

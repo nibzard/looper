@@ -21,7 +21,7 @@ type AgentError struct {
 
 func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
 
-const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"}}}}}}`
+const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority","owner","key","existing_task_id"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"},"owner":{"type":"string","enum":["agent","operator"]},"key":{"type":"string","minLength":1},"existing_task_id":{"type":"string"}}}}}}`
 
 const planSchema = `{
   "type": "object",
@@ -371,9 +371,10 @@ Preserve cleanup already registered by setup. For Docker containers, set labels 
 Do not weaken acceptance criteria or remove failing tests to claim success.
 If an external prerequisite is missing, report blocked with an explicit unblock condition.
 Return JSON: task_id, status (done or blocked), summary, files (array), blockers (array),
-followups (array of title, details, evidence, depends_on, priority), and unblock_when (string).
+followups (array of title, details, evidence, depends_on, priority, owner, key, existing_task_id), and unblock_when (string).
 Capture concrete missing work in followups; do not invent unrelated product goals.
-`, shortText(t.ID, 80), shortText(t.Title, 160), sources, shortText(b.Goal, 512), contract)
+%s
+`, shortText(t.ID, 80), shortText(t.Title, 160), sources, shortText(b.Goal, 512), contract, findingInstructions)
 	p += c.references()
 	p += "Read requirements relevant to this task. Use the complete index to find constraints; unrelated tasks are context only.\n"
 	if c.Feedback != "" {
@@ -394,7 +395,8 @@ and tasks [{task_id, write_paths: [relative file or directory prefixes], resourc
 Include each unfinished task. Use ["."] when the write scope is uncertain. Include generated files and wiring.
 Setup must recreate ignored dependencies in each worktree. Never share mutable build output between worktrees.
 Setup and verification must leave tracked and unignored project files unchanged; workers must implement any needed ignore rules.
-Checks must execute meaningful acceptance checks for the combined product; a no-op is invalid.
+Checks must execute meaningful acceptance checks for the current implementation stage; a no-op is invalid.
+Do not require commands implemented by later unfinished tasks. Preserve those commands in their task requirements and final review.
 Checks run in a fresh integrated worktree. Verify product behavior without depending on Looper-private refs or worker commit history.
 Commands receive LOOPER_RESOURCE_PREFIX unique to the operation and TMPDIR private to each process. Isolate databases and bind free ports.
 Tasks sharing public interfaces or migration ordering need the same resource name, even if files differ.

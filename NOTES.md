@@ -1124,6 +1124,51 @@ reports release 0.8.3, revision f48cbdd, modified false. That revision adds
 only the formula change to the tagged content. Existing controllers keep
 their previous executable.
 
+## Commonstate follow-up control, 2026-10-14
+
+The user requested fixes for cleanup, evidence retention, and follow-up
+scheduling. Credential rotation, external publication controls, and live
+infrastructure changes are outside this change.
+
+- Observed: Commonstate T125/T137/T138/T141 repeatedly reported the same
+  missing access. T170 emitted an operator-only publication follow-up;
+  T179 then ran as a coding task. Retained prompts and structured results
+  establish the sequence without relying on private agent reasoning.
+- Cause: `addFinding` deduplicated only normalized titles and appended every
+  finding as `todo`. No ownership marker survived into the ready queue.
+- Change: follow-ups carry `owner`, `key`, and `existing_task_id`. Repeated
+  keys or explicit task references record evidence in the task-linked journal.
+  Existing acceptance criteria and completed status remain intact. Finding
+  identity tags are excluded from task contract hashes, so new evidence
+  cannot invalidate a running worker. Operator ownership remains in the hash.
+  Keys use existing task tags, so project backlog schemas need no migration.
+- Operator work becomes blocked with an explicit unblock condition and a
+  `looper:operator` tag. The scheduler excludes that tag even after a generic
+  retry. A narrow legacy wording check also excludes tasks explicitly
+  assigned to an operator. This is scheduling policy, not a security sandbox
+  or a substitute for enforcement of external-action permissions.
+- Commonstate owns the maintained benchmark cleanup helper and its fake-HTTP
+  regression tests. The helper uses Agentlab's supported POST destroy route,
+  validates exact ownership, fails on unavailable inventory, and verifies
+  physical absence. No Agentlab API extension was needed. Historical cleanup
+  scripts and active resource leases remain unchanged.
+- Recovered Commonstate evidence lives in `benchmarks/evidence/2026-10-14-recovery/`.
+  Its manifest records hashes, source paths, redactions, and missing remote
+  reports. The original T170 write-up remains missing; its patch is rebuilt
+  from the retained commit. No measurements or infrastructure actions were repeated.
+
+Regression tests first failed on duplicate creation, operator dispatch,
+lost identity, reopening completed work, and invalidating active contracts.
+A legacy wording regression also verifies that operator-facing product
+requirements remain coding work.
+
+Validation: `make test` passes, including 55 runtime tests, build stamp checks,
+package smoke checks, and skill checks. After the final classifier refinement,
+`go test ./...`, `go vet ./...`, and focused race tests pass. Commonstate's
+29 root tests pass, including 12 cleanup cases. All 221 recovered file hashes
+match, available source hashes match, and every archived JSON file parses.
+Source changes are not installed, published, or applied to a running controller.
+
 
 ## GitPickle bootstrap sources and skill scope, 2026-10-14
 
@@ -1165,3 +1210,59 @@ Eight isolated tests verify argument handling, download failures, invalid
 redirects and tags, missing installers, failed builds, and temporary cleanup.
 The README distinguishes released code from main. Existing unrelated
 follow-up scheduling edits remain outside this commit and installation.
+
+## Unattended recovery implementation, 2026-10-15
+
+Implement UNATTENDED-RECOVERY-PLAN.md in the existing controller and journal.
+Keep the pending stable finding keys and operator ownership changes.
+
+- Verification distinguishes failed commands, failed snapshots, and file changes.
+  Retain a name/status comparison beside each check. Bound feedback to 20 paths.
+- At a drained idle boundary, consult once for proven empty private bootstrap
+  sources or repeated setup/check failures. Missing credentials alone do not
+  trigger consultation. Reuse an optional proposal from task diagnosis.
+- Save consultation identity before calling the agent. Save application and
+  reopened task state through the existing export journal. Consume both original
+  and corrected command identities. Restart resumes the retained retry.
+- Only remove a private bootstrap source with a retained empty backlog snapshot.
+  Preserve implementation acceptance criteria. Require retained work to reopen.
+  Check private backlog edits separately because Git snapshots exclude that file.
+- Persist previous and replacement effective commands in run state. Correct a
+  setup override only when it references proven disposable context. Correct a
+  verification override only when future task requirements preserve it. Later
+  user command changes take precedence. Global profiles remain unchanged.
+- Administrative closure requires the looper:orchestration tag, the removed
+  private source in the task details, and a reason. It never adds integrations.
+  Legacy recovery tasks without this evidence stay blocked.
+- Show executable and controller builds in structured status. Show both builds
+  in normal status when they differ and explain that restart changes the build.
+
+The synthetic combined fixture retains T001 work, corrects its source and gates,
+reports a generated .cache path, repairs its ignore rule, integrates T001, and
+starts and integrates T002. It also runs after losing in-memory state directly
+following repair application. All agent calls use local shell fixtures.
+
+Validation: `make test` passes, including all 55 runtime fixtures, static
+analysis, installer checks, build checks, packaging, and skill checks. Focused
+race tests pass on the final controller changes. Diff checks pass. No installed
+binary or unrelated live run changes.
+
+Validation findings: an initial runtime pass times out on the first-commit
+fixture. The next pass completes that fixture but fails the dispatch fixture's
+two-second timing assumption. Replace that sleep with a bounded start barrier:
+T002 remains active until T003 starts. This directly checks overlapping dispatch.
+Both previously failing fixtures pass together. Recovery dispatch saves state
+only when a recovery outcome changes. Retry failures and integrations now save
+with their task results. A stale consultation returns to backlog refresh before
+review or dispatch. The final full suite passes with all 55 runtime fixtures. Focused race tests
+pass on the final changes, including retry outcomes and overlapping dispatch.
+
+## Release preparation, 2026-10-15
+
+The user authorizes committing all current changes, pushing, following the
+release runbook, and local installation. Select 0.9.0 for unattended recovery
+and finding ownership. Include the pending finding changes and working notes.
+Commit release content first, then change VERSION in its own commit. The
+combined source passes make test and focused race tests before preparation.
+GitHub tags and release publication remain a separate runbook phase. Existing
+controllers keep their executable; local installation does not restart them.

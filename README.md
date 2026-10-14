@@ -369,6 +369,21 @@ observed evidence. These findings must stay within the project goal. Agents
 can miss defects or report problems that do not exist. Use executable
 acceptance checks where you can.
 
+Follow-ups identify an `owner` (`agent` or `operator`), a stable outcome
+`key`, and an `existing_task_id` (empty for new work). Reuse the existing
+task ID or key when the same prerequisite appears under a different title.
+Looper records new evidence in the task-linked event journal without reopening
+completed work or changing an active worker's acceptance criteria.
+Keys persist as `looper:finding:<key>` tags in the existing backlog format.
+
+Operator follow-ups enter the backlog as blocked with a `looper:operator`
+tag. They stay outside the worker queue even if a generic retry sets them
+to `todo`. Legacy tasks that explicitly assign an action to an operator
+also stay outside the queue. After the operator completes the action,
+record the evidence and mark it done. To delegate different work, change
+the task contract and remove the operator tag. Follow-ups do not grant
+permission to act outside the original task's authority.
+
 When an external prerequisite is missing, a blocked task records the reason
 and an unblock condition. Resolve it, then change the task to `todo` while
 Looper is idle. Looper reuses its partial work. It does not repeatedly
@@ -443,6 +458,19 @@ publication. After a restart, Looper recognizes whether an operation was
 published and resumes it without marking unchecked work done. Completed worker receipts avoid repeating
 implementation after a controller crash. Invalid final reports get a
 separate report recovery attempt with code changes prohibited.
+
+Before waiting on blocked work, Looper can repair proven orchestration defects.
+It consults the review agent once for unchanged source and command contracts.
+Repairs apply after workers and checks drain. Looper retains implementation
+work and runs integration checks with the corrected commands. The repair and
+its retry limit survive restart. Unreadable product requirements and external
+prerequisites stay blocked.
+
+Recovery events distinguish consultation, application, integration, and successor
+dispatch. Verification that changes project files reports the paths and retains
+`file-changes.txt` beside the check logs. Status shows both executable and
+controller builds when they differ. An installed update takes effect for a
+controller after restart.
 
 Your branch, `HEAD`, and staged index remain unchanged. Successful changes
 appear as unstaged edits. Looper retains private refs for snapshots and

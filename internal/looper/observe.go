@@ -36,6 +36,8 @@ type ProcessObservation struct {
 }
 
 type Observation struct {
+	Executable            BuildInfo           `json:"executable"`
+	BuildMismatch         bool                `json:"build_mismatch"`
 	Version               int                 `json:"schema_version"`
 	ObservedAt            string              `json:"observed_at"`
 	ControllerOwned       bool                `json:"controller_owned"`
@@ -119,7 +121,9 @@ func observe(c Config, s *State) Observation {
 	_, dir := projectPaths(c)
 	o := Observation{Version: observationVersion, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		ControllerOwned: repositoryOwned(c), View: LoadView(dir), Workers: []WorkerObservation{}}
+	o.Executable = currentBuild()
 	o.Controller, _ = readController(dir)
+	o.BuildMismatch = o.ControllerOwned && o.Controller != nil && o.Controller.Build != nil && *o.Controller.Build != o.Executable
 	o.ViewMatchesController = o.ControllerOwned && o.Controller != nil && o.View != nil && o.View.Session == o.Controller.Session
 	if o.View != nil {
 		o.EventCursor = o.View.EventCursor

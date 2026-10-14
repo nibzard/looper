@@ -327,6 +327,13 @@ func inspect(ctx context.Context, c Config, out io.Writer) error {
 			}
 			return json.NewEncoder(out).Encode(statusReport(c, s, timing, statistics))
 		}
+		_, runtimeDir := projectPaths(c)
+		if controller, err := readController(runtimeDir); err == nil && controller.Build != nil && repositoryOwned(c) {
+			installed := currentBuild()
+			if *controller.Build != installed {
+				fmt.Fprintf(out, "Installed: %s\nRunning: %s\nThe running controller keeps its original build until restart.\n", installed.String(), controller.Build.String())
+			}
+		}
 		done, blocked, total := 0, 0, 0
 		for _, t := range s.Backlog.Tasks {
 			if t.Marker() {
