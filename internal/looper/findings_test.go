@@ -168,3 +168,70 @@ func TestOperatorFindingPreservesActiveContract(t *testing.T) {
 	}
 	assertFindingEvidence(t, e, "T001", "401")
 }
+
+func TestFindingReopensCompletedAgentTask(t *testing.T) {
+	for _, match := range []string{"id", "key", "title"} {
+		t.Run(match, func(t *testing.T) {
+			e := snapshotEngine(t)
+			original := Task{ID: "T001", Title: "Implement storage", Details: "Preserve archive safety", Status: "done", Priority: 1, Tags: []string{findingKeyPrefix + "storage"}}
+			e.State.Backlog.Tasks = []Task{original}
+			e.State.Attempts = []*Attempt{{ID: "old", Task: original, Phase: "done"}}
+			e.State.Finished = true
+			e.State.PlanSignature = "old-plan"
+			finding := Finding{Title: "Repair storage", Details: "Publish durable B2 archives", Evidence: "B2 protection rejects conditional creation", Owner: "agent"}
+			switch match {
+			case "id":
+				finding.ExistingTaskID = "T001"
+			case "key":
+				finding.Key = "storage"
+			case "title":
+				finding.Title = original.Title
+			}
+			e.addFinding(finding)
+			task := e.State.Backlog.Tasks[0]
+			if len(e.State.Backlog.Tasks) != 1 || task.Status != "todo" || len(e.State.Backlog.Ready()) != 1 {
+				t.Fatal("completed defect has no runnable repair")
+			}
+			if !strings.Contains(task.Details, original.Details) || !strings.Contains(task.Details, finding.Details) || !strings.Contains(task.Details, finding.Evidence) {
+				t.Fatal("repair lost its contract or evidence")
+			}
+			if e.State.Finished || e.State.PlanSignature != "" {
+				t.Fatal("completion or plan remains stale")
+			}
+			if e.State.Attempts[0].Task.Contract() != original.Contract() || e.State.Attempts[0].Phase != "done" {
+				t.Fatal("completed attempt history changed")
+			}
+			e.addFinding(finding)
+			if len(e.State.Backlog.Tasks) != 1 || e.State.Backlog.Tasks[0].Details != task.Details {
+				t.Fatal("repeated finding duplicated repair")
+			}
+		})
+	}
+}
+
+func TestDistinctFindingsRetainRepairCriteria(t *testing.T) {
+	e := snapshotEngine(t)
+	e.State.Backlog.Tasks = []Task{{ID: "T001", Title: "Implement storage", Status: "done", Priority: 1}}
+	for _, key := range []string{"readback", "large-pack"} {
+		e.addFinding(Finding{Title: key, Details: "Repair " + key, Evidence: key + " fails", Owner: "agent", Key: key, ExistingTaskID: "T001"})
+	}
+	task := e.State.Backlog.Tasks[0]
+	if len(e.State.Backlog.Ready()) != 1 || !strings.Contains(task.Details, "Repair readback") || !strings.Contains(task.Details, "Repair large-pack") {
+		t.Fatal("distinct repair criteria were lost")
+	}
+}
+
+func TestFindingPreservesRetainedAttemptContract(t *testing.T) {
+	for _, phase := range []string{"running", "ready", "verifying", "resume"} {
+		t.Run(phase, func(t *testing.T) {
+			e := snapshotEngine(t)
+			task := Task{ID: "T001", Title: "Implement storage", Status: "todo", Priority: 1}
+			e.State.Backlog.Tasks = []Task{task}
+			e.State.Attempts = []*Attempt{{Task: task, Phase: phase}}
+			e.addFinding(Finding{Title: "Repair storage", Details: "Fix readback", Evidence: "Readback fails", Owner: "agent", ExistingTaskID: "T001"})
+			if e.State.Backlog.Tasks[0].Contract() != task.Contract() {
+				t.Fatal("finding invalidated retained work")
+			}
+		})
+	}
+}

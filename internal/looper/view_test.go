@@ -30,7 +30,7 @@ func snapshotEngine(t *testing.T) *Engine {
 func TestSnapshotCopiesPresentationState(t *testing.T) {
 	e := snapshotEngine(t)
 	v := e.snapshot(false)
-	if v.Session != e.controller.Session || v.Mode != ControllerModeForeground {
+	if v.Root != e.Config.Root || v.Session != e.controller.Session || v.Mode != ControllerModeForeground {
 		t.Fatalf("identity missing: %+v", v)
 	}
 	if !v.Finished || v.Goal != "ship it" {

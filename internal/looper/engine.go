@@ -318,7 +318,7 @@ func (e *Engine) initializeState(ctx context.Context) error {
 			if digest(data) != s.ExportHash {
 				return fmt.Errorf("the backlog changed while work was retained; restore its saved contract before resuming")
 			}
-			if err = e.original(); err != nil {
+			if err = e.recoverCommittedHead(); err != nil {
 				return err
 			}
 			if s.Publication != nil {
@@ -429,7 +429,7 @@ func (e *Engine) bootstrapResponse(ctx context.Context, plans []capturedPlan, co
 Return one JSON object: {"schema_version":1,"goal":"the existing project's intended outcome","source_files":["relative requirements files"],"tasks":[{"id":"T001","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":[]}]}.
 Only plan work grounded in the existing requirements. Include setup and executable verification where missing.
 List only project requirement files in source_files. Never list Looper-private context or backlog snapshots; supplied plan documents are retained separately.
-Use dependencies. Separate external prerequisites from implementable work. Do not modify any files.`
+Use dependencies. Separate external prerequisites from implementable work. Do not modify any files.` + "\n" + taskClassificationInstructions
 	dir := filepath.Join(e.Dir, name)
 	c, err := prepareAgentContext(e.Repo, work, dir, empty, nil, "", nil, documentsFromPlans(plans))
 	if err != nil {

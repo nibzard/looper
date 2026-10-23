@@ -21,7 +21,7 @@ type AgentError struct {
 
 func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
 
-const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority","owner","key","existing_task_id"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"},"owner":{"type":"string","enum":["agent","operator"]},"key":{"type":"string","minLength":1},"existing_task_id":{"type":"string"}}}}}}`
+const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority","owner","key","existing_task_id","defer_until"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"},"owner":{"type":"string","enum":["agent","operator"]},"key":{"type":"string","minLength":1},"existing_task_id":{"type":"string"},"defer_until":{"type":"string"}}}}}}`
 
 const planSchema = `{
   "type": "object",
@@ -389,6 +389,7 @@ This is an inspection-only planning step. Read files and search existing code an
 Do not run builds, tests, benchmarks, dataset or corpus generators, package installation, or application commands.
 Do not delegate work. Identify setup and verification commands from existing documentation, manifests, and scripts;
 return those commands for later execution by workers and checks. Do not execute them to validate this plan.
+Keep checks scoped to the current development round. Later-platform tasks retain their acceptance requirements but do not impose unavailable tools on current checks.
 Focus on unfinished tasks; completed tasks provide context only. Do not change any files.
 Return JSON with setup (shell command or empty string), verify (shell command),
 and tasks [{task_id, write_paths: [relative file or directory prefixes], resources: [shared interface names]}].

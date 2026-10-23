@@ -209,7 +209,7 @@ func (b Backlog) Ready() []Task {
 	}
 	var ready []Task
 	for _, t := range b.Tasks {
-		if t.Marker() || t.OperatorOnly() || (t.Status != "todo" && t.Status != "doing") {
+		if t.Marker() || t.OperatorOnly() || t.Deferred() || (t.Status != "todo" && t.Status != "doing") {
 			continue
 		}
 		ok := true
@@ -336,6 +336,7 @@ func overlaps(a, b Scope) bool {
 }
 
 type Finding struct {
+	DeferUntil     string   `json:"defer_until,omitempty"`
 	Owner          string   `json:"owner,omitempty"`
 	Key            string   `json:"key,omitempty"`
 	ExistingTaskID string   `json:"existing_task_id,omitempty"`

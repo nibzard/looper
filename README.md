@@ -179,7 +179,9 @@ viewer's event buffer limit.
 For an unattended run, use `looper start`, then attach with `looper tui`.
 Keep the viewer in tmux or reconnect later. In attached mode, `q` detaches
 without stopping the controller. A missing snapshot shows `UNKNOWN` and
-retains the last known state. Quiet worker output does not prove a failure.
+retains the last known state. An attached dashboard reconnects when a replacement
+controller appears. Task details refresh with the new session. Actions wait until
+the dashboard displays that session. Quiet worker output does not prove a failure.
 
 ![The dashboard: run state and progress in the header, working and blocked
 tasks, recent events](docs/assets/tui.png)
@@ -232,8 +234,26 @@ See [the pricing notes](internal/looper/prices/README.md) for supported fields.
 Shortcut labels use lowercase keys, such as **[l] Logs** and **[q] Exit**.
 Letter shortcuts accept lowercase and uppercase keys. You do not need Shift.
 
+Copy uses the terminal clipboard protocol (OSC 52). It preserves full lines,
+even on a narrow screen. In task views, it copies the selected task and its
+resume condition. In the overview, it copies the run state and blockers.
+Paste the result into an agent to request diagnosis and fixes within the existing scope.
+It includes the project root, session, event cursor, and commands to verify live state.
+Large logs and diffs use labeled excerpts. Task blockers remain complete.
+The terminal must allow clipboard writes. For tmux, enable `set-clipboard on`
+and use a terminal with OSC 52 support. The notice confirms that Looper sent
+the request; the terminal does not acknowledge clipboard updates.
+
+Future-round tasks can retain `status: "blocked"` with the tag `looper:deferred`
+and a concrete `unblock_when` condition. They appear as deferred in task views
+and under the Waiting filter. They remain required work and cannot dispatch
+through a generic retry. When the condition is met, remove the tag and set
+`status: "todo"`. Required operator ownership remains a separate restriction.
+
+
 | Key | Action |
 | --- | --- |
+| `c` | Copy an agent handoff with run state and relevant evidence. |
 | `u` | Browse all tasks. |
 | Enter | Inspect the selected task. |
 | `/` / `f` | Search tasks / change the task filter. |
@@ -685,3 +705,13 @@ Use this feedback procedure to improve Looper:
 Diagnostics do not automatically change code, restart workers, or clear
 blockers. The event journal provides evidence for this procedure; it is not
 an execution replay engine.
+
+### Resume after committing published work
+
+If you commit files that Looper has already published, restart with `looper`.
+Looper accepts a descendant commit on the same branch when the committed files
+and working files match its accepted tree or its verified publication candidate.
+It preserves your commit and finishes retained publication through the usual checks.
+Staged project changes, other file edits, branch switches, and changed backlog
+contracts require reconciliation. `looper doctor --json` reports a moved branch
+and the last recorded shutdown before you attempt recovery.

@@ -146,6 +146,7 @@ Return one JSON object: {"additions":[{"id":"P1","title":"outcome","priority":1,
 New tasks need concrete acceptance criteria; execution planning adds executable verification.
 Use temporary identifiers P1..Pn for additions; depends_on may reference them or existing task ids.`,
 		e.State.Tip, c.NewRequirements)
+	prompt += "\n" + taskClassificationInstructions
 	prompt += c.references()
 	e.event("import", "Analyzing imported requirements with the review agent...")
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
@@ -161,8 +162,9 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 	}
 	for i := range proposal.Additions {
 		t := proposal.Additions[i]
-		if t.Status != "todo" {
-			t.Status = "todo"
+		t.Status = "todo"
+		if t.Deferred() {
+			t.Status = "blocked"
 		}
 		proposal.Additions[i] = t
 	}

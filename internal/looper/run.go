@@ -302,7 +302,12 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			}
 			ready := e.State.Backlog.Ready()
 			final := len(ready) == 0
-			if e.State.ReviewPending || (final && e.State.ReviewedTip != e.State.Tip) {
+			if e.reviewDue() || (final && e.State.ReviewedTip != e.State.Tip) {
+				// Persist before launching: cancellation must retain the review.
+				e.State.ReviewPending = true
+				if err := e.save(); err != nil {
+					return 1, err
+				}
 				if err := e.review(ctx, final); err != nil {
 					reviewFailures++
 					e.event("review-error", err.Error())
@@ -523,4 +528,9 @@ func requestsWaiting(dir string) bool {
 		}
 	}
 	return false
+}
+
+// reviewDue also repairs old snapshots saved before ReviewPending was set.
+func (e *Engine) reviewDue() bool {
+	return e.State.ReviewPending || (e.Config.ReviewEvery > 0 && e.State.Integrated-e.State.ReviewedAt >= e.Config.ReviewEvery)
 }
