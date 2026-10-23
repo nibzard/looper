@@ -8,9 +8,14 @@ import (
 
 // Tags preserve finding identity and ownership in existing backlog schemas.
 const operatorTaskTag = "looper:operator"
+const deferredTaskTag = "looper:deferred"
 const findingKeyPrefix = "looper:finding:"
 
 const findingInstructions = `Each finding has owner "agent" or "operator". Human grants, credentials, approvals, and actions reserved for an operator use owner "operator"; they remain blocked outside the worker queue.
+Separate local preparation from external publication. Drafting a proposal is agent work; submitting it needs existing authorization.
+Classify work by development round. Do not make later-platform validation a gate for an earlier round unless the specification requires it.
+For future-round work, set defer_until to a concrete resume condition; otherwise use an empty string. Preserve its requirements and dependencies; do not report it complete.
+Use operator ownership only for a concrete action that workers cannot perform. Explain the exact prerequisite and resume condition.
 Use a stable key for the unmet outcome or prerequisite, independent of task title or attempt. Reuse the key from an existing looper:finding:<key> tag.
 When the outcome or blocker is already tracked, set existing_task_id to that task ID, even if its title differs. Otherwise use an empty string. Dependencies must be existing task IDs, never titles.
 Do not create another task to retry the same missing prerequisite or to close duplicate tasks. Attach new evidence to the existing task instead. A follow-up is a report of work, not new authorization.`
@@ -85,21 +90,37 @@ func (e *Engine) addFinding(f Finding) {
 	}
 	operator := operatorFinding(f)
 	if existing != nil {
-		// Keep evidence in the task-linked journal. Editing Details would change
-		// the contract hash and invalidate a sibling worker already in flight.
+		// Finding identity does not change the contract. Only idle coding tasks
+		// can accept repair criteria without invalidating retained work.
 		if key != "" && !hasTaskTag(*existing, findingKeyPrefix+key) {
 			existing.Tags = append(existing.Tags, findingKeyPrefix+key)
 		}
-		if operator {
-			active := existing.Status == "doing"
-			for _, a := range e.State.Attempts {
-				if a.Task.ID == existing.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "resume" {
-					active = true
-				}
+		active := existing.Status == "doing"
+		for _, a := range e.State.Attempts {
+			if a.Task.ID == existing.ID && a.Phase != "done" && a.Phase != "blocked" {
+				active = true
 			}
+		}
+		if !active && f.DeferUntil == "" && !existing.Deferred() && !operator && !existing.OperatorOnly() && (existing.Status == "done" || existing.Status == "todo") {
+			// A completed implementation can still have an unmet requirement.
+			// Retain its attempt history and give the next worker the repair
+			// contract, rather than leaving evidence only in the journal.
+			existing.Status = "todo"
+			repair := "\n\nReview repair: " + f.Title + "\n" + f.Details + "\nEvidence: " + f.Evidence
+			if !strings.Contains(existing.Details, repair) {
+				existing.Details += repair
+			}
+			existing.Blockers = nil
+			existing.UnblockWhen = ""
+			e.State.Finished = false
+		}
+		if operator {
 			if !active {
 				holdForOperator(existing)
 			}
+		}
+		if !active && f.DeferUntil != "" {
+			deferTask(existing, f.DeferUntil)
 		}
 		e.State.PlanSignature = ""
 		e.event("finding", existing.ID+"  Updated existing finding: "+sanitize(f.Title)+"\nEvidence: "+sanitize(f.Evidence))
@@ -122,6 +143,9 @@ func (e *Engine) addFinding(f Finding) {
 	if operator {
 		holdForOperator(&task)
 	}
+	if f.DeferUntil != "" {
+		deferTask(&task, f.DeferUntil)
+	}
 	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, task)
 	e.State.PlanSignature = ""
 	e.State.Finished = false
@@ -137,3 +161,22 @@ func holdForOperator(t *Task) {
 	t.Blockers = mergeUnique(t.Blockers, []string{"An operator must complete this prerequisite; coding workers cannot execute it."})
 	t.UnblockWhen = "Record evidence that the operator completed the action, then mark this task done. To delegate different work, explicitly change its contract and remove looper:operator."
 }
+
+func (t Task) Deferred() bool { return hasTaskTag(t, deferredTaskTag) }
+
+func deferTask(t *Task, condition string) {
+	if t.Status == "done" {
+		return
+	}
+	t.Tags = mergeUnique(t.Tags, []string{deferredTaskTag})
+	t.Status = "blocked"
+	t.Blockers = mergeUnique(t.Blockers, []string{"Deferred: " + condition})
+	t.UnblockWhen = condition + "; remove looper:deferred and set todo when this condition is met."
+}
+
+const taskClassificationInstructions = `Classify tasks by development round and preserve each round's acceptance requirements.
+Keep future-platform validation outside the current round unless the specification explicitly makes it a prerequisite.
+Represent postponed tasks with status blocked, tag looper:deferred, and a concrete unblock_when condition. Do not mark them done.
+Separate autonomous local preparation from external publication. Preparing an upstream proposal does not require posting it.
+Use looper:operator only for concrete actions workers cannot perform under existing authorization. Record the exact prerequisite.
+Never weaken release gates or remove required work to avoid a blocker.`

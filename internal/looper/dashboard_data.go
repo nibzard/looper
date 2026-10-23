@@ -95,7 +95,7 @@ func latestBootstrap(dir string) *bootstrapStream {
 // owner and the bootstrap agent stream.
 func bootstrapView(dir, session string, info *ControllerInfo) *ui.ViewSnapshot {
 	v := &ui.ViewSnapshot{
-		Version: ui.ViewVersion, Session: session, Started: info.Started,
+		Version: ui.ViewVersion, Session: session, Started: info.Started, Root: info.Root,
 		Now: time.Now().UTC().Format(time.RFC3339), Bootstrapping: true,
 		ActivityAgent: info.BootstrapAgent,
 	}
@@ -290,6 +290,11 @@ func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
 		if e.inputPending {
 			ack.Message = "The task file needs correction before Looper can apply changes. Correct it to continue."
 		}
+		return
+	}
+	if t.Deferred() {
+		ack.Status = AckConflict
+		ack.Message = "Task is deferred. Meet its resume condition, then remove looper:deferred and set todo in the task file."
 		return
 	}
 	t.Status = "todo"

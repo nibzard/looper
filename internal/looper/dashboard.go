@@ -245,22 +245,28 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 		return 1
 	}
 	defer observer.Close()
+	attachment := &dashboardAttachment{observer: observer, dir: dir, session: info.Session}
 	controls := ui.Controls{
 		Statistics: func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
-		Inspect:    observer.inspect,
+		Inspect:    attachment.inspect,
 		WorkerLog:  func(id string) (string, string, error) { return workerLog(dir, id) },
 		Log:        func(path string) (string, error) { return plannerLog(dir, path) },
-		Poll:       func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
+		Poll:       attachment.poll,
 		Events:     observer.events,
 		ReadOnly:   !withControls,
 		Diff:       func(id string) (string, error) { return attemptDiff(dir, id) },
 	}
 	if withControls {
-		controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }
+		controls.Requeue = func(taskID, revision string) error {
+			session, err := attachment.currentSession()
+			if err != nil {
+				return err
+			}
+			return requeueTask(dir, session, taskID, revision)
+		}
 		controls.Drain = func() error {
-			current, err := readController(dir)
-			if err != nil || current.Session != info.Session || !dashboardControllerAlive(current) {
-				return fmt.Errorf("The controller session changed. Detach and reconnect before requesting a drain.")
+			if _, err := attachment.currentSession(); err != nil {
+				return err
 			}
 			return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
 		}
@@ -269,7 +275,11 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			if err != nil {
 				return err
 			}
-			_, err = submitPlanImport(dir, info.Session, []string{absolute})
+			session, err := attachment.currentSession()
+			if err != nil {
+				return err
+			}
+			_, err = submitPlanImport(dir, session, []string{absolute})
 			return err
 		}
 	}
@@ -282,7 +292,12 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 		if action.Kind != "settings" {
 			break
 		}
-		notice, err := submitSettingsFromForm(c, dir, info.Session, os.Stdin)
+		session, err := attachment.currentSession()
+		if err != nil {
+			controls.Notice = err.Error()
+			continue
+		}
+		notice, err := submitSettingsFromForm(c, dir, session, os.Stdin)
 		if err != nil {
 			controls.Notice = "settings: " + err.Error()
 		} else {

@@ -32,7 +32,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 	}
 	v := ui.ViewSnapshot{
 		Version: ui.ViewVersion, Goal: e.State.Backlog.Goal,
-		Project: filepath.Base(e.Config.Root), Tasks: make([]ui.TaskView, 0),
+		Root: e.Config.Root, Project: filepath.Base(e.Config.Root), Tasks: make([]ui.TaskView, 0),
 		WorkerLimit: e.capacity, CheckLimit: e.Config.Checks,
 		Now:         time.Now().UTC().Format(time.RFC3339),
 		EventCursor: e.eventCursor,
@@ -101,6 +101,13 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 			v.Blocked = append(v.Blocked, ui.BlockedView{ID: t.ID, Title: t.Title, Reasons: append([]string(nil), t.Blockers...), UnblockWhen: t.UnblockWhen})
 		}
 	}
+	if v.State == "" && !draining && len(v.Attempts) == 0 && v.Counters.Ready > 0 {
+		if e.reviewDue() {
+			v.DispatchReason = "Milestone review is due before dispatch"
+		} else {
+			v.DispatchReason = "Preparing ready tasks for dispatch"
+		}
+	}
 	return v
 }
 
@@ -110,7 +117,7 @@ func attemptView(a *Attempt) ui.AttemptView {
 }
 
 func taskView(t Task, b Backlog) ui.TaskView {
-	v := ui.TaskView{ID: t.ID, Title: t.Title, Status: t.Status, Revision: hashJSON(t), Details: t.Details,
+	v := ui.TaskView{ID: t.ID, Title: t.Title, Status: t.Status, Deferred: t.Deferred(), Revision: hashJSON(t), Details: t.Details,
 		DependsOn: append([]string(nil), t.DependsOn...), Blockers: append([]string(nil), t.Blockers...), UnblockWhen: t.UnblockWhen}
 	for _, id := range t.DependsOn {
 		if dep := b.Task(id); dep == nil || dep.Status != "done" {

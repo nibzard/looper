@@ -19,6 +19,7 @@ type WorkerObservation struct {
 	AttemptID   string              `json:"attempt_id"`
 	TaskID      string              `json:"task_id"`
 	Phase       string              `json:"phase"`
+	Retained    bool                `json:"retained"`
 	Log         string              `json:"log,omitempty"`
 	LastOutput  string              `json:"last_output_at,omitempty"`
 	OutputAge   *int64              `json:"output_age_seconds,omitempty"`
@@ -131,7 +132,9 @@ func observe(c Config, s *State) Observation {
 	if s != nil {
 		for _, a := range s.Attempts {
 			if activeAttempt(a) {
-				o.Workers = append(o.Workers, observeWorker(a))
+				w := observeWorker(a)
+				w.Retained = !o.ControllerOwned
+				o.Workers = append(o.Workers, w)
 			}
 		}
 	}
@@ -169,7 +172,9 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 		for _, a := range s.Attempts {
 			if a.Task.ID == t.ID {
 				attempts = append(attempts, a)
-				workers = append(workers, observeWorker(a))
+				w := observeWorker(a)
+				w.Retained = activeAttempt(a) && !repositoryOwned(c)
+				workers = append(workers, w)
 				logs = append(logs, attemptLogs(a)...)
 			}
 		}
@@ -200,7 +205,11 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 			fmt.Fprintln(out, "Blocked:", sanitize(b))
 		}
 		for _, w := range workers {
-			fmt.Fprintf(out, "%s  %s  %s\n", w.AttemptID, w.Phase, w.Log)
+			phase := w.Phase
+			if w.Retained {
+				phase = "retained (last phase: " + phase + ")"
+			}
+			fmt.Fprintf(out, "%s  %s  %s\n", w.AttemptID, phase, w.Log)
 		}
 		return nil
 	}
@@ -233,7 +242,9 @@ func diagnose(o Observation, s *State) []HealthFinding {
 	}
 	if s != nil {
 		for _, t := range s.Backlog.Tasks {
-			if t.Status == "blocked" {
+			if t.Deferred() && t.Status != "done" {
+				f = append(f, HealthFinding{Code: "task_deferred", Severity: "info", TaskID: t.ID, Message: "The task belongs to later work.", Action: t.UnblockWhen})
+			} else if t.Status == "blocked" {
 				f = append(f, HealthFinding{Code: "task_blocked", Severity: "warning", TaskID: t.ID, Message: "The task reports an unmet prerequisite.", Action: "Read blockers with looper inspect " + t.ID + " --json."})
 			}
 		}
@@ -264,6 +275,23 @@ func doctorJSON(c Config, out io.Writer) int {
 	}
 	o := observe(c, s)
 	findings = append(findings, diagnose(o, s)...)
+	if !o.ControllerOwned && s != nil && retained(s) {
+		head, _ := gitText(c.Root, "rev-parse", "HEAD")
+		branch, _ := gitText(c.Root, "symbolic-ref", "-q", "HEAD")
+		if head != s.Head || branch != s.Branch {
+			findings = append(findings, HealthFinding{Code: "branch_moved", Severity: "warning", Message: "The project branch differs from the retained run baseline.", Action: "Resume accepts a descendant commit on the same branch only when committed and working files match the accepted or verified tree. Preserve other edits and reconcile them before resuming."})
+		}
+		if store != nil {
+			var id int64
+			var raw string
+			if store.db.QueryRow("SELECT id,data FROM events WHERE kind='shutdown' ORDER BY id DESC LIMIT 1").Scan(&id, &raw) == nil {
+				var exit sessionExit
+				if json.Unmarshal([]byte(raw), &exit) == nil {
+					findings = append(findings, HealthFinding{Code: "last_shutdown", Severity: "info", Message: fmt.Sprintf("Session %s ended: %s (exit %d, event %d).", exit.Session, exit.Reason, exit.ExitCode, id), Action: "Read the shutdown event with looper events --json for the recorded cause."})
+				}
+			}
+		}
+	}
 	code := 0
 	for _, f := range findings {
 		if f.Severity == "error" {

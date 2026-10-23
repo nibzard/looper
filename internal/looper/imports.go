@@ -446,6 +446,9 @@ func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef
 		t := proposal.Additions[i]
 		t.ID = local[t.ID]
 		t.Status = "todo"
+		if t.Deferred() {
+			t.Status = "blocked"
+		}
 		t.Priority = max(1, min(5, t.Priority))
 		deps := make([]string, 0, len(t.DependsOn))
 		for _, d := range t.DependsOn {

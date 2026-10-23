@@ -182,7 +182,7 @@ func TestWorkspaceStaleSnapshotAndQuietOutput(t *testing.T) {
 	next, _ := m.Update(tickMsg{})
 	m = next.(model)
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"UNKNOWN", "disconnected", "Last known work", "1/5 complete"} {
+	for _, want := range []string{"UNKNOWN", "disconnected", "Last known work", "1/5 complete", "last phase:", "process unknown"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("stale view missing %q:\n%s", want, view)
 		}
@@ -403,5 +403,22 @@ func TestOverviewNamesAgents(t *testing.T) {
 			t.Fatalf("planner agent missing at width %d:\n%s", width, header)
 		}
 		m.snap.State, m.snap.ActivityAgent = "", ""
+	}
+}
+
+func TestReplacementSnapshotDiscardsPendingTaskDetails(t *testing.T) {
+	m := workspaceFixture()
+	m.workspace.detailID = "T002"
+	m.dialog = "requeue"
+	m.workspace.requeueTask = &TaskView{ID: "T004"}
+	m.workspace.loading = true
+	old := m.workspace.sequence
+	m.acceptSnapshot(&ViewSnapshot{Session: "replacement"})
+	if m.dialog != "" || m.workspace.requeueTask != nil || m.workspace.loading || m.workspace.detailID != "" || m.workspace.sequence == old {
+		t.Fatal("previous session detail survived")
+	}
+	updated, _ := m.Update(taskDetailMsg{taskID: "T002", sequence: old, detail: TaskDetail{}})
+	if updated.(model).workspace.detail != nil {
+		t.Fatal("late detail from previous session accepted")
 	}
 }

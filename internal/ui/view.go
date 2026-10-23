@@ -14,11 +14,13 @@ type ViewSnapshot struct {
 	Started         string         `json:"started,omitempty"`
 	Now             string         `json:"now,omitempty"`
 	State           string         `json:"state,omitempty"`
+	DispatchReason  string         `json:"dispatch_reason,omitempty"`
 	ActivityAgent   string         `json:"activity_agent,omitempty"`
 	ActivityDetail  string         `json:"activity_detail,omitempty"`
 	ActivityUpdated string         `json:"activity_updated,omitempty"`
 	ActivityLog     string         `json:"activity_log,omitempty"`
 	Goal            string         `json:"goal,omitempty"`
+	Root            string         `json:"root,omitempty"`
 	Project         string         `json:"project,omitempty"`
 	Tasks           []TaskView     `json:"tasks,omitempty"`
 	WorkerLimit     int            `json:"worker_limit,omitempty"`
@@ -75,6 +77,7 @@ type TaskView struct {
 	ID          string       `json:"id"`
 	Title       string       `json:"title"`
 	Status      string       `json:"status,omitempty"`
+	Deferred    bool         `json:"deferred,omitempty"`
 	Revision    string       `json:"revision,omitempty"`
 	Details     string       `json:"details,omitempty"`
 	DependsOn   []string     `json:"depends_on,omitempty"`

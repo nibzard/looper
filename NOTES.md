@@ -1266,3 +1266,399 @@ Commit release content first, then change VERSION in its own commit. The
 combined source passes make test and focused race tests before preparation.
 GitHub tags and release publication remain a separate runbook phase. Existing
 controllers keep their executable; local installation does not restart them.
+
+## GitPickle diagnosis, 2026-10-15, 05:09 UTC
+
+Use the looper-diagnose skill for read-only observations of /home/agent/gitpickle.
+Installed Looper is 0.9.0 at 8a5affd, modified false. Compare status at
+05:09:12Z and 05:09:46Z: no controller ownership, no workers, unchanged accepted
+revision and backlog, and no events after 1238. No restart or project edit.
+
+The last controller is run-8f8986e91f7b7e90, Looper 0.8.3 at a09e08d.
+Event 1238 records an error shutdown at 2026-10-14T23:15:01Z: no space left
+on device while writing the task-file export. T006 has a matching context
+mkdir failure. T012 exits 101; its Looper-retained log contains Codex recorder
+errors with StorageFull and operating-system error 28. This establishes disk
+exhaustion for both tasks. It does not identify which workload filled the disk.
+Current capacity is 25 GB free, 88 percent used; inode usage is 9 percent.
+The current project and Looper runtime total approximately 246 MB.
+
+Seven implementations integrated. Nine tasks are done, including the two
+administrative closures T038 and T040. Sixteen tasks are blocked: T006 and
+T012 on disk exhaustion, four on provider resources, three on deployment or
+performance resources, and seven on naming evidence. All 26 todo tasks depend
+on blocked work. No task is ready. External blockers contain stale references
+to the old bootstrap snapshot; accepted source_files contains only gitpickle.md,
+and the workspace and corrected current-stage commands exist.
+
+The export journal is pending. The project task file matches the saved prior
+export hash and still shows T006 as doing; saved execution state shows it
+blocked. Startup can replay this known export transition. T012 retains changed
+archive code, documentation, ignore rules, and a new capture test. T006 retains
+its workspace but has no product changes. Preserve both workspaces.
+
+Recovery recommendation: let startup finish the pending export, explicitly
+reopen T006 and T012 after checking available disk capacity, then resume retained
+work. Version 0.9.0 does not automatically reopen disk-exhaustion blockers;
+this is an external resource failure, not a proven orchestration contract defect.
+Provider resources, deployment access, and the naming decision remain separate
+inputs. No new Looper source defect is established by this incident.
+
+Possible observation improvement: doctor should explicitly flag a pending
+export and explain that the task file can lag saved execution state. Verify
+with an export-journal fixture where saved T006 is blocked and its prior export
+still says doing. Preserve the existing guarded journal replay behavior.
+
+Evidence snapshots and structured task inspections are retained locally in
+/tmp/looper-gitpickle-diagnosis-20261015/. Raw agent logs remain in the runtime
+directory and are not copied into project documentation.
+
+## GitPickle backlog staging, 2026-10-15
+
+The user requests questions first, then backlog edits only. No controller,
+implementation task, provisioning, correspondence, or product test is started.
+Owner decisions: develop/test here with R2 and a disposable private GitHub test
+repository; verify configured Cloudflare/GitHub access before provisioning.
+Defer actual S3/B2 tests, the real-user study, fresh-VM deployment, and full-size
+benchmarks until after implementation. Final VMs use AgentLab on pve2. Naming
+clearance is the last final-validation prerequisite. Preserve original release
+requirements rather than claiming those external checks passed.
+
+Update the accepted backlog and its task-file projection through Engine.export
+under the repository lock. Replay the previous pending export first. A one-shot
+Go overlay helper calls only state/export functions; it starts no engine session
+or agent. Back up SQLite, the accepted state, the original task file, and the
+proposal in runtime/backlog-maintenance-ad73c53df82b425c before mutation.
+
+Split local and final acceptance. T052 gates implementation/local evidence.
+T053/T054 cover final S3/B2 access and evidence. T055 covers fresh pve2 VMs.
+T056 gates complete public-release acceptance. T051 runs full-size benchmarks
+only on the final pinned VM. T031/T032 defer the entire real-user study. T033
+retains naming requirements after other final validation. T034 now prepares
+local release documentation, with complete release acceptance retained in T056.
+
+Administratively consolidate eleven duplicate resource/naming reports into
+T004, T028, and T033. Their entries retain original details plus explicit
+administrative closure reasons. These closures establish no product completion
+or external evidence. Preserve all nine previously completed tasks, all attempt
+records, seven integrations, and T006/T012 implementation contracts. Clear their
+resolved disk blockers to queue retained work for a future run.
+
+Validation: project JSON schema passes. Dependencies are acyclic, and T052 has
+no deferred final gates in its dependency closure. State and task-file content
+match; the export hash matches; export_pending is false. T004, T006, T012, and
+T028 are ready. The controller remains stopped. Only the requested backlog and
+its execution-state projection change in GitPickle.
+
+## GitPickle follow-up diagnosis, 2026-10-15, 06:38 UTC
+
+Compare status at 06:38:16Z and 06:38:34Z. The controller is stopped, workers
+are absent, and no attempts or integrations follow backlog maintenance event
+1239. This matches the owner's backlog-only instruction. Installed Looper is
+0.9.0 at 8a5affd. The backlog has 33 todo, three final-stage blockers, and 20
+done entries. Eleven done entries are administrative consolidations; actual
+integrations remain seven. T004, T006, T012, and T028 are ready. T006/T012
+retained workspaces still exist. The project task file matches saved state and
+its export hash. No export is pending. No new Looper fault is established.
+
+Disk capacity has fallen again: 192 GB used of 195 GB, with 2.4 GB free
+(99 percent used). Current largest home-directory users include walgit at
+54 GB, oss-ai-stack-map at 20 GB, and margin at 17 GB. walgit/target accounts
+for 53 GB of the walgit total. GitPickle's Looper runtime is approximately
+243 MB. These observations identify present storage use; they do not prove
+which workload caused the previous disk-full shutdown or recent growth.
+Reclaim appropriate build output before starting further builds, after checking
+its owning workload. No files are deleted, no resources are provisioned, and
+no controller is started during this diagnosis. Evidence is retained in
+/tmp/gitpickle-diagnosis-repeat/.
+
+## GitPickle check, 2026-10-15, 08:22 UTC
+
+Disk now has 42 GB free (79 percent used). Session run-105e6eb1bd25faae runs
+Looper 0.9.0 at 8a5affd with a matching live view. Between 08:22:27Z and
+08:22:37Z the event cursor advances from 1744 to 1747, and T015 emits new
+activity. Seven prior integrations increase to eleven: T012, T014, T006, and
+T013 integrate at events 1343, 1409, 1551, and 1669. T015 is running; T018
+and T028 are dependency-ready. No export is pending.
+
+T004 is the new development blocker. Event 1452 and its saved summary report
+verified GitHub identity and R2 listing access, but the configured GitHub token
+lacks delete_repo for disposable-repository cleanup. No resources were created.
+The three other blockers remain the explicitly deferred final gates. This
+check changes no GitPickle files, permissions, resources, or controller state.
+
+## GitPickle diagnosis, 2026-10-15, 13:18 UTC
+
+Session run-105e6eb1bd25faae still owns the repository with a matching view,
+Looper 0.9.0 at 8a5affd. Compare 13:18:38Z and 13:19:23Z: event cursor
+2695 and 20 integrations stay unchanged; no workers or checks run. Event 2695
+records waiting at 11:13:30Z. Disk has 54 GB free, 73 percent used. Nine
+implementations integrate after the previous check: T015, T016, T018, T017,
+T019, T020, T021, T028, and T024. The backlog has 33 done, 19 todo, and
+four blocked tasks. Thirteen done entries are administrative; integrations
+remain the product progress measure. No export is pending.
+
+External blocker: T004 still requires disposable GitHub cleanup permission.
+A read-only GitHub API request confirms the current OAuth scopes are gist,
+read:org, repo, and workflow; delete_repo is absent. Every pending task has
+T004 in its unresolved dependency ancestry. The remaining operator blockers
+are the explicitly deferred T032, T033, and T053 final gates.
+
+New Looper defect: confirmed review findings on completed coding tasks have
+no runnable remediation. Review result review-058c32b98169f46f/result.json
+reports three independent agent-owned findings with stable keys and parent IDs:
+remote-archive-readback-verification and large-git-pack-capture refer to T012;
+b2-durable-archive-publication refers to T006. Events 2685 through 2687 attach
+these keys and evidence to those tasks, leave both done, and create no tasks.
+The final review then waits despite reporting three implementation gaps.
+
+The retained review reports a missing remote pack still producing a current
+and verified result because readback uses the local cache; a 64 MiB child-output
+limit preventing a roughly 68 MB pack from being published; and B2 capability
+handling that prevents durable cloud publication. These are the review's
+reproductions, not independently rerun experiments during this diagnosis.
+Deferred actual S3/B2 provider tests do not establish that B2 implementation
+already satisfies the product contract.
+
+Cause confirmed in internal/looper/findings.go: existing_task_id selects a
+completed task, the existing-task branch adds the new key and event, then
+returns without scheduling work. This behavior was added to preserve completed
+status and avoid repeated prerequisite tasks. It also suppresses distinct,
+evidence-backed coding defects that refer to a completed implementation.
+
+Expected: preserve completed implementation history while giving a new verified
+agent defect a separately tracked, runnable repair outcome. Keep operator
+prerequisite deduplication and active contracts unchanged. Smallest useful fix:
+distinguish the completed source task from the active finding task, deduplicate
+by stable defect identity, and route repeated reports to that repair task.
+Already attached unresolved findings in retained journals need a recovery path.
+Verify with a completed T012, two distinct defect keys referencing it, and a
+second report of either key: two runnable repair tasks, stable deduplication,
+and unchanged completed T012 contract/status. Include an operator duplicate
+case and live-contract preservation coverage. No fix or project mutation is
+performed during this diagnosis. Evidence lives in /tmp/gitpickle-diagnosis-current/.
+
+## GitPickle GitHub permission and retry, 2026-10-15
+
+The user completes GitHub CLI device authentication for delete_repo. A read-only
+API response confirms scopes delete_repo, gist, read:org, repo, and workflow.
+The user then authorizes reopening T004 for provisioning. The live controller
+is still run-105e6eb1bd25faae. Remove T004's operator-only tag and obsolete
+permission blocker from the idle backlog, retaining blocked status for an
+explicit guarded retry. The controller imports the edit at event 2696 and
+starts a synchronous review at event 2697.
+
+Submit request requeue-cf69082b341f931b with the current session and task
+revision through the dashboard request transport. The request is pending during
+review. Verify its acknowledgement before claiming application or resubmitting.
+The user's authorization now includes the T004 retry and its existing disposable
+R2/GitHub provisioning scope. Other project defects and deferred gates remain
+separate work. The controller is not restarted.
+
+The review re-adds T004's operator tag at event 2711 despite the verified
+permission and explicit user delegation. Request requeue-cf69082b341f931b
+receives a conflict acknowledgement because that task revision changes. After
+review completes, apply owner removal and todo status together in a guarded
+atomic task-file edit. The controller imports the combined edit, retains T004's
+agent ownership, and starts planning its retry at approximately 13:33 UTC.
+No controller restart or direct database mutation is used. The normal requeue
+transport cannot change ownership, and a separate ownership-only edit triggers
+an unnecessary final review before retry. A combined delegation/requeue request
+would avoid this delay and review-driven reversal.
+
+Retry dispatch confirmed at 13:34 UTC: T004 is doing, with a running worker
+using retained attempt task-1249c40e5cfd6e43 and fresh work session
+24ef263ea0dac0ad. Worker activity appears through event 2804. This establishes
+that the task is reopened and execution resumes, not that provisioning or
+integration has completed. GitHub delete_repo remains verified.
+
+## GitPickle remaining work, 2026-10-15, 13:48 UTC
+
+After the authorized T004 retry, event 2859 reports a private GitHub test
+repository and disposable R2 bucket created, with listing/readback/privacy and
+cleanup checks passing. T004 remains blocked: Cloudflare scoped-token creation
+returns HTTP 403, code 9109, and R2 S3-compatible runtime credentials are absent.
+The GitHub delete_repo issue is resolved; R2 listing access alone does not
+establish authority to mint credentials or run signed adapter tests. Do not
+change token permissions or claim live provider acceptance during this check.
+
+The latest completed review, ending at event 2883, reproduces the 64 MiB
+capture limit and adds a restore-restart defect: accepted restore jobs remain
+queued after reconstructing daemon state because restore execution queues are
+initialized empty and only fresh plan_apply submits execution. B2 protection
+also remains unsupported by the conditional-create path. Events 2873–2875
+again attach distinct findings to completed T012/T014/T006 without runnable
+repair tasks. Product remediation and the Looper finding-routing fix remain
+separate required work. At 13:48 the controller owns the project and reviews
+another refreshed baseline; integrations remain 20. No project edits occur.
+
+## GitPickle R2 credential handoff, 2026-10-15
+
+The owner supplies bucket-scoped R2 S3 credentials for gitpickle-dev-tests.
+Store only the access key, secret key, and nonsecret storage configuration in
+/home/agent/.config/gitpickle/r2-test.env with directory mode 0700 and file
+mode 0600. Do not copy credential values into notes, task files, or output.
+The separate Cloudflare API token is not stored.
+
+A bounded signed S3 probe verifies listing, object write, readback, and delete
+under gitpickle-development/.looper-access-check/. The exact owned temporary
+object is removed. Its nonsecret receipt is r2-access-check.json beside the
+private environment file. This verifies access, not the full provider contract.
+
+Update T004 through a checked atomic backlog edit while the live controller
+is idle. Remove operator ownership and queue todo in the same edit. The new
+contract explicitly sources the private runtime file, permits only owned-prefix
+object cleanup, and preserves the owner-provided bucket. Token creation and
+its old HTTP 403 are no longer prerequisites. Keep GitHub disposable-fixture
+cleanup and prior resource evidence separate. No secrets enter the backlog.
+Controller import and retry dispatch remain to be confirmed.
+
+Follow-up status confirms the live controller imports the credential handoff.
+T004 is todo without operator ownership, and the private file mode is 0600.
+No worker dispatch or full provisioning completion is claimed at this point.
+
+## GitPickle review repair, 2026-10-15, 19:58 UTC
+
+The owner requests fixes after diagnosis of session run-58f364dd4667b5a2.
+Events 5178 and 5179 report unresolved B2 publication and guided setup defects
+against completed T006 and T020. Event 5190 waits with no runnable work.
+The running binary and source both use revision 8a5affd.
+
+Fix finding handling by reopening completed coding tasks and appending repair
+criteria and evidence to idle coding tasks. Keep completed attempt history,
+operator ownership, blockers, and active or retained contracts protected.
+This uses the existing task identity rather than the separate repair tasks
+suggested by the earlier diagnosis. Multiple findings retain all repair criteria;
+exact repeated reports do not duplicate them. Clear stale completion and plans.
+
+Regression tests reproduce the original failure by ID, key, and title. Additional
+cases cover multiple defects and retained attempts. Targeted tests pass.
+The full check suite is in progress. No binary is installed or controller restarted.
+
+Recover the live GitPickle run through its supported idle backlog refresh.
+A guarded atomic edit reopens only T006 and T020 with the current review evidence
+and concrete acceptance criteria. Validate the schema and dependency graph first.
+Preserve the five external operator blockers and deferred live provider tests.
+Back up the original and proposed task files in /tmp/gitpickle-review-repair-*.
+
+Recovery confirmation: event 5191 imports the edit and event 5192 starts planning
+in the original session. At 20:01:17 UTC, T006 has a running worker and T020
+remains queued. The five operator blockers remain unchanged. These observations
+confirm resumed execution, not completed product repairs.
+
+Validation complete: make test passes, including Go tests, go vet, eight installer
+tests, build stamp checks, 55 runtime tests, package smoke tests, and skill checks.
+git diff --check passes. Changes remain uncommitted. The built fix is not
+installed, so the live controller still uses its original binary.
+
+The owner then requests installation. Run ./install.sh --skip-skills to install
+only the fixed binary at /home/agent/.local/bin/looper. No controller restart
+is requested or performed. Existing controllers retain their loaded binaries.
+
+## Melt review recovery and clipboard, 2026-10-18
+
+Observed Melt session run-19ebffa67b339858 on Looper 0.9.0, revision
+8a5affd849b7 with local changes. Events 768-772 show a cancelled review,
+restart, and zero workers despite three ready tasks. Five integrations
+were saved, but reviewed_at was zero and review_pending was absent.
+The milestone limit then prevented dispatch without scheduling a review.
+
+The run loop now derives overdue reviews from integration counters and
+persists review_pending before launching review. The regression fixture
+loads the old inconsistent state, cancels two reviews, and confirms that
+successful review permits worker dispatch. It uses only stub agents.
+Idle snapshots expose the pending review as a dispatch reason.
+
+Planning, bootstrap, import, and finding guidance now separates development
+rounds and local proposal preparation from external publication. Findings
+can provide defer_until. Looper retains these as blocked tasks with a
+looper:deferred tag and a concrete resume condition. Generic retries cannot
+dispatch them. They remain required work. Task views show deferred status;
+doctor reports an informational finding instead of an urgent blocker.
+Existing operator restrictions remain separate and unchanged.
+
+The c shortcut copies full run state, the selected task and blockers, or
+an open log, diff, or activity view. It copies data rather than a clipped
+viewport, strips terminal controls, and does not intercept search input.
+OSC 52 output goes through Bubble Tea's terminal release and restore path.
+The notice reports a sent request, because terminals do not acknowledge
+clipboard changes. Real terminal clipboard integration remains untested.
+
+Preserved pre-existing edits to findings.go, findings_test.go, and this file.
+No installation or live controller restart is part of this source change.
+
+Validation: make test passes, including Go tests, static analysis, installer
+and build checks, the runtime suite, package smoke tests, and skill checks.
+Focused race checks pass for review cancellation and restart, deferral,
+clipboard output, and narrow screens. Import and requeue regression tests
+pass after the final deferral changes. The final binary builds, and
+`git diff --check` passes. The binary remains in build/looper; it is not
+installed. Existing controllers retain their loaded binaries.
+
+The owner clarifies that copying should prepare a paste into a coding agent.
+The c shortcut now creates a self-contained diagnosis request with the project
+root, session, snapshot time, event cursor, selected task and blockers, and
+commands to verify live state. It retains full blocker text and adds relevant
+attempt paths and up to eight recent events. Large logs and diffs have labeled
+excerpts. Old snapshots explicitly report an unavailable project root.
+Focused clipboard, handoff, snapshot, and narrow-screen tests pass. The binary
+builds and the diff check passes. This update is not installed.
+
+The owner requests installation. Installed with ./install.sh --skip-skills.
+The installed /home/agent/.local/bin/looper matches build/looper byte for byte.
+Version reports 0.9.0 at 8a5affd849b7 with local changes. Existing controllers
+are not restarted. New TUI sessions use the agent-handoff copy shortcut.
+
+## Melt controller replacement and retained publication, 2026-10-18
+
+Observed Melt session run-27e0c879608a4e5c end at event 3497 because
+Git HEAD moved. T023 had passed its executable check. Its publication
+remained retained. The new commit contained the accepted project files
+plus the backlog files. A backed-up state repair allowed session
+run-5110029aa6d38455 to publish T023 and continue.
+
+The attached overview still showed 22/36 tasks while Tasks showed current
+work. Source confirms that overview polling captured the original session,
+while task inspection read the current database. An attached viewer now
+follows a replacement controller. It rejects actions and task reads until
+the replacement session is displayed. Session changes discard pending task
+details and confirmation dialogs. Disconnected work shows its last phase
+and unknown process status instead of claiming a running process.
+
+Startup recovery now accepts a descendant commit on the same branch only
+when committed and working project files equal the accepted tree or the
+verified publication candidate. Backlog hashes, staged project changes,
+branch identity, ancestry, and normal publication checks remain enforced.
+Recovery records the old and new HEAD values. It does not rewrite Git history.
+Doctor reports a moved branch and the last recorded shutdown. Status and
+inspection label attempts retained when no controller owns the repository.
+
+Isolated regression fixtures cover accepted and candidate commits, rejected
+file/index/branch/backlog changes, replacement sessions, disconnected actions,
+late task details, stale process labels, and recovery diagnostics. Existing
+uncommitted work remains preserved. No live controller is restarted and no
+binary is installed as part of this change.
+
+Validation: make test passes, including Go tests, static analysis, installer
+and build stamp checks, all 55 runtime tests, package smoke tests, and skill
+checks. Focused race tests pass for attachment, startup recovery, diagnostics,
+observation, and dashboard behavior. Final UI checks cover stale labels and
+confirmation invalidation. The final binary builds and git diff --check passes.
+The build remains local; existing controllers and installed binaries are unchanged.
+
+## Melt clipboard through tmux and iPhone, 2026-10-18
+
+The owner reports that dashboard c does not reach the iPhone clipboard while
+using Termius through tmux on this VM. Read-only checks find tmux 3.4 with
+set-clipboard external, allow-passthrough off, and an attached xterm-256color
+client advertising the clipboard capability. Looper emits plain OSC 52.
+Tmux documents that external rejects requests from applications inside panes.
+
+Set set-clipboard on in the running tmux server and persist that option in
+/home/agent/.tmux.conf. Keep passthrough disabled; plain OSC 52 uses tmux's
+clipboard support. The option and Ms capability are verified after the edit.
+No Looper restart or binary change is required. Actual iPhone paste remains
+unverified and requires the owner to press c and paste on the phone.
+If terminal clipboard support still fails, tmux show-buffer displays the
+latest accepted payload for manual selection; do not claim this proves
+Termius copied it into the iOS clipboard.

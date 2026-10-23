@@ -72,6 +72,9 @@ func (m *model) initWorkspace() {
 }
 
 func taskPhase(t TaskView) string {
+	if t.Deferred && t.Status != "done" {
+		return "deferred"
+	}
 	if t.Status == "blocked" {
 		return "blocked"
 	}
@@ -98,7 +101,7 @@ func taskRank(t TaskView) int {
 		return 1
 	case "ready":
 		return 2
-	case "waiting":
+	case "waiting", "deferred":
 		return 3
 	case "done":
 		return 4
@@ -131,7 +134,7 @@ func (m model) filteredTasks() []TaskView {
 				continue
 			}
 		case 3:
-			if phase != "waiting" {
+			if phase != "waiting" && phase != "deferred" {
 				continue
 			}
 		case 4:
@@ -322,6 +325,8 @@ func (m model) workspaceKeys(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 			t := m.workspaceTask()
 			if t == nil || t.Status != "blocked" {
 				m.message = "Only blocked tasks can be requeued."
+			} else if t.Deferred {
+				m.message = "Meet the resume condition, then remove looper:deferred and set todo in the task file."
 			} else if m.ctrl.ReadOnly || m.ctrl.Requeue == nil {
 				m.err = "This view cannot requeue tasks. Resolve the blocker and set the task to todo while Looper is idle."
 			} else if !m.workspace.requeuePending {
@@ -547,7 +552,7 @@ func (m model) overviewRows() []overviewRow {
 	var attention, active []TaskView
 	waiting := 0
 	for _, t := range m.orderedTasks() {
-		if t.Status == "blocked" || (t.Attempt != nil && t.Attempt.Repeats > 0) {
+		if (t.Status == "blocked" && !t.Deferred) || (t.Attempt != nil && t.Attempt.Repeats > 0) {
 			attention = append(attention, t)
 		}
 		if taskRank(t) == 1 {
@@ -600,7 +605,15 @@ func (m model) overviewRows() []overviewRow {
 			if m.width >= 120 && a.ProcessStarted != "" {
 				evidence += " · process age " + ageLabel(a.ProcessStarted, m.referenceTime())
 			}
-			taskRow(t, attemptLabel(*a)+" · "+evidence+" · "+plainText(a.Title))
+			label := attemptLabel(*a)
+			if m.staleView || m.snap.Stale {
+				label = "last phase: " + label
+				evidence = "process unknown"
+				if a.LastOutput != "" {
+					evidence += " · last output " + ageLabel(a.LastOutput, time.Now()) + " ago"
+				}
+			}
+			taskRow(t, label+" · "+evidence+" · "+plainText(a.Title))
 		}
 		if len(shown) < len(active) {
 			add(fmt.Sprintf("  %d more active tasks · [u] Tasks", len(active)-len(shown)))
@@ -765,7 +778,7 @@ func (m model) workspaceFooter() string {
 			if t.Attempt != nil && m.ctrl.Diff != nil {
 				hints = append(hints, struct{ key, label string }{"d", "diff"})
 			}
-			if t.Status == "blocked" && !m.ctrl.ReadOnly && m.ctrl.Requeue != nil {
+			if t.Status == "blocked" && !t.Deferred && !m.ctrl.ReadOnly && m.ctrl.Requeue != nil {
 				hints = append(hints, struct{ key, label string }{"r", "requeue"})
 			}
 		}
@@ -777,6 +790,7 @@ func (m model) workspaceFooter() string {
 	if m.width < 50 {
 		hints = []struct{ key, label string }{{"b", "overview"}, {"u", "tasks"}, {"?", "help"}, {"q", exit}}
 	}
+	hints = append([]struct{ key, label string }{{"c", "copy"}}, hints...)
 	var bindings []key.Binding
 	for _, h := range hints {
 		bindings = append(bindings, key.NewBinding(key.WithKeys(h.key), key.WithHelp(h.key, h.label)))
@@ -798,7 +812,11 @@ func (m model) workspaceFooter() string {
 		if m.mode == ModeInspect || m.mode == ModeLog || m.mode == ModeHelp || m.mode == ModeDiff {
 			context = "[esc] Back"
 		}
-		return truncate(context+" [?] Help [q] "+exitLabel, m.width)
+		footer := context + " [c] Copy [?] Help [q] " + exitLabel
+		if lipgloss.Width(footer) > m.width {
+			footer = "[c] Copy [?] Help [q] " + exitLabel
+		}
+		return truncate(footer, m.width)
 	}
 	if m.width < 80 {
 		return h.View(workspaceBindings{bindings: bindings[:min(3, len(bindings))]}) + "\n" + "[?] Help · [q] " + exit
@@ -901,7 +919,9 @@ func (m model) inspectorContent(width int) string {
 	}
 	add("Blockers", strings.Join(t.Blockers, "; "))
 	add("Recovery", t.UnblockWhen)
-	if t.Status == "blocked" {
+	if t.Deferred {
+		lines = append(lines, "Deferred work stays outside the worker queue until explicitly resumed.", "")
+	} else if t.Status == "blocked" {
 		lines = append(lines, "Resolve the blocker, then requeue while Looper is idle.", "")
 	}
 	if a := t.Attempt; a != nil {

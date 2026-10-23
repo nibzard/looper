@@ -152,6 +152,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.initWorkspace()
 	m.sizeViewports()
 	switch msg := msg.(type) {
+	case clipboardResult:
+		if msg.err != nil {
+			m.err = "Copy failed: " + msg.err.Error()
+		} else {
+			m.err = ""
+			m.message = "Agent handoff sent to terminal clipboard"
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.diffView.Width, m.tailView.Width = msg.Width, msg.Width
@@ -174,7 +182,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ViewSnapshot:
 		m.preserveTaskSelection()
-		m.snap = &msg
+		m.acceptSnapshot(&msg)
 		m.staleView = false
 		m.trackBootstrap(&msg)
 		m.syncTasks()
@@ -218,7 +226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ctrl.Poll != nil {
 			m.preserveTaskSelection()
 			if snap := m.ctrl.Poll(); snap != nil {
-				m.snap = snap
+				m.acceptSnapshot(snap)
 				m.staleView = false
 				m.trackBootstrap(snap)
 			} else {
@@ -309,6 +317,8 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch strings.ToLower(msg.String()) {
+	case "c":
+		return m, copyToClipboard(m.copyText())
 	case "ctrl+c":
 		if m.ctrl.ReadOnly || m.ctrl.Snapshot == nil {
 			return m, tea.Quit
@@ -751,6 +761,9 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 	if v.Counters.Ready == 0 {
 		return "No ready tasks"
 	}
+	if v.DispatchReason != "" {
+		return plainText(v.DispatchReason)
+	}
 	return "SCHEDULING"
 }
 
@@ -1154,7 +1167,7 @@ func (m model) footer() string {
 	} else if m.snap != nil && m.snap.ActivityLog != "" {
 		logLabel = "[l] Controller log"
 	}
-	keys := []string{logLabel}
+	keys := []string{"[c] Copy", logLabel}
 	if m.selectedAttempt() != "" {
 		keys = append(keys, "[d] Diff")
 	}
@@ -1213,6 +1226,7 @@ spinner with growing idle time reports a stalled agent stream.
 
 Keys (letters work in either case)
   [j/k], arrows     select workers; scroll at the ends
+  [c]               copy an agent handoff with state and relevant evidence
   [v]               toggle full board details on small screens
   [pgup/pgdn]       scroll the board or current view
   [d]               diff of the selected attempt's worktree
@@ -1393,4 +1407,19 @@ func (m *model) sizeViewports() {
 	if m.mode == ModeLog {
 		m.tailView.Height = max(1, m.height-lipgloss.Height(m.logHeader())-lipgloss.Height(footer)-2)
 	}
+}
+
+// Discard details from the previous controller, including pending responses.
+func (m *model) acceptSnapshot(snap *ViewSnapshot) {
+	if m.snap != nil && m.snap.Session != snap.Session {
+		m.workspace.sequence++
+		m.dialog = ""
+		m.workspace.requeueTask = nil
+		m.workspace.detail = nil
+		m.workspace.detailID = ""
+		m.workspace.detailErr = ""
+		m.workspace.loading = false
+		m.message = "Reconnected to the current controller."
+	}
+	m.snap = snap
 }
