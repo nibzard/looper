@@ -1662,3 +1662,15 @@ unverified and requires the owner to press c and paste on the phone.
 If terminal clipboard support still fails, tmux show-buffer displays the
 latest accepted payload for manual selection; do not claim this proves
 Termius copied it into the iOS clipboard.
+
+## Worktree consolidation, 2026-10-23
+
+The owner requests consolidation of retained worktrees into the main branches.
+The existing source edits are committed on main. Context notes record the backup
+location and validation. The retained release worktree registration is pruned.
+
+Validation: make test passes. This includes Go tests, go vet, installer and build
+checks, all 55 runtime tests, package smoke checks, and skill regression checks.
+Four runtime tests initially fail under concurrent builds. All four pass in an
+isolated rerun, and the complete make test rerun passes. No binary is installed.
+The Gitpickle controller is stopped for repository consolidation.
