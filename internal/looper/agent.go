@@ -216,7 +216,13 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 					continue
 				}
 			}
-			return nil, &AgentError{failure, fmt.Sprintf("%v; see %s", err, log)}
+			detail := fmt.Sprintf("%v; see %s", err, log)
+			if message := streamErrorMessage(raw); message != "" {
+				// The agent's own failure text names account, model, and
+				// request errors that the exit code alone hides.
+				detail = fmt.Sprintf("%v; agent reported: %s; see %s", err, message, log)
+			}
+			return nil, &AgentError{failure, detail}
 		}
 		if kind == "codex" {
 			raw, err = readBounded(resultPath, 8<<20)
@@ -322,9 +328,11 @@ func extractObject(b []byte) (json.RawMessage, error) {
 // Classification reads only the process error and the tail of the event log.
 // The whole session log cannot be trusted here: a timed-out test the agent was
 // fixing, a matching file name, or a bare number in echoed output would turn a
-// deterministic failure into hours of retries.
+// deterministic failure into hours of retries. Configuration covers account
+// and entitlement failures (expired credit, unsupported model for the account
+// tier) that repeat identically until an operator intervenes.
 var transientFailure = regexp.MustCompile(`(?i)\b(?:429|500|502|503|504|529)\b|rate.?limit|too many requests|bad gateway|service unavailable|gateway timeout|overloaded|connection (?:reset|refused|dropped)|network (?:error|unreachable|timeout)|temporarily unavailable|econnreset|econnrefused|etimedout|socket hang up`)
-var configurationFailure = regexp.MustCompile(`(?i)\b(?:401|403)\b|unauthorized|authentication|permission denied|invalid api key`)
+var configurationFailure = regexp.MustCompile(`(?i)\b(?:401|403)\b|unauthorized|authentication|permission denied|invalid api key|credit balance|billing|quota|usage limit|not supported when using|model .{0,60} not supported`)
 
 func classifyFailure(s string) string {
 	if transientFailure.MatchString(s) {
@@ -334,6 +342,42 @@ func classifyFailure(s string) string {
 		return "configuration"
 	}
 	return "execution"
+}
+
+// streamErrorMessage returns the agent's own failure text from the tail of an
+// event stream, or "" when the stream records no error. Codex reports
+// {"type":"error","message":...} and {"type":"turn.failed","error":{...}};
+// Claude reports a result with is_error. Scanning backwards returns the
+// failure that ended the turn when earlier errors were recovered.
+func streamErrorMessage(raw []byte) string {
+	lines := bytes.Split(tail(raw, 64<<10), []byte{'\n'})
+	for i := len(lines) - 1; i >= 0; i-- {
+		var o struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			IsError bool   `json:"is_error"`
+			Result  string `json:"result"`
+		}
+		if json.Unmarshal(lines[i], &o) != nil {
+			continue
+		}
+		message := ""
+		switch {
+		case o.Type == "error":
+			message = o.Message
+		case o.Type == "turn.failed":
+			message = o.Error.Message
+		case o.Type == "result" && o.IsError:
+			message = o.Result
+		}
+		if message != "" {
+			return shortText(message, 300)
+		}
+	}
+	return ""
 }
 func tail(b []byte, n int) []byte {
 	if len(b) > n {
@@ -356,13 +400,19 @@ func workerPrompt(b Backlog, t Task, c agentContext) string {
 	if len(sources) > 1024 {
 		sources = []byte(`(listed in the accepted backlog snapshot)`)
 	}
+	goal := strings.Join(strings.Fields(b.Goal), " ")
+	if len(goal) > 512 {
+		// The inline budget would clip the goal mid-word. Refer to the
+		// complete goal instead of presenting a truncated value as the goal.
+		goal = "The complete goal does not fit in this prompt. Read the accepted backlog snapshot at " + c.Backlog + ", extract its goal field, and work from that complete goal. Do not print the entire backlog or treat this line as the goal."
+	}
 	p := fmt.Sprintf(`Complete task %s: %s.
 You work autonomously in a private Git worktree. Read repository instructions and source files %s.
 Project goal: %s
 Task contract:
 %s
 Implement the outcome and exercise its acceptance criteria. Repair problems you can resolve locally.
-Setup and verification must leave tracked and unignored project files unchanged.
+Setup and verification must preserve the project files they receive; checks receive uncommitted candidate changes in a detached worktree, so do not require an empty Git status or infer candidate history from HEAD.
 Include ignore rules for generated output in your implementation. Remove tracked build artifacts when necessary.
 Do not edit the backlog, other worktrees, shared Git refs, or repository configuration. Do not push.
 Use LOOPER_RESOURCE_PREFIX for private databases and temporary resources. Bind servers to free ports.
@@ -374,11 +424,11 @@ Return JSON: task_id, status (done or blocked), summary, files (array), blockers
 followups (array of title, details, evidence, depends_on, priority, owner, key, existing_task_id), and unblock_when (string).
 Capture concrete missing work in followups; do not invent unrelated product goals.
 %s
-`, shortText(t.ID, 80), shortText(t.Title, 160), sources, shortText(b.Goal, 512), contract, findingInstructions)
+`, shortText(t.ID, 80), shortText(t.Title, 160), sources, goal, contract, findingInstructions)
 	p += c.references()
 	p += "Read requirements relevant to this task. Use the complete index to find constraints; unrelated tasks are context only.\n"
 	if c.Feedback != "" {
-		p += "\nRepair the task using the retained code and this evidence. Inspect existing edits before changing them.\nRead repair feedback: " + c.Feedback
+		p += "\nRepair the task using the retained code and this evidence. Inspect existing edits before changing them.\nRead repair feedback: " + c.Feedback + "\nRead that feedback and the earlier attempt records it names for this failure before repeating an approach; you need not reread every log or rerun every command."
 	}
 	return p
 }
@@ -395,7 +445,11 @@ Return JSON with setup (shell command or empty string), verify (shell command),
 and tasks [{task_id, write_paths: [relative file or directory prefixes], resources: [shared interface names]}].
 Include each unfinished task. Use ["."] when the write scope is uncertain. Include generated files and wiring.
 Setup must recreate ignored dependencies in each worktree. Never share mutable build output between worktrees.
-Setup and verification must leave tracked and unignored project files unchanged; workers must implement any needed ignore rules.
+Setup and verification must preserve the project files they receive.
+Checks receive uncommitted candidate changes in a detached worktree.
+Do not require an empty Git status or infer candidate history from HEAD.
+Looper compares project trees to detect changes made by your commands.
+Workers must implement ignore rules for generated output.
 Checks must execute meaningful acceptance checks for the current implementation stage; a no-op is invalid.
 Do not require commands implemented by later unfinished tasks. Preserve those commands in their task requirements and final review.
 Checks run in a fresh integrated worktree. Verify product behavior without depending on Looper-private refs or worker commit history.

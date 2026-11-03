@@ -57,6 +57,38 @@ func TestWorkspaceOverviewOrientation(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAttentionAfterRepair(t *testing.T) {
+	for _, status := range []string{"doing", "done"} {
+		t.Run(status, func(t *testing.T) {
+			m := workspaceFixture()
+			phase := "running"
+			if status == "done" {
+				phase = "done"
+			}
+			attempt := AttemptView{ID: "repaired", TaskID: "T001", Phase: phase, Repairs: 1, Repeats: 1}
+			m.snap.Tasks[0].Status = status
+			m.snap.Tasks[0].Attempt = &attempt
+			m.syncTasks()
+			var lines []string
+			for _, row := range m.overviewRows() {
+				lines = append(lines, ansi.Strip(row.text))
+			}
+			view := strings.Join(lines, "\n")
+			wantWarning := status != "done"
+			if strings.Contains(view, "Repeated failure") != wantWarning {
+				t.Fatalf("unexpected repair warning for %s task:\n%s", status, view)
+			}
+			wantCount := "Attention · 1 task"
+			if wantWarning {
+				wantCount = "Attention · 2 tasks"
+			}
+			if !strings.Contains(view, wantCount) || !strings.Contains(view, "Redis is unavailable") {
+				t.Fatalf("unexpected attention items:\n%s", view)
+			}
+		})
+	}
+}
+
 func TestWorkspaceShowsInputWaitWithoutEventHistory(t *testing.T) {
 	for _, size := range [][2]int{{100, 24}, {50, 16}, {30, 12}} {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {

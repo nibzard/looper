@@ -78,6 +78,67 @@ func TestSmallTaskKeepsAcceptanceCriteriaInline(t *testing.T) {
 	}
 }
 
+func TestPlanPromptExplainsCheckWorktreeContract(t *testing.T) {
+	prompt := planPrompt(Backlog{}, agentContext{})
+	for _, phrase := range []string{
+		"Setup and verification must preserve the project files they receive.",
+		"Checks receive uncommitted candidate changes in a detached worktree.",
+		"Do not require an empty Git status or infer candidate history from HEAD.",
+		"Looper compares project trees to detect changes made by your commands.",
+		"Workers must implement ignore rules for generated output.",
+	} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("planner prompt lost the delivery explanation: %q", phrase)
+		}
+	}
+}
+
+func TestWorkerPromptExplainsCheckWorktreeContract(t *testing.T) {
+	task := Task{ID: "T1", Title: "one", Status: "todo"}
+	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json"})
+	for _, phrase := range []string{
+		"preserve the project files they receive",
+		"uncommitted candidate changes in a detached worktree",
+		"empty Git status",
+	} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("worker prompt lost the delivery explanation: %q", phrase)
+		}
+	}
+}
+
+func TestWorkerPromptKeepsShortGoalInline(t *testing.T) {
+	task := Task{ID: "T1", Title: "one", Status: "todo"}
+	prompt := workerPrompt(Backlog{Goal: "ship the game with score 12345"}, task, agentContext{Backlog: "backlog.json"})
+	if !strings.Contains(prompt, "Project goal: ship the game with score 12345") {
+		t.Fatalf("short goal not inline: %q", prompt)
+	}
+}
+
+func TestWorkerPromptRefersToCompleteGoalWhenLong(t *testing.T) {
+	task := Task{ID: "T1", Title: "one", Status: "todo"}
+	// The 512-byte budget cuts this goal inside the score number.
+	goal := strings.Repeat("Keep every mode playable. ", 18) + "The final score target is 987654321098765432109876543210. Extended play rules follow."
+	prompt := workerPrompt(Backlog{Goal: goal}, task, agentContext{Backlog: "backlog.json"})
+	if !strings.Contains(prompt, "Read the accepted backlog snapshot at backlog.json") || !strings.Contains(prompt, "extract its goal field") {
+		t.Fatalf("long goal lacks the complete-goal reference:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "9876543210") {
+		t.Fatalf("clipped number presented as the goal:\n%s", prompt)
+	}
+	if len(prompt) > 4<<10 {
+		t.Fatalf("long goal broke the prompt budget: %d bytes", len(prompt))
+	}
+}
+
+func TestRepairPromptAsksForPriorResults(t *testing.T) {
+	task := Task{ID: "T1", Title: "one", Status: "todo"}
+	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json", Feedback: "feedback.md"})
+	if !strings.Contains(prompt, "Read that feedback and the earlier attempt records it names for this failure") {
+		t.Fatalf("repair prompt lacks the prior-results sentence:\n%s", prompt)
+	}
+}
+
 func TestMissingAppliedContextPreventsWorkAndCompletion(t *testing.T) {
 	for _, operation := range []string{"plan", "worker", "review"} {
 		t.Run(operation, func(t *testing.T) {

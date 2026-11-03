@@ -260,8 +260,26 @@ func (e *Engine) initialize(ctx context.Context) error {
 }
 
 func (e *Engine) initializeState(ctx context.Context) error {
+	// Saved identity is checked before anything can write: bootstrapping a
+	// different task-file selection would run an agent and create a second
+	// backlog before the mismatch is detected.
+	s, err := e.Store.Load()
+	if err != nil {
+		return err
+	}
+	if s != nil && (s.Version != 2 || s.Root != e.Config.Root || s.Todo != e.Config.Todo) {
+		if s.Todo != e.Config.Todo {
+			return fmt.Errorf("saved state belongs to task file %q, but %q is selected; rerun with the saved task file", s.Todo, e.Config.Todo)
+		}
+		return fmt.Errorf("saved state belongs to another project or version")
+	}
 	var bootstrapPlans []capturedPlan
-	if _, err := os.Stat(e.Config.Todo); errors.Is(err, os.ErrNotExist) {
+	if _, statErr := os.Stat(e.Config.Todo); errors.Is(statErr, os.ErrNotExist) {
+		if s != nil {
+			// Bootstrap must not rebuild the backlog of a saved run: the
+			// operator restores the saved task file instead.
+			return fmt.Errorf("the saved task file %s is missing; restore it before resuming the retained run", e.Config.Todo)
+		}
 		// A fresh project reads project context and all explicitly supplied
 		// plans together, with a recoverable staging record.
 		if len(e.Config.Plans) > 0 {
@@ -273,7 +291,7 @@ func (e *Engine) initializeState(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := os.Stat(e.Config.SchemaPath()); errors.Is(err, os.ErrNotExist) {
+	if _, err = os.Stat(e.Config.SchemaPath()); errors.Is(err, os.ErrNotExist) {
 		if err = atomicWrite(e.Config.SchemaPath(), []byte(backlogSchema), 0644); err != nil {
 			return err
 		}
@@ -289,10 +307,6 @@ func (e *Engine) initializeState(ctx context.Context) error {
 	if err = b.Validate(); err != nil {
 		return err
 	}
-	s, err := e.Store.Load()
-	if err != nil {
-		return err
-	}
 	if s == nil {
 		s, err = e.importLegacy(b, data)
 		if err != nil {
@@ -300,9 +314,6 @@ func (e *Engine) initializeState(ctx context.Context) error {
 		}
 	}
 	if s != nil {
-		if s.Version != 2 || s.Root != e.Config.Root || s.Todo != e.Config.Todo {
-			return fmt.Errorf("saved state belongs to another project, task file, or version")
-		}
 		e.State = s
 		if s.ExportPending {
 			if err = e.export(); err != nil {
@@ -439,8 +450,9 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 		prompt += "\nThese plan documents are part of the project requirements and must be covered exactly once. Read every document in this index: " + c.NewRequirements
 	}
 	prompt += c.references()
+	prompt += "\nUse only fields in this JSON schema. Priorities must be integers from 1 to 5. Put development rounds in details or tags, not extra fields.\n" + backlogSchema
 	if correction != "" {
-		prompt += "\nYour previous source list was rejected: " + correction + "\nReturn a corrected backlog. Do not include private context sources."
+		prompt += "\nYour previous backlog was rejected: " + correction + "\nReturn a corrected backlog that satisfies the schema and preserves all project requirements. Do not include private context sources."
 	}
 	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
 	if err != nil {
@@ -450,13 +462,14 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 		return err
 	}
 	var b Backlog
-	if err = json.Unmarshal(raw, &b); err != nil {
-		return err
+	validationErr := json.Unmarshal(raw, &b)
+	if validationErr == nil {
+		validationErr = b.Validate()
 	}
-	if err = b.Validate(); err != nil {
-		return err
+	if validationErr == nil {
+		validationErr = e.Repo.validateBootstrapSources(b.Sources)
 	}
-	if err = e.Repo.validateBootstrapSources(b.Sources); err != nil {
+	if validationErr != nil {
 		if correction == "" {
 			after, captureErr := e.Repo.Snapshot(work)
 			if captureErr != nil {
@@ -465,10 +478,10 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 			if after != tree {
 				return fmt.Errorf("bootstrap changed code; its result was not applied")
 			}
-			e.event("bootstrap-correction", "Rejected private source; requesting one corrected backlog.")
-			return e.bootstrapResponse(ctx, plans, err.Error())
+			e.event("bootstrap-correction", "Rejected invalid backlog; requesting one corrected backlog: "+validationErr.Error())
+			return e.bootstrapResponse(ctx, plans, validationErr.Error())
 		}
-		return err
+		return fmt.Errorf("bootstrap backlog rejected after correction (result: %s): %w", filepath.Join(dir, "result.json"), validationErr)
 	}
 	after, err := e.Repo.Snapshot(work)
 	if err != nil {
