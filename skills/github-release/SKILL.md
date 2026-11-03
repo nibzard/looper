@@ -15,6 +15,8 @@ When publication is already authorized, complete the workflow without asking aga
    existing tags. Identify unrelated edits and the intended version.
 2. Update the version using the project's normal method.
    A version file must contain only the version if the helper overwrites it.
+   Interim builds may report a derived `<next patch>-dev.<N>` stamp; the
+   bump commit itself must report the plain version.
 3. Run the required checks against the final version and release artifacts.
    Record actual results. Skip checks only when explicitly allowed, and
    report the skipped checks.
