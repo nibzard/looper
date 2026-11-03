@@ -239,7 +239,7 @@ func (e *Engine) writePlanAck(record *ImportRecord) {
 	ack := planImportAck{
 		Version: SettingsRequestVersion, ID: record.RequestID, Session: e.controller.Session,
 		Status: record.Status, AddedTasks: record.AddedTasks, Covered: record.Covered,
-		Conflicts: record.Conflicts, Error: record.Error,
+		Conflicts: record.Conflicts, Error: record.Error, Adjustments: record.Adjustments, Gates: record.Gates,
 	}
 	if err := writeJSON(filepath.Join(ackDir(e.Dir), record.RequestID+".json"), ack); err != nil {
 		e.err = err
@@ -253,6 +253,7 @@ func (e *Engine) ackPlanImport(id, status, message string, record *ImportRecord)
 	}
 	if record != nil {
 		ack.AddedTasks, ack.Covered, ack.Conflicts = record.AddedTasks, record.Covered, record.Conflicts
+		ack.Adjustments, ack.Gates = record.Adjustments, record.Gates
 		if record.Status == ImportApplied {
 			ack.Status = ImportApplied
 		}
@@ -265,14 +266,16 @@ func (e *Engine) ackPlanImport(id, status, message string, record *ImportRecord)
 
 // planImportAck is the machine-readable request result.
 type planImportAck struct {
-	Version    int          `json:"version"`
-	ID         string       `json:"id"`
-	Status     string       `json:"status"`
-	Session    string       `json:"controller_session"`
-	AddedTasks []string     `json:"added_task_ids,omitempty"`
-	Covered    []CoveredRef `json:"coverage,omitempty"`
-	Conflicts  []string     `json:"conflicts,omitempty"`
-	Error      string       `json:"error,omitempty"`
+	Version     int          `json:"version"`
+	ID          string       `json:"id"`
+	Status      string       `json:"status"`
+	Session     string       `json:"controller_session"`
+	AddedTasks  []string     `json:"added_task_ids,omitempty"`
+	Covered     []CoveredRef `json:"coverage,omitempty"`
+	Conflicts   []string     `json:"conflicts,omitempty"`
+	Adjustments []string     `json:"adjustments,omitempty"`
+	Gates       []ImportGate `json:"gates,omitempty"`
+	Error       string       `json:"error,omitempty"`
 }
 
 // processPlanImports drives queued receipts at loop boundaries: wait for
@@ -388,6 +391,8 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	record.Status = ImportApplied
 	record.AddedTasks = added
 	record.Covered = covered
+	record.Adjustments = proposal.Adjustments
+	record.Gates = proposal.Gates
 	record.Applied = time.Now().UTC().Format(time.RFC3339Nano)
 	// Scope expansion invalidates execution planning and satisfaction.
 	e.State.Plan = nil
@@ -418,8 +423,8 @@ func digestFile(path string) string {
 // Already covered requirements reference existing tasks instead of creating
 // duplicates.
 func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef, error) {
-	if len(proposal.Additions) == 0 && len(proposal.Covered) == 0 {
-		return nil, nil, fmt.Errorf("the analysis proposed neither additions nor coverage")
+	if len(proposal.Additions) == 0 && len(proposal.Covered) == 0 && len(proposal.Gates) == 0 {
+		return nil, nil, fmt.Errorf("the analysis proposed neither additions, coverage, nor gates")
 	}
 	next := len(e.State.Backlog.Tasks) + 1
 	alloc := func() string {
@@ -473,11 +478,42 @@ func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef
 	// Validate the combined backlog before mutating anything.
 	combined := clone(e.State.Backlog)
 	combined.Tasks = append(combined.Tasks, tasks...)
+	resolvedGates := make([]ImportGate, 0, len(proposal.Gates))
+	for _, gate := range proposal.Gates {
+		target := e.State.Backlog.Task(gate.TaskID)
+		if target == nil {
+			return nil, nil, fmt.Errorf("gate references unknown task %s", gate.TaskID)
+		}
+		if target.Status == "done" || target.Status == "doing" {
+			return nil, nil, fmt.Errorf("gate cannot change completed or active task %s", gate.TaskID)
+		}
+		for _, attempt := range e.State.Attempts {
+			if attempt.Task.ID == gate.TaskID && attempt.Phase != "done" && attempt.Phase != "blocked" {
+				return nil, nil, fmt.Errorf("gate cannot change retained task %s", gate.TaskID)
+			}
+		}
+		if len(gate.DependsOn) == 0 {
+			return nil, nil, fmt.Errorf("gate for %s has no dependencies", gate.TaskID)
+		}
+		resolved := ImportGate{TaskID: gate.TaskID}
+		for _, dep := range gate.DependsOn {
+			if mapped, ok := local[dep]; ok {
+				dep = mapped
+			}
+			if combined.Task(dep) == nil {
+				return nil, nil, fmt.Errorf("gate %s depends on unknown task %s", gate.TaskID, dep)
+			}
+			resolved.DependsOn = mergeUnique(resolved.DependsOn, []string{dep})
+		}
+		task := combined.Task(gate.TaskID)
+		task.DependsOn = mergeUnique(task.DependsOn, resolved.DependsOn)
+		resolvedGates = append(resolvedGates, resolved)
+	}
 	if err := combined.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("combined backlog is invalid: %w", err)
 	}
-	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, tasks...)
-	e.State.Backlog.Validate()
+	e.State.Backlog = combined
+	proposal.Gates = resolvedGates
 	added := make([]string, 0, len(tasks))
 	for _, t := range tasks {
 		added = append(added, t.ID)

@@ -12,9 +12,18 @@ import (
 // importProposal is the review agent's structured analysis result. Only the
 // controller writes the backlog or persistent state; the agent proposes.
 type importProposal struct {
-	Additions []Task       `json:"additions"`
-	Covered   []CoveredRef `json:"covered"`
-	Conflicts []string     `json:"conflicts"`
+	Additions   []Task       `json:"additions"`
+	Covered     []CoveredRef `json:"covered"`
+	Conflicts   []string     `json:"conflicts"`
+	Adjustments []string     `json:"adjustments,omitempty"`
+	Gates       []ImportGate `json:"gates,omitempty"`
+}
+
+// ImportGate adds prerequisites to an existing idle task. It cannot remove
+// dependencies or rewrite completed or retained work.
+type ImportGate struct {
+	TaskID    string   `json:"task_id"`
+	DependsOn []string `json:"depends_on"`
 }
 
 // bootstrapStaging is the recoverable record for fresh-project imports: a
@@ -141,8 +150,13 @@ Compare each new requirement with existing tasks and implemented behavior.
 Already covered requirements must reference the covering task identifier and evidence.
 Changed requirements become follow-up work; they never reopen or rewrite completed tasks.
 Reject conflicting requirements that would silently replace existing scope.
+Only unresolved incompatibilities belong in conflicts. Accepted scheduling adjustments belong in adjustments.
+When an ordering request says "when possible" and its target is complete, schedule follow-up work after it.
+Preserve the completed task and repeat affected checks in the follow-up. This is an adjustment, not a conflict.
+Use gates to add required dependencies to existing idle tasks, including dependencies on new additions.
+Never change a completed task or a task with retained work. Gates cannot remove existing dependencies.
 Do not regenerate the backlog and do not modify any files.
-Return one JSON object: {"additions":[{"id":"P1","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":["P1 or existing task ids"]}],"covered":[{"requirement":"...","task_id":"T003","evidence":"..."}],"conflicts":["explanation"]}.
+Return one JSON object: {"additions":[{"id":"P1","title":"outcome","priority":1,"status":"todo","details":"acceptance criteria","depends_on":["P1 or existing task ids"]}],"covered":[{"requirement":"...","task_id":"T003","evidence":"..."}],"conflicts":[],"adjustments":["accepted scheduling adjustment"],"gates":[{"task_id":"T015","depends_on":["P1"]}]}.
 New tasks need concrete acceptance criteria; execution planning adds executable verification.
 Use temporary identifiers P1..Pn for additions; depends_on may reference them or existing task ids.`,
 		e.State.Tip, c.NewRequirements)

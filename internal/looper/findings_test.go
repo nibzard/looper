@@ -235,3 +235,22 @@ func TestFindingPreservesRetainedAttemptContract(t *testing.T) {
 		})
 	}
 }
+
+func TestOperatorFollowupPreservesIdleAgentOwnership(t *testing.T) {
+	for _, status := range []string{"todo", "blocked", "done"} {
+		t.Run(status, func(t *testing.T) {
+			e := snapshotEngine(t)
+			original := Task{ID: "T001", Title: "Implement layout", Details: "Automate layout checks", Status: status, Priority: 1}
+			e.State.Backlog.Tasks = []Task{original}
+			e.addFinding(Finding{Title: "Wire the layout gate", Details: "Operator adds the gate dependency", Evidence: "Dependency missing", Owner: "operator", ExistingTaskID: "T001", Key: "layout"})
+			task := e.State.Backlog.Tasks[0]
+			if task.OperatorOnly() || task.Status != status || task.UnblockWhen != "" || len(task.Blockers) != 0 {
+				t.Fatalf("operator follow-up changed implementation ownership: %+v", task)
+			}
+			if task.Details != original.Details {
+				t.Fatal("planning report replaced implementation scope")
+			}
+			assertFindingEvidence(t, e, "T001", "Dependency missing")
+		})
+	}
+}

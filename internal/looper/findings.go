@@ -18,7 +18,8 @@ For future-round work, set defer_until to a concrete resume condition; otherwise
 Use operator ownership only for a concrete action that workers cannot perform. Explain the exact prerequisite and resume condition.
 Use a stable key for the unmet outcome or prerequisite, independent of task title or attempt. Reuse the key from an existing looper:finding:<key> tag.
 When the outcome or blocker is already tracked, set existing_task_id to that task ID, even if its title differs. Otherwise use an empty string. Dependencies must be existing task IDs, never titles.
-Do not create another task to retry the same missing prerequisite or to close duplicate tasks. Attach new evidence to the existing task instead. A follow-up is a report of work, not new authorization.`
+Do not create another task to retry the same missing prerequisite or to close duplicate tasks. Attach new evidence to the existing task instead. A follow-up is a report of work, not new authorization.
+An existing task keeps its ownership. Report a distinct operator prerequisite with its own key; never relabel the software task it blocks.`
 
 func normalizedFindingKey(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
@@ -114,10 +115,8 @@ func (e *Engine) addFinding(f Finding) {
 			existing.UnblockWhen = ""
 			e.State.Finished = false
 		}
-		if operator {
-			if !active {
-				holdForOperator(existing)
-			}
+		if operator && existing.OperatorOnly() && !active {
+			holdForOperator(existing)
 		}
 		if !active && f.DeferUntil != "" {
 			deferTask(existing, f.DeferUntil)

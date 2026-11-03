@@ -474,3 +474,105 @@ func TestImportUsesRefreshedBaseline(t *testing.T) {
 		t.Fatal("import did not use the refreshed baseline")
 	}
 }
+
+func TestImportSchedulingAdjustmentPreservesCompletedWork(t *testing.T) {
+	proposal := `{"additions":[{"id":"P1","title":"Follow-up layout","priority":2,"details":"Repeat affected performance checks","depends_on":["T001"]}],"covered":[],"conflicts":[],"adjustments":["T001 is complete; schedule the layout afterward instead of before it when possible."]}`
+	e, _ := importEngine(t, proposal)
+	completed := e.State.Backlog.Task("T001").Contract()
+	e.Config.Plans = []string{planFile(t, "Apply layout before T001 when possible, without reopening completed work.")}
+	e.startupImportPlans()
+	e.processPlanImports(context.Background())
+	record := e.State.Imports[0]
+	if e.err != nil || record.Status != ImportApplied || len(record.Adjustments) != 1 {
+		t.Fatalf("accepted scheduling adjustment lost: %+v, %v", record, e.err)
+	}
+	if e.State.Backlog.Task("T001").Status != "done" || e.State.Backlog.Task("T001").Contract() != completed {
+		t.Fatal("scheduling adjustment rewrote completed work")
+	}
+	var ack planImportAck
+	if err := readJSON(filepath.Join(ackDir(e.Dir), record.RequestID+".json"), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if len(ack.Adjustments) != 1 || ack.Adjustments[0] != record.Adjustments[0] {
+		t.Fatalf("ack discarded scheduling adjustment: %+v", ack)
+	}
+	var saved State
+	raw, err := json.Marshal(e.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &saved); err != nil || len(saved.Imports[0].Adjustments) != 1 {
+		t.Fatal("receipt cannot retain adjustment across reload")
+	}
+}
+
+func TestImportAddsFinalGateDependencies(t *testing.T) {
+	proposal := `{"additions":[{"id":"P1","title":"Final layout","priority":2,"details":"Verify layout","depends_on":["T001"]}],"covered":[],"conflicts":[],"gates":[{"task_id":"T002","depends_on":["P1","T001"]}]}`
+	e, _ := importEngine(t, proposal)
+	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, Task{ID: "T002", Title: "Desktop gate", Details: "Run all desktop checks", Priority: 2, Status: "todo", DependsOn: []string{"T001"}})
+	if err := e.export(); err != nil {
+		t.Fatal(err)
+	}
+	e.Config.Plans = []string{planFile(t, "Add final layout and make T002 depend on it.")}
+	e.startupImportPlans()
+	e.processPlanImports(context.Background())
+	record := e.State.Imports[0]
+	if e.err != nil || record.Status != ImportApplied || len(record.Gates) != 1 {
+		t.Fatalf("gate import failed: %+v, %v", record, e.err)
+	}
+	layout := record.AddedTasks[0]
+	gate := e.State.Backlog.Task("T002")
+	if strings.Join(gate.DependsOn, ",") != "T001,"+layout || strings.Join(record.Gates[0].DependsOn, ",") != "T001,"+layout {
+		t.Fatalf("dependencies were not resolved and merged: %+v, %+v", gate, record.Gates)
+	}
+	if ready := e.State.Backlog.Ready(); len(ready) != 1 || ready[0].ID != layout {
+		t.Fatalf("final gate ran before layout: %+v", ready)
+	}
+	e.State.Backlog.Task(layout).Status = "done"
+	if ready := e.State.Backlog.Ready(); len(ready) != 1 || ready[0].ID != gate.ID {
+		t.Fatalf("final gate did not become ready: %+v", ready)
+	}
+	var ack planImportAck
+	if err := readJSON(filepath.Join(ackDir(e.Dir), record.RequestID+".json"), &ack); err != nil || len(ack.Gates) != 1 || strings.Join(ack.Gates[0].DependsOn, ",") != "T001,"+layout {
+		t.Fatalf("ack discarded resolved gate: %+v, %v", ack, err)
+	}
+}
+
+func TestImportRejectsUnsafeGatesAtomically(t *testing.T) {
+	for _, scenario := range []string{"done", "doing", "running", "ready", "verifying", "resume", "unknown-target", "unknown-dependency", "cycle", "empty"} {
+		t.Run(scenario, func(t *testing.T) {
+			e, _ := importEngine(t, additionProposal)
+			e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, Task{ID: "T002", Title: "Gate", Details: "Verify", Priority: 1, Status: "todo"})
+			gate := ImportGate{TaskID: "T002", DependsOn: []string{"P1"}}
+			addition := Task{ID: "P1", Title: "Layout", Details: "Verify layout", Priority: 1}
+			switch scenario {
+			case "done", "doing":
+				e.State.Backlog.Task("T002").Status = scenario
+			case "running", "ready", "verifying", "resume":
+				e.State.Attempts = append(e.State.Attempts, &Attempt{Task: *e.State.Backlog.Task("T002"), Phase: scenario})
+			case "unknown-target":
+				gate.TaskID = "missing"
+			case "unknown-dependency":
+				gate.DependsOn = []string{"missing"}
+			case "cycle":
+				addition.DependsOn = []string{"T002"}
+			case "empty":
+				gate.DependsOn = nil
+			}
+			before := hashJSON(e.State.Backlog)
+			_, _, err := e.applyProposal(&importProposal{Additions: []Task{addition}, Gates: []ImportGate{gate}})
+			if err == nil || hashJSON(e.State.Backlog) != before {
+				t.Fatalf("unsafe gate changed backlog: %v", err)
+			}
+		})
+	}
+}
+
+func TestImportCanAddGateWithoutNewTasks(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, Task{ID: "T002", Title: "Gate", Details: "Verify", Priority: 1, Status: "blocked", Blockers: []string{"External prerequisite"}})
+	_, _, err := e.applyProposal(&importProposal{Gates: []ImportGate{{TaskID: "T002", DependsOn: []string{"T001"}}}})
+	if err != nil || e.State.Backlog.Task("T002").Status != "blocked" || len(e.State.Backlog.Task("T002").Blockers) != 1 {
+		t.Fatalf("gate changed unrelated blockers: %v", err)
+	}
+}

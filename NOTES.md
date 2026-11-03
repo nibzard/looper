@@ -2182,3 +2182,35 @@ three of the five cdafca9 fixes verified live, two unexercised.
   integration exists only on refs/looper-tasks), and the project root sits
   on an unborn master. Working-tree publication is correct; git
   presentation confuses humans.
+
+
+## Stackfall scheduling fixes, 2026-11-03
+
+Evidence and research notes: /notes/stackfall-looper-diagnosis-2026-11-03.md.
+Session run-187bae9c1e92c4ba waits at event 496478 with zero ready tasks.
+
+- Confirmed ownership cause: addFinding calls holdForOperator on an idle
+  existing software task when an operator follow-up references it. Preserve
+  existing ownership instead. New operator tasks still stay outside the queue.
+  The regression fails for todo, blocked, and done tasks before the fix.
+- Confirmed missing dependency path: import proposals only add tasks and cannot
+  attach a new layout task to an existing final gate. Add an explicit gates
+  field that only appends dependencies to idle tasks. Validate the combined
+  graph before mutation. Preserve completed and retained attempt contracts.
+- Confirmed import protocol gap: accepted scheduling deviations have no field
+  separate from blocking conflicts. Add adjustments to the prompt, proposal,
+  durable receipt, acknowledgement, and CLI output. Keep true conflicts fatal.
+  This changes the structured contract, without guessing intent from prose.
+- Regression fixtures use stub agents. They cover dependency scheduling,
+  atomic rejection of unsafe gates, receipt retention, and ownership.
+- The Stackfall backlog repair is separately authorized by the user's
+  "fix all" instruction. Preserve its active controller and unrelated changes.
+  New source behavior applies only to future controllers; no installation or
+  restart is required for the authorized backlog correction.
+
+Validation: isolated `make test` passes, including 56 runtime tests,
+Go tests, static analysis, installer tests, build checks, package checks,
+and skill checks. Focused race tests pass. The same Stackfall controller
+accepted the backlog correction at event 496479 and resumed planning.
+Only T015, T029, and T037 changed; device and publication gates remain.
+No binary installation, controller restart, commit, or publication occurs.
