@@ -293,7 +293,8 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 			continue
 		}
 		if e.drainingNow() {
-			e.event("import", "Plan import "+record.RequestID+" stays queued; the controller is draining.")
+			// The controller's drain event explains why receipts stay queued.
+			// Polling must not emit another outcome for every pending receipt.
 			continue
 		}
 		if e.workRetained() {
@@ -303,8 +304,8 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 					e.err = err
 					return
 				}
+				e.event("import", "Plan import "+record.RequestID+" waits for active work to reach a boundary.")
 			}
-			e.event("import", "Plan import "+record.RequestID+" waits for active work to reach a boundary.")
 			continue
 		}
 		if err := e.applyPlanImport(ctx, record); err != nil {

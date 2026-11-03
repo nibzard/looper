@@ -41,6 +41,11 @@ elif "review pass for Looper" in prompt:
     assert not (cwd/"forbidden.txt").exists()
     if mode=="review_fail":
         sys.exit(7)
+    if mode=="review_account":
+        message="The 'stub-astra' model is not supported when using Codex with a ChatGPT account."
+        print(json.dumps({"type":"error","message":message}))
+        print(json.dumps({"type":"turn.failed","error":{"message":message}}))
+        sys.exit(1)
     if mode=="review_code":
         (cwd/"seed.txt").write_text("review changed code")
     if mode in ("review_backlog","review_goal"):
@@ -481,12 +486,24 @@ class ParallelTests(unittest.TestCase):
 
     def test_repeated_verification_failure_keeps_code_isolated(self):
         self.tasks(count=1)
-        self.env["TEST_VERIFY"]="exit 1"
+        # Every attempt checks in a fresh worktree with fresh timings. The
+        # repeat detector must still recognize the identical failure.
+        self.env["TEST_VERIFY"]=('pwd; '
+            'echo "1/5 Test #1: probe_tests .................. Passed 0.$RANDOM sec"; '
+            'echo "Total Test time (real) = 0.$RANDOM sec"; '
+            'exit 1')
         self.run_loop(2)
         self.assertFalse((self.project/"T1.txt").exists())
         self.assertEqual(self.state()["attempts"][0]["repairs"],2)
-        # The repeated failure triggers one independent diagnosis.
+        # The repeated failure triggers one independent diagnosis and the
+        # controller records it; the stub records its own consultation.
         self.assertEqual([e["kind"] for e in self.recorded() if e["kind"]=="diagnose"],["diagnose"])
+        self.assertEqual(len(self.controller_events("diagnosis")),1)
+        # The third matching failure holds the task after the diagnosis, with
+        # the raw evidence (artifact paths) retained in the saved feedback.
+        self.assertIn("persists after a fresh diagnosis", self.state()["attempts"][0]["feedback"])
+        self.assertIn("Artifacts:", self.state()["attempts"][0]["feedback"])
+        self.assertEqual(json.loads(self.todo.read_text())["tasks"][0]["status"],"blocked")
 
     def test_bad_plan_fails_without_starting_workers(self):
         self.env["TEST_MODE"]="bad_plan"
@@ -503,6 +520,19 @@ class ParallelTests(unittest.TestCase):
         self.run_loop(1)
         self.assertEqual((self.project/"seed.txt").read_text(),"original\n")
         self.assertFalse(any("project-done" in t.get("tags",[]) for t in json.loads(self.todo.read_text())["tasks"]))
+
+    def test_review_account_failure_fails_fast_with_cause(self):
+        self.tasks(count=1)
+        self.env["TEST_MODE"]="review_account"
+        self.run_loop(1)
+        errors=self.controller_events("review-error")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("agent reported", errors[0]["message"])
+        self.assertIn("not supported when using Codex with a ChatGPT account", errors[0]["message"])
+        shutdown=self.controller_events("shutdown")[-1]["data"]
+        self.assertEqual(shutdown["reason"], "error")
+        self.assertIn("not supported when using Codex with a ChatGPT account", shutdown["error"])
+        self.assertEqual(json.loads(self.todo.read_text())["tasks"][0]["status"], "done")
 
     def test_final_review_requires_explicit_completion(self):
         self.tasks(count=1)

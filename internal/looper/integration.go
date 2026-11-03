@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -188,7 +189,9 @@ func (e *Engine) assessWithin(ctx context.Context, op operation, a Attempt, c Ca
 }
 
 func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out chan<- workerResult) error {
-	signature := digest([]byte(feedback))
+	// The signature uses normalized evidence only. The repair header and any
+	// diagnosis text below must never change it.
+	signature := digest([]byte(failureEvidence(feedback)))
 	if signature == a.FailureHash {
 		a.Repeats++
 	} else {
@@ -220,6 +223,17 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 		}
 	}
 	a.Repairs++
+	// The header carries context the raw check feedback lacks: the attempt
+	// count, the latest worker report, and where earlier records live. It is
+	// saved with the feedback; agents still receive the full raw evidence.
+	header := fmt.Sprintf("Repair %d of at most %d.\n", a.Repairs, e.Config.MaxRepairs)
+	if a.Summary != nil {
+		header += "Latest worker report: " + shortText(a.Summary.Summary, 200) + "\n"
+	}
+	header += "Earlier attempt records: " + a.Directory + ".\n" +
+		"Inspect prior results before repeating an approach.\n" +
+		"If this task cannot fix the recorded condition, report blocked with evidence.\n"
+	feedback = header + "\n" + feedback
 	e.capacity = max(1, e.capacity-1)
 	e.successes = 0
 	work, err := e.Repo.Workspace(identifier("repair"), e.State.Tip, e.State.Backlog)
@@ -553,12 +567,35 @@ func (e *Engine) noteAssessment(a *Attempt, c Candidate) {
 	}
 }
 
+// Repeat comparison strips operation paths plus the volatile output observed
+// in the 2026-11 Stackfall incident: generated check worktree identifiers and
+// CTest durations. The identifier is exactly the 16-hex-character shape that
+// identifier() emits, bounded by directory separators under worktrees/.
+// Normalization applies only to observed output. Only the trailing duration
+// column of a CTest result or total line is replaced, so seconds values inside
+// test names or diagnostic text stay. Commands, errors, test names, results,
+// and counts keep distinct signatures; any other unstable output still
+// reaches the existing repair limit.
+var checkWorktreeID = regexp.MustCompile(`(^|[[:space:]/\\])(worktrees[/\\])check-[0-9a-f]{16}([/\\]|$)`)
+var ctestTimingLine = regexp.MustCompile(`^(?:\d+/\d+ Test #\d+: |Total Test time \()`)
+var secondsValue = regexp.MustCompile(`\b[0-9]+(?:\.[0-9]+)? sec$`)
+
 func failureEvidence(s string) string { // Strip operation paths before comparing failures across repairs.
 	var lines []string
+	observed := false
 	for _, l := range strings.Split(s, "\n") {
-		if !strings.HasPrefix(l, "Artifacts:") {
-			lines = append(lines, l)
+		if strings.HasPrefix(l, "Artifacts:") {
+			continue
 		}
+		if l == "Observed output:" {
+			observed = true
+		} else if observed {
+			l = checkWorktreeID.ReplaceAllString(l, `${1}${2}check-GENERATED${3}`)
+			if ctestTimingLine.MatchString(l) {
+				l = secondsValue.ReplaceAllString(l, "0.0 sec")
+			}
+		}
+		lines = append(lines, l)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -62,7 +62,7 @@ func TestBootstrapAcceptsOneCorrectedResponse(t *testing.T) {
 	corrected, _ := json.Marshal(b)
 	t.Setenv("LOOPER_FAKE_CORRECTED", string(corrected))
 	script = []byte(strings.Replace(string(script), `result="$LOOPER_FAKE_RESULT"`, `result="$LOOPER_FAKE_RESULT"
-if printf '%s' "$p" | grep -q 'previous source list was rejected'; then result="$LOOPER_FAKE_CORRECTED"; fi`, 1))
+if printf '%s' "$p" | grep -q 'previous backlog was rejected'; then result="$LOOPER_FAKE_CORRECTED"; fi`, 1))
 	if err = os.WriteFile(bin, script, 0700); err != nil {
 		t.Fatal(err)
 	}

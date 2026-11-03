@@ -552,7 +552,7 @@ func (m model) overviewRows() []overviewRow {
 	var attention, active []TaskView
 	waiting := 0
 	for _, t := range m.orderedTasks() {
-		if (t.Status == "blocked" && !t.Deferred) || (t.Attempt != nil && t.Attempt.Repeats > 0) {
+		if (t.Status == "blocked" && !t.Deferred) || (t.Status != "done" && t.Attempt != nil && t.Attempt.Repeats > 0) {
 			attention = append(attention, t)
 		}
 		if taskRank(t) == 1 {

@@ -1674,3 +1674,348 @@ checks, all 55 runtime tests, package smoke checks, and skill regression checks.
 Four runtime tests initially fail under concurrent builds. All four pass in an
 isolated rerun, and the complete make test rerun passes. No binary is installed.
 The Gitpickle controller is stopped for repository consolidation.
+
+## Pylemma bootstrap schema failure, 2026-10-27
+
+Observed session run-6ff531538c0cfed1 in /home/agent/pylemma.
+Events 1–3 show bootstrap failing with json: unknown field "round".
+The installed binary reports 0.9.0 at 8a5affd849b7 with local changes.
+The retained bootstrap result contains task-level round fields and priorities
+6 and 7. No backlog or saved run exists. The schema permits priorities 1–5
+and does not permit round fields.
+
+Bootstrap now supplies the full backlog schema and instructs agents to keep
+development rounds in details or tags. Decode, backlog validation, and source
+validation failures share one bounded correction attempt. A second rejection
+reports the retained result path. Context and project mutation checks remain
+in place. Strict decoding continues to reject unknown fields.
+
+Stub-agent regression tests cover task and backlog unknown fields, invalid
+priorities, invalid status, successful correction, and repeated rejection.
+All bootstrap tests pass. The full make test suite passes, including all 55
+runtime tests, static checks, installer checks, package checks, and skill checks.
+git diff --check passes.
+No Pylemma files are changed, no controller is started, and no binary is installed.
+
+The owner requests installation and Pylemma recovery. Installed with
+./install.sh --skip-skills. The installed binary matches build/looper byte
+for byte and reports 0.9.0 at 9928fced909b with local changes.
+
+Recovered Pylemma's to-do.json from the retained bootstrap result. Moved
+each round value into a development-round tag and capped priorities at 5.
+All 24 tasks, dependencies, acceptance criteria, and six blocked statuses
+remain preserved. JSON Schema validation, unique IDs, dependency existence,
+cycle checks, source existence, and comparison of preserved fields pass.
+Original and corrected copies are in /tmp/pylemma-backlog-repair-yy_17khk.
+Doctor reports no findings and no controller. No run is started; the owner
+can rerun looper tui from /home/agent/pylemma.
+
+## Slit Codex account lapse, 2026-10-30
+
+The user reports `looper tui` in slit failing with `execution: exit status 1`.
+Session `run-b4c61acbd2a1e1ef` (Looper 0.9.0, 9928fce with local changes)
+ran normally from 12:54Z: bootstrap, three plans, and two integrated tasks.
+At 13:13:27Z every Codex invocation started failing within 2.5 s with
+`The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT
+account.` The owner confirms the cause: the Codex subscription lapsed at that
+moment. `~/.codex/config.toml` pins `model = "gpt-6-astra"`; `auth.json` is
+in chatgpt mode, so the CLI rejects that model on every call. Not a project
+or Looper orchestration defect.
+
+Observed handling: workers T007 and T015 blocked with work retained
+(correct). The final review then retried the identical failing invocation
+three times in eight seconds and the controller exited with error 1. Every
+operator-visible message said only `execution: exit status 1; see <path>`;
+the account error sat in the agent stream. Same diagnostic gap as the
+barista `billing_error` incident on 2026-10-13.
+
+Fixes implemented (uncommitted; preserved the pending Pylemma bootstrap
+edits in the same tree):
+
+- Agent failures now surface the agent's own error text. `streamErrorMessage`
+  scans the event-stream tail for Codex `error`/`turn.failed` and Claude
+  `is_error` result events and includes a bounded message in the
+  `AgentError`: `configuration: exit status 1; agent reported: <text>; see
+  <log>`. The text reaches worker blockers, review-error events, the
+  shutdown record, and the TUI exit output without opening the log.
+- Account and entitlement failures classify as `configuration` instead of
+  `execution`: unsupported model for the account, credit balance, billing,
+  quota, usage limit. Rate-limit wording stays transient and is checked
+  first.
+- The review retry loop stops immediately on `configuration` and
+  `invalid_request` failures instead of a three-attempt burst. Other
+  classes keep the existing three attempts. Work is retained either way.
+
+User-side recovery for slit: restore Codex access (renew the subscription or
+point `~/.codex/config.toml` at a model the ChatGPT account supports), rerun
+`looper tui`, then requeue the two blocked tasks per the blocker procedure;
+their work is retained.
+
+Validation: the new runtime fixture (`review_account`) reproduces the
+incident on the pre-change build from a clean HEAD worktree (three rapid
+`execution: exit status 1` review errors, no cause) and passes after the
+change (one attempt, cause in the review-error and shutdown records, task
+work retained). `make test` passes with 56 runtime tests, and focused race
+tests pass for the review paths.
+
+Installed 2026-10-30 with `./install.sh --skip-skills` at the owner's
+request. The installed `/home/agent/.local/bin/looper` matches
+`build/looper` byte for byte and reports 0.9.0, revision 9928fced909b,
+modified true. Existing controllers keep their loaded binaries; changes
+remain uncommitted and unpublished.
+
+
+## Stackfall retained-state recovery, 2026-11-02
+
+The owner authorized repair after `looper tui` rejected the saved identity.
+The saved task path was `init`; default TUI startup selected `to-do.json` and
+bootstrapped before detecting the mismatch. An earlier controller had passed
+T007 verification but stopped before publication because the backlog changed.
+
+Recovered through native engine methods in an isolated copy, without agents.
+Preserved the edited original backlog, all 28 tasks, and changed documents.
+Completed the verified T007 publication, imported the edits as a new baseline,
+and migrated the saved identity to the default `to-do.json` task path.
+Applied the tested state and exact tree under the repository lock. All original
+files and runtime records are backed up under
+`/home/agent/.looper-recovery/stackfall-20261102T205212Z`.
+Debug and Release builds and CTest pass. Doctor reports only deferred tasks.
+No binary was installed and no agent run was started.
+
+Confirmed diagnostic defect: on an unborn branch, doctor calls `rev-parse HEAD`
+and compares its failed stdout (`HEAD`) against an empty saved head. Engine
+Head uses `rev-parse --verify HEAD` and returns an empty value instead. The
+reported branch movement was false. A future fix should share the checked
+lookup and add an unborn-branch regression fixture. Startup should also check
+saved task identity before bootstrap and report both mismatched task paths.
+Full evidence and recovery checks are in `/notes/looper-diagnose-2026-11-02.md`.
+
+
+## Stackfall full-run session analysis, 2026-11-03
+
+Analyzed all 46 Claude transcripts of the stackfall run plus the runtime
+artifacts. Full report with evidence: `/notes/stackfall-session-analysis-2026-11-03.md`.
+Run topline: $162.71 recorded, 4,184 turns, 15/18 task checks passed first
+try, working game delivered. Agent-side behavior was strong (no test
+weakening, clean schema compliance, deep verification). The costly defects
+are controller-side:
+
+- T014 burned $23.90 over 6 attempts on a verify gate that cannot pass by
+  construction: plan-3ec868cb authored a `git status --porcelain` cleanliness
+  gate (induced by the plan prompt's "leave tracked files unchanged" line),
+  while `prepare()` delivers the integrated candidate to the check worktree
+  uncommitted. Repair feedback was byte-identical across all five retries,
+  and the `diagnose()` repeat-escalation never fired because the feedback
+  hash includes volatile `worktrees/check-*/` paths. Fix candidates: commit
+  the candidate in the check worktree, lint verify commands against the
+  delivery model, normalize the feedback hash, cap identical-signature
+  repairs, and put attempt counts plus prior result summaries into repair
+  prompts.
+- Scheduling findings were never acted on: three reviews reported T023
+  unblocked and T024 mis-owned, and the loop idled two hours until a human
+  edited the backlog. A finding whose `unblock_when` is met should flip the
+  task or halt-and-surface.
+- Cost is dominated by cache reads (81-91%): the auto-compact threshold
+  (~500K on the 1M window) is too high. Compacting at ~150K would cut ~30%
+  per large session. `Read` injects 5.4x more context than `Bash`; full-file
+  reads of `main.cpp`/`SPEC.md`/`backlog.json` repeat in every session. The
+  `analyze_image` vision path on this gateway failed 4/4 and forced both
+  auto-compactions; PIL pixel classification is the working standard.
+- Minor: `shortText(b.Goal, 512)` truncates every task prompt mid-sentence;
+  the 20:25 fail-fast discarded the verified T007 result.
+
+## Stackfall improvement plan validation, 2026-11-03
+
+Validated the plan against the current source, existing tests, and retained T014
+feedback. The five repair inputs have distinct hashes from check paths and timings;
+their command/error headers match. The repeat-detection defect is confirmed.
+The plan misses a failureEvidence caller in recovery.go, repair prompt data flow,
+and a defined traversal for review deltas. A header-only signature can hold distinct
+test failures. Idle messages improve visibility but do not resolve scheduling.
+Smart mode needs explicit model precedence; its role in the incident is unproven.
+Six focused existing tests pass. No source implementation or live run is changed.
+Full findings: /notes/looper-improvement-plan-validation-2026-11-03.md.
+
+A revised improvement plan from the same analysis is in
+`/notes/looper-improvement-plan-2026-11-03.md`. It now prioritizes five local
+changes with no new saved fields or configuration options. Repeat detection keeps
+diagnostic output and normalizes only generated check IDs and CTest durations.
+A local experiment maps all five retained T014 inputs to the same comparison text;
+changed command, error, and diagnostic variants stay distinct. Repair context uses
+the existing feedback and result files. Startup checks identity before bootstrap.
+Long goals refer to the complete accepted goal instead of a clipped value.
+Review traversal and model-default changes are deferred. Waiting output is optional.
+This revision changes documentation only; implementation and live validation remain.
+
+## Stackfall improvement plan implementation, 2026-11-03
+
+Implemented the five changes from `/notes/looper-improvement-plan-2026-11-03.md`
+in the working tree at `9928fce` plus its existing local changes. No saved
+fields, configuration options, agent roles, or scheduling rules were added; the
+ladder, `MaxRepairs`, and the publication model are unchanged. All edits are
+uncommitted alongside the earlier slit and Pylemma work; no binary is installed
+and no live run is touched.
+
+- **Check worktree contract:** the planner prompt states that setup and
+  verification must preserve the project files they receive, that checks
+  receive uncommitted candidate changes in a detached worktree, that an empty
+  Git status or HEAD-derived candidate history must not be required, that
+  Looper compares project trees to detect changes, and that workers implement
+  ignore rules. The worker prompt carries the same explanation in one
+  condensed sentence. Legitimate Git-metadata product checks stay valid.
+- **Repeat detection:** `failureEvidence` keeps stripping `Artifacts:` lines
+  and now normalizes only the observed incident noise: the generated
+  16-hexadecimal `check-` identifier directly under `worktrees/` (replaced by
+  `check-GENERATED`, with a non-hex boundary so project paths like
+  `worktrees/check-1.patch` stay distinct) and the trailing duration of lines
+  starting `N/M Test #K:` or `Total Test time (`. Seconds inside test names,
+  counts, results, commands, errors, and other diagnostic text keep distinct
+  signatures. `repair()` hashes the normalized evidence; `run.go` passes the
+  raw candidate feedback so agents keep artifact paths and unmodified output.
+  All five retained T014 feedback files map to one value under the final
+  regexes; every meaningful variation tested stays distinct.
+- **Startup identity:** `initializeState` loads saved state first and rejects
+  a version, root, or task-file mismatch before bootstrap or schema writes,
+  naming the saved and selected task paths. Saved state also suppresses
+  bootstrap when the task file is missing on disk; that case now reports the
+  missing saved task file instead of rebuilding the backlog or failing on a
+  bare read error. Fresh bootstrap, legacy import, and matching-state recovery
+  are unchanged.
+- **Repair context:** after computing the signature and incrementing
+  `a.Repairs`, `repair()` prepends a header with the repair count, the latest
+  worker report bounded to one line (omitted when no summary exists), the
+  attempt directory, and two guidance lines. The header and diagnosis text
+  never enter the signature. The worker repair paragraph asks the worker to
+  read the feedback and the earlier attempt records it names for the failure,
+  without rereading every log or rerunning every command.
+- **Long goals:** a goal over the 512-byte inline budget is replaced by an
+  instruction to read and extract the `goal` field of the accepted backlog
+  snapshot; short goals stay inline. `shortText` is unchanged.
+
+Adversarial multi-agent review confirmed eight findings; all were fixed before
+final validation: the CTest normalization replaced every seconds value on a
+matching line (now only the trailing duration), the identifier pattern
+accepted short decimal project paths (now exactly 16 hex with a boundary), the
+normalized marker could collide with a literal path (now `check-GENERATED`),
+`Total Test time` admitted non-CTest continuations (now requires the
+parenthesis), the raw-feedback call site had no pinning test (a reviewer
+proved it by reverting the call and passing the whole suite; now pinned by a
+Go test and by the runtime fixture's retained `Artifacts:` assertion), the
+missing-task-file case surfaced a bare read error, the version/root branch of
+the identity check had no test, and this NOTES entry was missing. Reviewer
+claims about indented CTest output and the recovery consultation gate were
+refuted: the plan accepts other unstable output reaching the repair limit,
+and the raw `verification failed` label already satisfied that consultation
+gate before this change.
+
+Validation: `go test ./...`, `go vet ./...`, `git diff --check`, and
+`make test` pass, including all 56 runtime fixtures. The repeated-verification
+fixture now runs a verify command that prints its changing check worktree path
+and CTest timings; it asserts two repairs, one controller `diagnosis` event
+beside the stub's `diagnose` record, a hold after the third matching failure,
+and retained raw `Artifacts:` lines. One earlier `make test` run failed only
+`TestCancelledCheckRetainsResourcesUntilRecovery` while review agents built
+concurrently inside the repository; it passes in isolation and in the final
+clean run, matching the documented concurrent-build flake class.
+
+Remaining limits: prompt wording reduces recurrence but cannot repair saved
+plans, task commands, or explicit verification overrides. Unrecognized
+unstable output still reaches the existing repair limit by design. The
+optional waiting summary was not implemented; deferred work in the plan is
+unchanged. No live agent test, installation, or publication was performed.
+
+## Improvement plan diff review, 2026-11-03
+
+Recommend holding the commit until failureEvidence normalization is narrowed.
+An exact-source Go reproduction confirms that different commands, project patch
+filenames, and unrelated notworktrees directory paths can receive the same
+comparison value. Normalize observed output only and require directory boundaries.
+The startup identity error also suggests moving the task file, which leaves the
+saved identity unchanged and cannot resolve the mismatch. Source edits remain
+untouched. go test ./..., go vet ./..., and git diff --check pass during review.
+Full findings: /notes/looper-improvement-review-2026-11-03.md.
+
+## Improvement review fixes, 2026-11-03
+
+Fixed both review findings at the owner's request. failureEvidence normalizes
+generated check directories and CTest durations only inside observed output.
+Directory boundaries preserve project patch filenames, unrelated notworktrees
+directories, and suffixed check directory names. Command and error text stays
+unchanged. Generated check directories at the end of output still normalize,
+including Windows paths. The identity error recommends the saved task file and
+no longer suggests moving it without changing saved identity.
+
+New regression tests fail before the fixes and pass afterward. Focused repair,
+recovery identity, feedback, and startup tests pass. The exact updated Go
+normalizer maps all five retained T014 inputs to one comparison value.
+Final validation: make test and git diff --check pass. This includes all Go
+tests, static checks, installer and build checks, all 56 runtime fixtures,
+package smoke tests, and skill helper checks.
+Changes remain uncommitted. No binary is installed and no live run is changed.
+
+## Stackfall dashboard and scheduling correction, 2026-11-03
+
+Research and evidence: [/notes/stackfall-looper-diagnosis-2026-11-03.md](/notes/stackfall-looper-diagnosis-2026-11-03.md).
+
+The user requests a fix after the dashboard lists completed tasks T001 and
+T010 as repeated failures. The existing workspace change excludes done tasks
+from attention based on retained repeat counters. Its existing regression
+test fails against the original selector through a Go overlay, then passes
+against the corrected selector. Active failures remain visible. No duplicate
+implementation was added.
+
+Stackfall session run-4a22b14f976cf978 ends cleanly at event 4043. With no
+controller or retained work, the user-authorized backlog maintenance changes
+only T028: add T030/T031/T032 to dependencies, clear obsolete blockers, remove
+operator/deferred tags, and set todo. Keep T027 and all acceptance criteria.
+JSON schema validation and Looper Backlog.Validate pass. Looper Backlog.Ready
+returns exactly T028. This uses the editable backlog boundary supported by
+initializeState; SQLite remains untouched until a later run imports it.
+All other tasks, including physical and publication gates, are unchanged.
+The original backlog is retained at /tmp/stackfall-diagnose/to-do-before-fix.json.
+
+Validation for the authorized fix: go test ./... passes (Looper package
+67.3 seconds), go vet ./... passes, and git diff --check passes. The original
+selector fails TestWorkspaceAttentionAfterRepair/done; the corrected selector
+passes. Installed the verified build with ./install.sh --skip-skills. cmp
+confirms build/looper matches /home/agent/.local/bin/looper. The old binary is
+retained at /tmp/stackfall-diagnose/looper-before-fix. No controller was
+started. The next user-started run imports the corrected backlog and uses
+the updated dashboard. Existing source edits remain uncommitted.
+
+## Stackfall import scheduling and event fixes, 2026-11-03
+
+Source: /notes/stackfall-looper-diagnosis-2026-11-03-latest.md. The owner
+requests only the Looper fixes. Active STACKFALL work remains untouched.
+
+Two isolated reproductions fail before the fixes: ten import polls emit ten
+identical wait events, and a successful check integrates the first task but
+exits at the dispatch limit with queued requirements still waiting. The latter
+reproduces the boundary skipped between STACKFALL T025 and T026.
+
+Move the retained-work wait event into the ImportWaiting transition. Suppress
+per-import drain polling messages; the controller drain outcome already explains
+why receipts stay queued. No receipt schema change is needed.
+
+After a check drains all work, run the import pass again in the idle branch,
+after baseline/input validation and before recovery, review, planning, or
+new dispatch. Preserve stop precedence, cancellation, invalid-input handling,
+and active contracts. An import failure becomes a failed receipt; it does not
+starve the next queued import or create a retry loop.
+
+Tests use stub agents and an explicitly released executable check. They cover
+two queued imports, successful and conflicting proposals, explicit drain,
+retained-work wait event counts, and drain event counts. The original selector
+fails apply/failed scheduling cases; the drain case already passes and remains
+protected. Existing retained-work and refreshed-baseline import tests pass.
+
+Changes are limited to imports.go, the import boundary in run.go, the new
+import_boundary_test.go, and this note. All earlier edits remain preserved.
+No live agent smoke test, installation, publication, or controller restart.
+
+Final validation: make test passes, including all Go tests, go vet, installer
+and build checks, runtime fixtures, package smoke, and skill helper checks.
+The new focused regressions also pass with the Go race detector enabled.
+git diff --check passes. Validation log: /tmp/looper-import-fixes-make-test.log.
+The rebuilt binary is only a build artifact; the installed binary and live
+STACKFALL controller remain unchanged. No commit or push was requested here.

@@ -142,6 +142,55 @@ func TestClassifyFailure(t *testing.T) {
 	if got := classifyFailure("exit status 1\n401 unauthorized: invalid api key"); got != "configuration" {
 		t.Fatal(got)
 	}
+	// Account and entitlement failures repeat identically until an operator
+	// intervenes, so they must not classify as plain execution failures.
+	configuration := []string{
+		"The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+		"HTTP 400 billing_error: Credit balance is too low",
+		"You exceeded your current quota; check your plan and billing details",
+		"usage limit reached until 2026-10-31",
+	}
+	for _, in := range configuration {
+		if got := classifyFailure("exit status 1\n" + in); got != "configuration" {
+			t.Fatalf("%q classified %s", in, got)
+		}
+	}
+	// Rate limits stay transient even when the text mentions quotas.
+	if got := classifyFailure("exit status 1\n429 rate limit exceeded, quota resets soon"); got != "transient" {
+		t.Fatal(got)
+	}
+}
+func TestStreamErrorMessage(t *testing.T) {
+	codex := `{"type":"thread.started","thread_id":"t"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}
+{"type":"turn.started"}
+{"type":"error","message":"The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."}
+{"type":"turn.failed","error":{"message":"The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."}}
+`
+	if got := streamErrorMessage([]byte(codex)); !strings.Contains(got, "not supported when using Codex with a ChatGPT account") {
+		t.Fatalf("codex stream message missing: %q", got)
+	}
+	claude := `{"type":"assistant","message":{}}
+{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Credit balance is too low","duration_ms":100}
+`
+	if got := streamErrorMessage([]byte(claude)); got != "Credit balance is too low" {
+		t.Fatalf("claude stream message: %q", got)
+	}
+	healthy := `{"type":"turn.started"}
+{"type":"turn.completed"}
+`
+	if got := streamErrorMessage([]byte(healthy)); got != "" {
+		t.Fatalf("healthy stream reported %q", got)
+	}
+	var long strings.Builder
+	long.WriteString(`{"type":"turn.failed","error":{"message":"`)
+	for i := 0; i < 400; i++ {
+		long.WriteByte('x')
+	}
+	long.WriteString(`"}}`)
+	if got := streamErrorMessage([]byte(long.String())); len(got) > 300 {
+		t.Fatalf("message not bounded: %d", len(got))
+	}
 }
 func TestTail(t *testing.T) {
 	if string(tail([]byte("abcdef"), 3)) != "def" {

@@ -195,7 +195,9 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				continue
 			}
 			if !result.OK {
-				if err := e.repair(ctx, a, failureEvidence(result.Feedback), results); err != nil {
+				// repair() normalizes the feedback itself: agents keep the
+				// raw output and artifact paths for the retry.
+				if err := e.repair(ctx, a, result.Feedback, results); err != nil {
 					return 1, err
 				}
 				if a.Phase == "running" {
@@ -284,6 +286,19 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			if e.inputPending {
 				e.resumeFromInputWait()
 			}
+			// A check may have released the last retained attempt after the
+			// import pass at loop entry. Apply queued requirements before
+			// planning or dispatching more work against the old backlog.
+			e.processPlanImports(ctx)
+			if e.err != nil {
+				return 1, e.err
+			}
+			if ctx.Err() != nil {
+				return 130, ctx.Err()
+			}
+			if e.drainingNow() {
+				continue
+			}
 			if len(e.State.Backlog.Ready()) == 0 {
 				recovered, err := e.recoverRun(ctx)
 				if err != nil {
@@ -311,6 +326,13 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				if err := e.review(ctx, final); err != nil {
 					reviewFailures++
 					e.event("review-error", err.Error())
+					var agent *AgentError
+					if errors.As(err, &agent) && (agent.Kind == "configuration" || agent.Kind == "invalid_request") {
+						// Account, credential, and request-shape failures repeat
+						// identically on retry. Stop with work retained; the
+						// surfaced agent message names the operator action.
+						return 1, err
+					}
 					if reviewFailures >= 3 {
 						return 1, err
 					}

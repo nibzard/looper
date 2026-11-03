@@ -3,6 +3,7 @@ package looper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,5 +288,152 @@ func TestShellErrorsKeepStableRepairEvidence(t *testing.T) {
 			t.Fatalf("script paths changed failure identity:\n%s\n%s", previous, current)
 		}
 		previous = current
+	}
+}
+
+// checkFeedback builds verification feedback whose observed output carries a
+// generated check worktree path and CTest durations, the noise that hid the
+// repeated T014 porcelain-gate failure in the Stackfall run.
+func checkFeedback(t *testing.T, name, id, output string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "logs", "runtime", "worktrees", "check-"+id)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "verify.log")
+	if err := os.WriteFile(log, []byte(output), 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := "set -e\ntest -z \"$(git status --porcelain --untracked-files=no)\""
+	return commandFeedback("Combined verification failed:", command,
+		&commandError{filepath.Join(dir, "verify.sh"), errors.New("exit status 1")}, log)
+}
+
+const ctestOutput = `Internal ctest changing into directory: %s/build
+Test project %s/build
+1/5 Test #1: stackfall_tests ..................   Passed    %s sec
+5/5 Test #5: stackfall_audio_tests ............   Passed    %s sec
+100%% tests passed, 0 tests failed out of 5
+Total Test time (real) =   %s sec
+`
+
+func TestRepeatEvidenceNormalizesCheckPathsAndDurations(t *testing.T) {
+	path := func(id string) string { return "/tmp/looper-test/runtime/worktrees/check-" + id }
+	first := checkFeedback(t, "first", "1111111111111111", fmt.Sprintf(ctestOutput, path("1111111111111111"), path("1111111111111111"), "0.12", "0.41", "0.73"))
+	second := checkFeedback(t, "second", "aaaaaaaaaaaaaaaa", fmt.Sprintf(ctestOutput, path("aaaaaaaaaaaaaaaa"), path("aaaaaaaaaaaaaaaa"), "0.07", "0.39", "0.58"))
+	if failureEvidence(first) != failureEvidence(second) {
+		t.Fatalf("check paths or CTest durations changed the repeated-failure signature:\n%s\n%s", failureEvidence(first), failureEvidence(second))
+	}
+	// The raw feedback keeps its distinct paths and durations for the agent.
+	if first == second {
+		t.Fatal("raw feedback lost its evidence")
+	}
+}
+
+func TestRepeatEvidenceKeepsDistinctFailuresDistinct(t *testing.T) {
+	base := func() string {
+		return fmt.Sprintf(ctestOutput, "/tmp/x/runtime/worktrees/check-1111111111111111", "/tmp/x/runtime/worktrees/check-1111111111111111", "0.12", "0.41", "0.73")
+	}
+	reference := failureEvidence(checkFeedback(t, "ref", "1111111111111111", base()))
+	distinct := map[string]string{
+		"failing test name": strings.Replace(base(), "stackfall_tests", "stackfall_other_tests", 1),
+		"test result":       strings.Replace(base(), "Passed    0.12", "***Failed  0.12", 1),
+		"assertion value":   strings.Replace(base(), "0 tests failed", "2 tests failed", 1),
+		"diagnostic text":   base() + "Expected: 3\nActual: 4\n",
+		"test count":        strings.Replace(base(), "out of 5", "out of 6", 1),
+	}
+	for name, output := range distinct {
+		if evidence := failureEvidence(checkFeedback(t, name, "1111111111111111", output)); evidence == reference {
+			t.Fatalf("%s produced the same signature as the reference failure", name)
+		}
+	}
+	// A changed duration alone is noise, not a distinct failure.
+	changedDuration := strings.Replace(base(), "0.12", "9.99", 1)
+	if evidence := failureEvidence(checkFeedback(t, "duration", "1111111111111111", changedDuration)); evidence != reference {
+		t.Fatal("a changed trailing duration must not change the signature")
+	}
+	// Narrowness: project-owned paths that merely look check-shaped, and
+	// seconds inside a test name, must stay distinct from each other.
+	patch := func(n string) string {
+		return strings.Replace(base(), "Test project", "Test project patch worktrees/check-"+n+".patch against", 1)
+	}
+	first := failureEvidence(checkFeedback(t, "patch1", "1111111111111111", patch("1")))
+	second := failureEvidence(checkFeedback(t, "patch2", "1111111111111111", patch("2")))
+	if first == second {
+		t.Fatal("project check-shaped paths were normalized together")
+	}
+	nameSeconds := func(n string) string {
+		return strings.Replace(base(), "stackfall_tests", "waits "+n+" sec before failing", 1)
+	}
+	first = failureEvidence(checkFeedback(t, "sec5", "1111111111111111", nameSeconds("5")))
+	second = failureEvidence(checkFeedback(t, "sec9", "1111111111111111", nameSeconds("9")))
+	if first == second {
+		t.Fatal("seconds inside a test name were normalized away")
+	}
+	// The normalized marker must not collide with a literal project path of
+	// the same shape as the bare normalized prefix.
+	generated := strings.Replace(base(), "Test project", "Test project fatal: worktrees/check-1111111111111111 already exists", 1)
+	literal := strings.Replace(base(), "Test project", "Test project fatal: worktrees/check already exists", 1)
+	if failureEvidence(checkFeedback(t, "gen", "1111111111111111", generated)) == failureEvidence(checkFeedback(t, "lit", "1111111111111111", literal)) {
+		t.Fatal("normalized marker collides with a literal path")
+	}
+	// A different command or error text stays distinct too.
+	changed := strings.Replace(checkFeedback(t, "cmd", "1111111111111111", base()), "git status --porcelain", "git diff --quiet", 1)
+	if failureEvidence(changed) == reference {
+		t.Fatal("changed command produced the same signature")
+	}
+	changedErr := strings.Replace(checkFeedback(t, "err", "1111111111111111", base()), "exit status 1", "exit status 2", 1)
+	if failureEvidence(changedErr) == reference {
+		t.Fatal("changed error produced the same signature")
+	}
+}
+
+func TestRepeatEvidencePreservesCommandAndErrorPaths(t *testing.T) {
+	for _, field := range []string{"Command", "Error"} {
+		t.Run(field, func(t *testing.T) {
+			first := "Combined verification failed:\n" + field + ": fixtures/worktrees/check-1111111111111111/input\nObserved output:\nmissing fixture"
+			second := strings.ReplaceAll(first, "1111111111111111", "aaaaaaaaaaaaaaaa")
+			if failureEvidence(first) == failureEvidence(second) {
+				t.Fatalf("different %s paths produced the same evidence", field)
+			}
+		})
+	}
+}
+
+func TestRepeatEvidenceRequiresCheckDirectoryBoundaries(t *testing.T) {
+	for _, path := range []string{
+		"fixtures/worktrees/check-1111111111111111.patch",
+		"/tmp/notworktrees/check-1111111111111111/input",
+		"/tmp/worktrees/check-1111111111111111-saved/input",
+	} {
+		t.Run(path, func(t *testing.T) {
+			first := "Combined verification failed:\nCommand: run-tests\nError: exit status 1\nObserved output:\nassertion failed at " + path
+			second := strings.ReplaceAll(first, "1111111111111111", "aaaaaaaaaaaaaaaa")
+			if failureEvidence(first) == failureEvidence(second) {
+				t.Fatal("different project paths produced the same evidence")
+			}
+		})
+	}
+}
+
+func TestRepeatEvidenceNormalizesDirectoryOutputOnly(t *testing.T) {
+	for _, path := range []string{
+		"/tmp/runtime/worktrees/check-1111111111111111",
+		"/tmp/runtime/worktrees/check-1111111111111111/build",
+		`C:\runtime\worktrees\check-1111111111111111\build`,
+	} {
+		t.Run(path, func(t *testing.T) {
+			header := "Combined verification failed:\nCommand: run-tests\nError: exit status 1\n"
+			first := header + "Observed output:\n" + path
+			second := strings.ReplaceAll(first, "1111111111111111", "aaaaaaaaaaaaaaaa")
+			if failureEvidence(first) != failureEvidence(second) {
+				t.Fatal("generated check directory changed the evidence")
+			}
+			first = header + path
+			second = strings.ReplaceAll(first, "1111111111111111", "aaaaaaaaaaaaaaaa")
+			if failureEvidence(first) == failureEvidence(second) {
+				t.Fatal("a path outside observed output was normalized")
+			}
+		})
 	}
 }
