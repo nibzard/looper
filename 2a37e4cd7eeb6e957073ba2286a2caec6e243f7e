@@ -1,0 +1,28 @@
+# Context
+
+## Why This Way
+The owner's policy: every build landed after fixes or features
+carries a bumped version. Deriving the stamp at build time in
+scripts/build-ldflags.sh (the single ldflags choke point for both
+install.sh and the Makefile) enforces it automatically - no one
+has to remember to bump VERSION between releases.
+
+The count is commits since the last VERSION-touching commit, not
+since a tag: releases 0.8.0-0.8.2 and 0.9.0 were left untagged by
+choice, so tags are unreliable here. Every post-bump commit bumps
+the patch; classifying commits as fix vs feat is not possible
+because 79 of the last 100 subjects carry no prefix.
+
+## Gotchas
+- Explicit version arguments pin the stamp verbatim (Formula,
+  make build VERSION=x, test fixtures). An empty argument derives.
+- A dirty VERSION file derives from the dirty content; the
+  "(modified)" marker disambiguates.
+- git log -1 -- VERSION only walks history reachable from HEAD, so
+  the bump commit is always HEAD or an ancestor; the count cannot
+  fail on an old checkout.
+
+## Related
+- Policy and design confirmed with the owner 2026-11-03: format
+  <next patch>-dev.<N>, no formal release cut alongside.
+- NOTES.md "Dev version stamping, 2026-11-03".
