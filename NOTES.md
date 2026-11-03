@@ -2035,3 +2035,30 @@ go build, go vet, and git diff --check pass before the commit. The
 recorded make test result covers the identical tree. Built and installed
 with ./install.sh --skip-skills; cmp confirms the installed binary
 matches build/looper and reports 0.9.0 at cdafca95bbf8.
+
+## Dev version stamping, 2026-11-03
+
+The owner requires every build landed after fixes or features to carry a
+bumped version. A binary built at 22e1941 still reported 0.9.0 because
+VERSION changes only at release time. Chosen format (owner confirmed):
+builds after the last VERSION bump stamp <next patch>-dev.<N>, where N
+is the commit count since the bump; the revision hash stays in the
+existing parenthetical. No release bump now; releases stay deliberate.
+
+scripts/build-ldflags.sh derives the stamp when it is called without an
+explicit version: it finds the last commit that touched VERSION, counts
+the commits after it, and bumps the patch with base-10 arithmetic
+(0.9.9 goes to 0.9.10). The Makefile passes no version by default and
+still honors a VERSION override from the command line or environment.
+Formula builds, explicit arguments, archive builds, and builds at the
+bump commit keep the plain version.
+
+build-test.py gains fixtures for the derived stamp (0.8.2 to 0.8.3-dev.1),
+numeric patch arithmetic without carry, and the explicit-argument escape
+hatch. docs/release.md documents the stamp; the github-release skill
+notes that interim builds may report it.
+
+Validation: build-test.py passes, the derived stamp on this repository
+is 0.9.1-dev.4 at 22e1941, make -n confirms the override wiring, and
+make test passes end to end, including package smoke and skill
+regression.

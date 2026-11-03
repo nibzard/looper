@@ -55,4 +55,15 @@ with tempfile.TemporaryDirectory(prefix="looper build ") as directory:
     (archive / "VERSION").write_text("0.8.2\n")
     assert stamps(archive)[prefix + "BuildRevision"] == "unknown"
 
+    # Commits after the bump derive a dev stamp: next patch plus the count.
+    git(root, "commit", "-q", "--allow-empty", "-m", "Feature")
+    assert stamps(root)[prefix + "Version"] == "0.8.3-dev.1"
+    assert stamps(root, "0.8.2")[prefix + "Version"] == "0.8.2"
+    (root / "VERSION").write_text("0.9.9\n")
+    git(root, "add", "VERSION")
+    git(root, "commit", "-qm", "Release 0.9.9")
+    git(root, "commit", "-q", "--allow-empty", "-m", "Fix")
+    assert stamps(root)[prefix + "Version"] == "0.9.10-dev.1"
+    assert stamps(root, "dev")[prefix + "Version"] == "dev"
+
 print("Build stamp checks passed.")

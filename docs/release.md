@@ -15,6 +15,11 @@ Preparation alone never authorizes publication.
   commit of a release, so no commit carries a version it does not contain.
 - The bump is its own commit: `Release <description>`, changing only
   `VERSION`.
+- Between releases, every build self-identifies: with no explicit version,
+  `build-ldflags.sh` counts the commits since the last `VERSION` bump and
+  stamps `<next patch>-dev.<N>`. A build four commits after `Release
+  0.9.0` reports `0.9.1-dev.4`. The bump commit itself reports the plain
+  version, and an explicit version argument pins the stamp.
 
 ## Prepare a release
 

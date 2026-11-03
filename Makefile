@@ -1,11 +1,18 @@
 PREFIX ?= $(HOME)/.local
 CODEX_HOME ?= $(HOME)/.codex
 VERSION ?= $(shell cat VERSION)
+# An explicit version pins the stamp; otherwise build-ldflags.sh derives
+# a dev version from the commits since the last VERSION bump.
+ifneq (,$(filter command line environment,$(origin VERSION)))
+VERSION_ARG := "$(VERSION)"
+else
+VERSION_ARG :=
+endif
 
 .PHONY: build install uninstall smoke test race test-measuretwice
 
 build:
-	go build -trimpath -ldflags "$$(bash scripts/build-ldflags.sh "$(VERSION)")" -o build/looper ./cmd/looper
+	go build -trimpath -ldflags "$$(bash scripts/build-ldflags.sh $(VERSION_ARG))" -o build/looper ./cmd/looper
 
 install:
 	PREFIX="$(PREFIX)" CODEX_HOME="$(CODEX_HOME)" ./install.sh
@@ -27,7 +34,7 @@ test: build
 
 race:
 	GORACE=atexit_sleep_ms=0 go test -race ./...
-	go build -race -ldflags "$$(bash scripts/build-ldflags.sh "$(VERSION)")" -o build/looper ./cmd/looper
+	go build -race -ldflags "$$(bash scripts/build-ldflags.sh $(VERSION_ARG))" -o build/looper ./cmd/looper
 	GORACE=atexit_sleep_ms=0 python3 scripts/runtime-test.py
 
 test-measuretwice:
