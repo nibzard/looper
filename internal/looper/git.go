@@ -167,13 +167,17 @@ func (r *Repository) SnapshotFrom(cwd, base string, knownTrees ...string) (strin
 		return "", err
 	}
 	args := []string{"add", "-A", "--", "."}
-	for _, x := range r.Excluded {
-		args = append(args, ":(exclude)"+x)
-	}
-	// Remove private context from the temporary index below. An explicit
-	// exclusion for an ignored directory can make git add fail.
+	// Control files leave the temporary index through git rm below. An
+	// exclude pathspec that names an ignored file makes git add fail on
+	// it, and private context is filtered out by the loop below either way.
 	if _, err = gitCommand(cwd, nil, e, args...); err != nil {
 		return "", err
+	}
+	if len(r.Excluded) > 0 {
+		rm := append([]string{"rm", "-r", "-f", "--cached", "--quiet", "--ignore-unmatch", "--"}, r.Excluded...)
+		if _, err = gitCommand(cwd, nil, e, rm...); err != nil {
+			return "", err
+		}
 	}
 	ignored, err := gitCommand(cwd, nil, nil, "ls-files", "--cached", "--ignored", "--exclude-standard", "-z")
 	if err != nil {
