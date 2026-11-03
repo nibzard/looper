@@ -1,0 +1,45 @@
+# Context
+
+## Background
+This commit lands the incident-driven fix batches that had
+accumulated uncommitted in the tree since release 0.9.0:
+- Pylemma bootstrap schema failure (2026-10-27): agents emitted
+  task-level round fields and priorities 6-7; strict decoding
+  rejected the whole backlog.
+- Slit Codex account lapse (2026-10-30): a subscription expiry
+  made every Codex call fail identically; the controller retried
+  the final review three times and reported only
+  "execution: exit status 1".
+- Stackfall run analysis (2026-11): $162.71 run dominated by
+  cache reads; T014 repeats caused by per-check worktree ids and
+  CTest timings looking like new failures; import boundary skip
+  between T025/T026; done tasks listed as attention.
+
+Full findings, reproduction steps, and review history: NOTES.md
+sections dated 2026-10-27 through 2026-11-03.
+
+## Why This Way
+- Repeat normalization is deliberately narrow (16-hex check ids
+  with directory boundaries, trailing CTest durations only, and
+  only inside observed output). An earlier broader version
+  collided distinct commands and patch names; an adversarial
+  review proved it and the narrowing is pinned by regressions.
+- repair() hashes normalized evidence but passes raw feedback to
+  agents, so artifact paths stay usable. Pinned by a Go test after
+  a reviewer showed the suite passing with the raw call restored.
+- Identity is checked before bootstrap can write: bootstrapping a
+  different task-file selection would create a second backlog
+  before the mismatch surfaced.
+
+## Gotchas
+- Prompt wording cannot repair saved plans, task commands, or
+  explicit verification overrides; only new prompts change.
+- Unrecognized unstable output still reaches the repair limit by
+  design.
+- Review agents with write access mutated the tree during the
+  review; scope reviewers read-only before trusting a tree.
+
+## Related
+- Improvement plan: /notes/looper-improvement-plan-2026-11-03.md
+- Review findings: /notes/looper-improvement-review-2026-11-03.md
+- Stackfall analysis: /notes/stackfall-session-analysis/
