@@ -69,6 +69,18 @@ func firstRunDecision(c Config, in *os.File, out io.Writer) FormDecision {
 	return FormDecision{true, ""}
 }
 
+// defaultAgentNotice names the agent on the one path where the operator never
+// chose one: a non-interactive controller start with no saved profile.
+func defaultAgentNotice(c Config, out io.Writer) {
+	if c.JSON || c.Sources.Agent != SourceDefault {
+		return
+	}
+	if _, err := os.Stat(c.ProfilePath); err == nil {
+		return
+	}
+	fmt.Fprintf(out, "No saved profile: the coding agent defaults to %s. Run 'looper config' to change it.\n", c.Agent)
+}
+
 // repositoryOwned probes the repository lock without holding it.
 func repositoryOwned(c Config) bool {
 	common, err := gitText(c.Root, "rev-parse", "--git-common-dir")

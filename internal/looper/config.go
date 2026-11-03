@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// defaultAgent is the coding agent a controller uses when the operator never
+// chose one by flag, environment, or saved profile.
+const defaultAgent = "claude"
+
 type Config struct {
 	Root, Todo, BaseDir, Agent, ReviewAgent, CodexBin, ClaudeBin, ZcodeBin, Model, ClaudeModel, Effort, Verify, Setup, Assess, Hook string
 	InspectTask                                                                                                                     string
@@ -374,7 +378,7 @@ func Parse(args []string) (Config, error) {
 	}
 	c.Agent = settings.agent.value
 	if c.Agent == "" && settings.agent.from == SourceDefault {
-		c.Agent = "codex"
+		c.Agent = defaultAgent
 	}
 	c.ReviewAgent = settings.reviewAgent.value
 	if c.ReviewAgent == "" {

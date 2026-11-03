@@ -36,6 +36,27 @@ func repoConfig(t *testing.T, args ...string) Config {
 	return c
 }
 
+func TestDefaultAgentNotice(t *testing.T) {
+	c := repoConfig(t, "run")
+	var out bytes.Buffer
+	defaultAgentNotice(c, &out)
+	if !strings.Contains(out.String(), defaultAgent) {
+		t.Fatalf("a defaulted agent with no profile must print the notice, got %q", out.String())
+	}
+	flagged := repoConfig(t, "run", "--agent", "codex")
+	out.Reset()
+	defaultAgentNotice(flagged, &out)
+	if out.Len() != 0 {
+		t.Fatalf("an explicit agent must not print a notice, got %q", out.String())
+	}
+	asJSON := repoConfig(t, "run", "--json")
+	out.Reset()
+	defaultAgentNotice(asJSON, &out)
+	if out.Len() != 0 {
+		t.Fatalf("json output must stay unchanged, got %q", out.String())
+	}
+}
+
 func TestFirstRunDecisionGates(t *testing.T) {
 	c := repoConfig(t)
 	// Tests never have terminal streams, so the terminal gate must reject.

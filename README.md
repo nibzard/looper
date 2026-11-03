@@ -412,7 +412,7 @@ requirements starts a fresh attempt.
 
 ## Models
 
-The default agent is Codex. Looper uses the model configured in each agent
+The default agent is Claude. Looper uses the model configured in each agent
 unless you select one explicitly.
 
 ```sh
