@@ -479,6 +479,14 @@ published and resumes it without marking unchecked work done. Completed worker r
 implementation after a controller crash. Invalid final reports get a
 separate report recovery attempt with code changes prohibited.
 
+Plan imports keep accepted scheduling adjustments separate from unresolved
+conflicts. Optional ordering before a completed task can become follow-up work
+after that task. The import receipt and acknowledgement retain the adjustment.
+Imports can also add prerequisites to an existing idle task through `gates`.
+These additions cannot remove dependencies, create cycles, or change completed
+or retained work. A follow-up report preserves an existing task's ownership.
+Use a separate task for a distinct operator prerequisite.
+
 Before waiting on blocked work, Looper can repair proven orchestration defects.
 It consults the review agent once for unchanged source and command contracts.
 Repairs apply after workers and checks drain. Looper retains implementation

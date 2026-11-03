@@ -236,6 +236,12 @@ func runAddPlan(c Config, out, stderr io.Writer) int {
 		} else {
 			fmt.Fprintln(out)
 		}
+		for _, adjustment := range ack.Adjustments {
+			fmt.Fprintln(out, "Adjustment:", adjustment)
+		}
+		for _, gate := range ack.Gates {
+			fmt.Fprintf(out, "Gate: %s depends on %s\n", gate.TaskID, strings.Join(gate.DependsOn, ", "))
+		}
 		for _, ref := range ack.Covered {
 			fmt.Fprintf(out, "Covered: %s -> %s %s\n", ref.Requirement, ref.TaskID, ref.Evidence)
 		}

@@ -398,6 +398,8 @@ type ImportRecord struct {
 	AddedTasks  []string     `json:"added_tasks,omitempty"`
 	Covered     []CoveredRef `json:"covered,omitempty"`
 	Conflicts   []string     `json:"conflicts,omitempty"`
+	Adjustments []string     `json:"adjustments,omitempty"`
+	Gates       []ImportGate `json:"gates,omitempty"`
 	Error       string       `json:"error,omitempty"`
 	Enqueued    string       `json:"enqueued"`
 	Applied     string       `json:"applied,omitempty"`
