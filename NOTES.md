@@ -2019,3 +2019,19 @@ The new focused regressions also pass with the Go race detector enabled.
 git diff --check passes. Validation log: /tmp/looper-import-fixes-make-test.log.
 The rebuilt binary is only a build artifact; the installed binary and live
 STACKFALL controller remain unchanged. No commit or push was requested here.
+
+## Commit and install, 2026-11-03
+
+Committed all accumulated batches since 8a5affd as cdafca9 "Harden
+agent failures, bootstrap, and scheduling": the Pylemma bootstrap schema
+fixes, the Slit agent-failure surfacing, the Stackfall improvement plan
+with its review fixes, the import scheduling and event fixes, and the
+attention-list correction. One commit because the batches share files
+(run.go, engine.go, integration.go). Pushed to origin/main. A context
+note with the incident history is attached under refs/notes/context and
+pushed.
+
+go build, go vet, and git diff --check pass before the commit. The
+recorded make test result covers the identical tree. Built and installed
+with ./install.sh --skip-skills; cmp confirms the installed binary
+matches build/looper and reports 0.9.0 at cdafca95bbf8.
