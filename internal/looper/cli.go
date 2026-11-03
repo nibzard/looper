@@ -40,7 +40,7 @@ Options:
   --plan <path>          Add Markdown requirements at startup; repeatable
   --jobs auto|N          Maximum concurrent workers (default: auto)
   --check-jobs N         Concurrent setup and checks (default: 1)
-  --agent NAME           Coding agent: codex, claude, or zcode (default: codex)
+  --agent NAME           Coding agent: codex, claude, or zcode (default: claude)
   --review-agent NAME   Planning and review agent (default: coding agent)
   --model NAME          Explicit model; otherwise use the agent's configuration
   --effort NAME         Codex reasoning effort
@@ -153,6 +153,7 @@ func Main(args []string, out, stderr io.Writer) int {
 		if !start {
 			return 0
 		}
+		defaultAgentNotice(c, out)
 	}
 	if c.Command == "start" {
 		return StartDetached(c, out, stderr)

@@ -60,7 +60,7 @@ func TestParseDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Agent != "codex" || c.ReviewAgent != "codex" {
+	if c.Agent != "claude" || c.ReviewAgent != "claude" {
 		t.Fatalf("agents %s/%s", c.Agent, c.ReviewAgent)
 	}
 	if c.Model != "" || c.ClaudeModel != "" || c.Effort != "" {
