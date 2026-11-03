@@ -2062,3 +2062,123 @@ Validation: build-test.py passes, the derived stamp on this repository
 is 0.9.1-dev.4 at 22e1941, make -n confirms the override wiring, and
 make test passes end to end, including package smoke and skill
 regression.
+
+## End-to-end bug review, 2026-11-03
+
+Full report with all evidence and verifier verdicts:
+/notes/looper-e2e-bug-review-2026-11-03.md
+
+An orchestrated review covered the whole repository at the state
+committed as cdafca9. Thirteen finders covered ten Go file groups, a
+concurrency sweep, the then-uncommitted diff, and the scripts, shell,
+Makefile, and Node adapter. Two independent adversarial verifiers
+checked every finding; a finding counts as confirmed only when both
+upheld it. A completeness critic then added four gap rounds (cost math,
+settings queues, prompt transport, uninstall and release scripts).
+110 agents total, all read-only; the working tree stayed untouched
+during the run (cdafca9, 22e1941, and 2a37e4c were committed by the
+owner mid-run; none invalidate the findings). go build and go vet pass.
+
+Result: 52 confirmed (8 high, 16 medium, 28 low), 6 disputed, 3
+refuted. The confirmed high findings:
+
+- `looper tui` as the controller installs no signal handlers. SIGTERM
+  closes the UI but leaves workers running with the terminal blocked in
+  `<-done`; a second signal hard-kills the process with no shutdown
+  event (internal/looper/cli.go:98).
+- runIdentityCommand reads only Linux /proc, so on darwin liveness
+  detection, statistics, and timing drop every live worker
+  (internal/looper/controller.go:107, internal/looper/statistics.go:105).
+- Request queues wedge permanently once the request directory holds more
+  than 100 entries: claiming refuses, the error is only logged, and the
+  idle loop spins without sleep with unbounded journal growth
+  (internal/looper/run.go:513, internal/looper/settings.go:379).
+- classifyFailure scans the tail of the agent's own event log, so
+  ordinary project text that matches account or configuration patterns
+  aborts the run (internal/looper/agent.go:206).
+- The `looper tui` non-interactive fallback re-parses with nil args and
+  silently drops --plan and every other flag (internal/looper/dashboard.go:28).
+- uninstall.sh deletes skills the default install never installed,
+  including user-authored ones (uninstall.sh:142).
+
+No fixes were applied. The confirmed high and medium findings are
+tracked as T018 through T036 in to-do.json; T037 triages the low and
+disputed findings. Each task cites its finding location and ends with an
+acceptance clause. The six disputed findings still need an owner
+decision.
+
+## Backlog audit against the codebase, 2026-11-03
+
+Every task in to-do.json was audited against the tree at 2a37e4c
+(52 agents: one auditor per task over a frozen backlog snapshot, an
+adversarial confirmer for every verdict that would change the backlog,
+and one hygiene pass; no file in the repository was modified).
+
+Result for the seventeen done tasks: six verified outright (T002, T004,
+T005, T007, T010, T016) and eleven partial. Of the partial ones, ten
+deliver the capability but lack discriminating tests for some
+acceptance clauses; their gaps are consolidated in new task T038, and
+T003 and T012 carry appended audit notes (formula drift and a NO_COLOR
+wording correction). T011 was reopened by the owner's decision: the
+first-run form can never appear on the looper tui path (cli.go:98
+dispatches before the form gate at cli.go:146), the same dispatch-order
+defect as T018; it now depends on T018.
+
+Result for the twenty open tasks: seventeen confirmed open as written;
+T020, T027, and T036 were corrected. T020's citations were off (the
+logging callers are settings.go:662-666, dashboard_data.go:239-242, and
+imports.go:142-145; the no-sleep return is run.go:526); T027
+undercounted (24 unpriced glm-* ids, not 8); T036 conflated two
+distinct defects (unguarded value-option reads on all bash versions and
+empty-array expansions before bash 4.4). Notes-level corrections went
+into T019 (controllerAlive also breaks looper stop on darwin),
+T026 (stranding mechanism is the clearSessionFiles skip at
+settings.go:429-432), T028 (the loss window ends at the delete; the
+naive fix would break resume-after-drain), and T037 (triage scope is
+C25-C52 plus D1-D6; four lows are already folded into T020, T027, T029,
+and T036).
+
+New tasks: T038 pins the unpinned acceptance criteria of T001 through
+T017; T039 records the detached mode in controller metadata
+(publishController always writes "foreground"). Overlap guards:
+T022 depends on T018 and T029 depends on T020, so two workers cannot
+make conflicting edits to one function.
+
+The hygiene pass claimed T023 sits at priority 2; the snapshot shows
+priority 1, so that item was discarded. The backlog now holds 39 tasks:
+16 done and 23 todo.
+
+## Stackfall promise review, 2026-11-03
+
+Full report with evidence: /notes/stackfall-promise-review-2026-11-03.md.
+The question: across all stackfall sessions (10 controller sessions, 81
+transcripts, $304.17 reported total), did looper deliver its README and
+manifesto promise? Verdict: yes on the core loop, with integrity intact;
+three of the five cdafca9 fixes verified live, two unexercised.
+
+- Fix scorecard live on run-0a86489 (0.9.1-dev.5): import flood gone
+  (490,671 poll events over 3 h on the old build; six on the new build),
+  import starvation gone (five queued imports processed within 21 min of
+  the first check drain), no cleanliness gate composed since 07:30 while
+  every prompt from 13:15 carries the delivery-model wording. Repeat
+  detection and the repair header remain unexercised: no repeated check
+  failure and no repair has occurred since the fixes landed.
+- New finding: import conflicts are terminal. Four of five owner-queued
+  plan imports ended status failed with sound scope reasoning (two wanted
+  to land before the integrated T026; one contradicted SPEC v1.0
+  exclusions; one cross-referenced the rejected plan), but no task,
+  blocker, or board entry records the follow-up. The plans live only in
+  runtime/acks/. A conflict should become a blocked task with its unblock
+  condition.
+- Deferred gaps confirmed live again: scheduling findings stayed tag-only
+  (T028 wiring raised five times over 2.5 h until a human edit), and the
+  cost shape is unchanged (compaction at 537K-1.39M; the live T015 gate
+  session is the costliest yet at ~$35 and still running).
+- Accounting hole: the 15:39Z upgrade stop killed a healthy 77-minute T026
+  session mid-edit; its usage report is empty, so cancelled spend is
+  invisible. The restart recovered the work only because the agent diffed
+  the work copy.
+- Hygiene: main is stale since the human's 14:41Z publish (T026's
+  integration exists only on refs/looper-tasks), and the project root sits
+  on an unborn master. Working-tree publication is correct; git
+  presentation confuses humans.
