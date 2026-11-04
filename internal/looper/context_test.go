@@ -243,6 +243,7 @@ printf '%s' "$p" | "$LOOPER_TEST_ORIGINAL_AGENT" "$@"
 		t.Fatal(err)
 	}
 	e.Config.CodexBin = bin
+	e.Config.ClaudeBin = bin
 	e.Config.Verify = "test -s T1.txt"
 	b := Backlog{Version: 1, Sources: []string{}, Goal: "large task", Tasks: []Task{{ID: "T1", Title: "one", Priority: 1, Status: "todo", Details: strings.Repeat("acceptance detail ", 20000) + "must-be-present"}}}
 	if err := writeJSON(c.Todo, b); err != nil {

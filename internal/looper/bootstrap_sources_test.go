@@ -68,6 +68,7 @@ if printf '%s' "$p" | grep -q 'previous backlog was rejected'; then result="$LOO
 	}
 	c := repoConfig(t, "run")
 	c.CodexBin = bin
+	c.ClaudeBin = bin
 	c.ReviewAgent = "codex"
 	e, lock, err := NewEngine(c, io.Discard)
 	if err != nil {

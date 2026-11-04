@@ -192,7 +192,8 @@ case "$prompt" in
  *"review pass for Looper"*) result='{"status":"reviewed","summary":"fixture complete","findings":[],"complete":true}' ;;
  *) exit 2 ;;
 esac
-printf '%s' "$result" > "$out"
+if [ -n "$out" ]; then printf '%s' "$result" > "$out"; fi
+printf '{"structured_output":%s}\n' "$result"
 `
 	bin := filepath.Join(t.TempDir(), "agent.sh")
 	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
