@@ -2214,3 +2214,404 @@ and skill checks. Focused race tests pass. The same Stackfall controller
 accepted the backlog correction at event 496479 and resumed planning.
 Only T015, T029, and T037 changed; device and publication gates remain.
 No binary installation, controller restart, commit, or publication occurs.
+
+## Skill installation ownership, T023, 2026-11-03
+
+The installer now records owned skill names in `.looper-installed-skills`
+inside the selected skills directory. Reinstalls update owned skills and keep
+earlier receipt entries, including optional workflow skills. Existing skills
+without receipt entries are skipped, so installation does not claim user files.
+Ownership is recorded before each copy so an interrupted copy remains removable.
+
+Uninstall validates the complete receipt before removing files. It removes
+only recorded skill directories, then removes the receipt. It needs no source
+skill tree. Without a receipt, it preserves legacy skills. Invalid receipts,
+including symlinks and incomplete records, stop the command before removal.
+The generated receipt is ignored by Git.
+
+Validation: nine ownership regression tests pass. They cover the required
+default install, a user-authored `git-commit` skill, and selective removal.
+They also cover existing selected skills, workflow reinstalls, updates,
+missing source files, dry runs, skip options, legacy installs, invalid receipts,
+symlinks, prefixes, and custom locations. The package smoke test passes with
+the real binary and the same acceptance case. Eight release installer tests,
+the build, shell syntax checks, and `git diff --check` pass.
+All installation fixtures stay in private temporary directories. No shared
+installation, controller, backlog, Git reference, or repository setting changes.
+
+## T024 retained merge failures, 2026-11-03
+
+Both retained-work merge paths discarded Git errors. Reopening a blocked task
+or repairing a result could launch a worker with unresolved conflicts.
+
+Check both merge results. Remove the failed temporary worktree and hold the
+attempt with durable conflict feedback. Preserve the original worktree, base,
+result commit, and prior verification evidence. Include Git standard output
+in merge errors because Git writes conflict paths there. Only count a dispatched
+attempt as active when its worker actually starts.
+
+Regression tests create real divergent commits. They cover conflicting and clean
+merges for reopening and repair, saved feedback, retained edits, and failed
+worktree removal. A full run test confirms that a reopened conflict exits idle
+without waiting for a worker. Both conflict tests fail against the original
+implementation through a Go overlay and pass with the fix. Ignore generated
+`to-do.json.context/` output; existing rules already cover build output.
+
+The runtime conflict fixture expected a repair worker to receive unresolved
+conflicts. Update it to the T024 contract: one task integrates, the conflicting
+task blocks with its original edits, feedback names the conflict, and no repair
+worker starts. The updated fixture passes. Focused Go race tests also pass.
+
+Final validation: `make test` passes, including all 56 runtime fixtures,
+package smoke tests, and skill helper checks. Focused Go tests pass with the
+race detector. `git diff --check` passes. No installation, commit, push, or
+backlog edit is performed.
+
+Repair 1 resolves the integration conflict in this file. Preserve the integrated
+T023 ownership note and the retained T024 diagnosis and validation notes.
+No implementation conflict remains. The focused retained-merge tests pass again
+with the race detector on the integrated tree.
+The integrated repair passes `make test`, including all 56 runtime tests,
+package smoke tests, and skill helper checks. Both Git whitespace checks pass.
+
+## Catalog pricing coverage, T027, 2026-11-03
+
+The pricing resolver previously searched only the inferred provider. This
+excluded GLM entries from other providers and both Codex Mini aliases.
+
+- Resolve explicit provider IDs within that provider only. Preserve the
+  Anthropic, OpenAI, and Z.AI defaults when they have a matching rule.
+- Otherwise, search exact catalog IDs before model patterns. Catalog order
+  resolves provider ties. Document these defaults in `prices/README.md`.
+- Treat the catalog's empty price object as an explicit free marker.
+  Missing rates, unsupported units, and unknown context tiers stay unknown.
+- Iterate all 1,783 entries across 45 providers in the acceptance test.
+  Include all 163 free markers. Check both provider-specific and bare IDs.
+  Exercise scalar text estimates and the previously excluded model names.
+- Ignore Go test binaries and the default coverage output. No build output
+  is tracked. The pinned snapshot and its checksum remain unchanged.
+
+Focused pricing, usage, and statistics tests pass with the race detector.
+`go test ./...`, `go vet ./...`, and `git diff --check` also pass.
+
+T027 repair 1 preserves both the integrated T024 notes and the catalog pricing
+notes. The integration conflict affects only this file; pricing code and tests
+merge without conflicts.
+
+Repair validation: all 1,783 catalog entries resolve, including 163 free
+markers. Focused race tests and `go vet ./...` pass. The first full Go run
+times out in `TestImportAtCompletedCheckBoundary/failed` while waiting for
+`Checking T001`. That test passes alone, and the full `go test ./...` rerun
+passes. Both Git whitespace checks pass, with no unresolved index entries.
+
+## T026 plan-import crash recovery, 2026-11-03
+
+Startup preserved plan requests in `processing/`, but only claimed files in
+`requests/`. A crash after claim left the submitter polling indefinitely.
+Session cleanup also removed terminal acknowledgements after request removal.
+
+Recover processing claims after state recovery and pending export recovery,
+under the repository lock. Replay a receipt by request identifier before reading
+source paths. Without a receipt, validate and capture the unaccepted source
+again. Compare its digests with applied receipts through normal acceptance.
+Accept the recovered claim across controller sessions. Ordinary unclaimed
+requests retain the existing stale-session behavior. Keep retained-work and
+publication boundaries unchanged.
+
+Restore acknowledgements from saved receipts. Mark plan acknowledgements with
+an optional request type, so session cleanup preserves terminal answers even
+for digest replays and rejected requests without their own receipt. Keep claims
+when state saves or acknowledgement writes fail. Check request removal errors.
+No SQLite schema or task transition changes are required.
+
+Regression tests kill a real helper controller process after claim, capture,
+queued receipt creation, application, and request removal. They also cover a
+new request with previously applied content. Two restarts must retain exactly
+one receipt and one added task, and the original submitter poll must resolve.
+Accepted imports recover after source deletion. Additional tests cover receipt
+save failures, acknowledgement write failures, and a missing unaccepted source
+that must return an explicit error instead of leaving a pending poll.
+
+Generated test coverage is ignored in `/coverage.out`; existing `/build/`
+rules cover build output and the temporary regression overlay. All fixtures
+use private temporary repositories and databases. No shared service, backlog,
+repository setting, installation, or publication changes are required.
+
+Validation: `make test` passes, including Go tests, static analysis, installer
+checks, build checks, all 56 runtime fixtures, package smoke tests, and skill
+helper checks. The new recovery tests pass with the race detector. An overlay
+that disables startup recovery makes the claim regression fail with the
+original still-pending poll. Remove that temporary overlay before static
+analysis because Go discovers `.go` files even under Git-ignored directories.
+`git diff --check` passes. No commit, push, or backlog edit is performed.
+
+T026 repair 1 preserves the integrated T027 pricing notes and test output
+ignore rules alongside the retained import recovery changes. The integration
+conflicts affect only `.gitignore` and this file.
+
+Repair validation: `make test` passes on the integrated tree, including all
+56 runtime fixtures, package smoke tests, and skill checks. The import crash
+recovery tests pass with the race detector. Both Git whitespace checks pass,
+and no unresolved index entries remain. Existing ignore rules cover generated
+build output, Go test binaries, and coverage output.
+
+## Negative persisted intervals, T030, 2026-11-03
+
+Timing reads returned an error when a saved session or process ended before
+its start. This also stopped statistics, status, and task inspection queries.
+Clamp the end to the start during reads and warn on standard error. Keep the
+saved timestamps, database schema, and JSON structure unchanged.
+
+Regression tests cover both tables through a read-only connection. A negative
+interval contributes zero to project totals, task totals, and daily statistics.
+Healthy intervals still count. Plain and JSON status and inspect commands
+remain usable. A Go overlay restores the original error branch and confirms
+that the new tests fail against it, without changing the candidate files.
+
+Focused timing, task timing, and statistics tests pass with the race detector.
+`go test ./...`, `go vet ./...`, and the Git whitespace check pass.
+Existing ignore rules cover
+build output, Go test binaries, and coverage output. Tests create their database
+and warning files in private temporary directories and remove them automatically.
+
+T030 repair 1 resolves the notes conflict with the integrated T026 recovery
+work. Preserve both sections. The timing implementation and regression tests
+merge without conflicts. The acceptance tests and focused timing, task timing,
+and statistics tests pass with the race detector on the integrated tree.
+
+The first repair run of `make test` times out in the existing
+`TestImportAtCompletedCheckBoundary/failed` test while waiting for
+`Checking T001`. The complete boundary test passes alone on the same tree.
+This matches the timeout already recorded under T027 repair validation.
+
+The integrated repair passes the full `make test` rerun, including all
+56 runtime fixtures, package smoke tests, and skill checks. Both Git whitespace
+checks pass. No unresolved index entries remain. No backlog, shared Git
+reference, repository setting, installation, or publication changes occur.
+
+## T025 completed runs with oversized logs, 2026-11-03
+
+The agent runner rejected event logs above 64 MiB before reading the Codex
+result file. A completed run therefore lost its valid result.
+
+Read a bounded tail for oversized event logs. Remove the first partial event
+and prepend a JSON line with type `looper.log_truncated`. Atomically replace
+only the retained event log. Include the marker within the 64 MiB limit.
+Keep result-file limits, result validation, cancellation, and process failure
+handling in place. Logs within the limit remain unchanged.
+
+The acceptance test runs the full controller with a stub Codex process.
+The process writes a valid result, creates a file, and emits 100 MiB of output.
+The executable check verifies the file. The controller publishes the change
+and exports the task as done. The retained log contains the marker and final
+event. Additional tests cover the size boundary, missing logs, malformed
+results, and process errors after oversized output. Focused tests pass with
+the race detector.
+
+Existing ignore rules cover `*.jsonl`, `/build/`, `*.test`, and `coverage.out`.
+No generated build artifacts are tracked. All test fixtures use private
+temporary directories. No external service or shared database is required.
+
+Validation: `go test ./...`, `go vet ./...`, focused race tests, and
+`git diff --check` pass. A temporary Go overlay restores the capped log read.
+The acceptance test then fails because the task remains blocked (exit code 2).
+The overlay uses the candidate source and does not change project files.
+No backlog, shared Git reference, repository setting, or installation changes
+are made.
+
+## T028 startup drain requests, 2026-11-03
+
+`NewEngine` deleted the stop file before publishing controller identity. This
+could discard a request written by `looper stop` or the SIGTERM handler during
+startup. Preserve the file through initialization and consume it at the final
+safe boundary, after active work drains and state saves successfully. Report
+request removal errors instead of claiming a completed drain.
+
+Regression tests write the request before engine creation and after engine
+creation. Both runs drain before planning or dispatch, leave the task pending,
+and remove the completed request. A new engine then executes the pending task
+and completes normally. A separate test covers request removal failure.
+Existing signal tests confirm that SIGTERM writes the same request without
+cancelling work, while SIGINT cancels.
+
+Focused lifecycle tests pass with the race detector. Temporary Go overlays
+restore the startup wipe and retain the completed stop file separately. Each
+mutation makes the acceptance test fail for the expected reason. The overlays
+use candidate source files and leave project files unchanged.
+
+Existing `.gitignore` rules cover `/build/`, `*.test`, and `coverage.out`.
+No generated build artifacts are tracked. Tests use private temporary
+repositories and databases; they require no external services.
+
+The first `make test` run fails in the existing
+`TestCancelledCheckRetainsResourcesUntilRecovery` test: its completed recovery
+retains the fixture database. The test passes alone on the same candidate.
+The full checks are rerun without changing that test or the resource code.
+
+The full `make test` rerun passes: Go tests, static analysis, installer checks,
+build checks, all 56 runtime fixtures, package smoke tests, and skill checks.
+The final focused lifecycle tests pass with the race detector. The Git
+whitespace check passes. No backlog, shared Git reference, repository setting,
+installation, or publication changes are made.
+
+
+## T031 unchanged verification during run recovery, 2026-11-04
+
+Run recovery applied the replacement-command guard to every proposal. This
+rejected an unchanged command such as `head -c 1 retained.txt` because it
+contains no recognized check keyword. Compare the proposal with the effective
+recorded command before applying that guard. Include plan commands, explicit
+overrides, and saved recovery corrections in that comparison. Preserve all
+other recovery validation and the guard for changed commands.
+
+Regression tests cover all three command sources, rejected replacements, and
+retained-work validation. Controller tests recover the original keyword-less
+command, integrate the retained task, and complete its successor. They also
+cover restart after the recovery proposal is applied. Focused tests pass with
+the race detector. A temporary Go overlay restores the unconditional guard;
+both controller cases then fail because recovery is rejected. The overlay
+uses candidate source files and leaves project files unchanged.
+
+Existing `.gitignore` rules cover `/build/`, `*.test`, and `coverage.out`.
+No generated build artifacts are tracked. Tests use private temporary
+repositories and databases. No external services or shared resources are
+required. No backlog, shared Git reference, repository setting, installation,
+or publication changes are made.
+
+Final validation: `make test` passes, including all 56 runtime fixtures,
+package smoke tests, and skill helper checks. Focused race tests and
+`git diff --check` pass.
+
+## T032 nested modules in verification detection, 2026-11-04
+
+The nested-project scan skipped markers that matched the root marker. A root
+`go.mod` and a child `go.mod` therefore selected `go test ./...`, which skips
+the child module. Count every supported child marker in the existing shallow
+scan. Preserve ignored directories and the precedence of explicit Makefile
+test targets.
+
+Follow `docs/UI-PLAN.md`, section "Verify command detection": multiple project
+roots leave the override empty so the planner selects verification. Do not
+replace the planner's command with a parent-only check. Tests cover matching
+Go, JavaScript, and Rust markers, ignored directories, and Makefile precedence.
+A real Go fixture proves that a root-only check misses a child failure. The
+planned command checks both modules, catches the failure, and passes after
+the child is repaired. Empty verification remains invalid.
+
+Focused detection tests pass with the race detector. A temporary Go overlay
+restores the same-marker exclusion. All three matching-marker cases fail,
+and the Go fixture confirms the child failure is missed. The overlay uses
+candidate source and leaves project files unchanged.
+
+Existing `.gitignore` rules cover `/build/`, `*.test`, and `coverage.out`.
+No generated build artifacts are tracked. Tests use private temporary
+directories and require no external services. No backlog, shared Git reference,
+repository setting, installation, or publication changes are made.
+
+Validation: Go tests, static analysis, installer checks, and build checks pass.
+The first `make test` run reaches runtime fixtures but fails because the root
+filesystem fills. Git writes and SQLite report storage errors. Rerun the
+remaining checks with a private `LOOPER_RESOURCE_PREFIX` directory under
+`/dev/shm`, without deleting shared files or changing tests. All 56 runtime
+fixtures, package smoke tests, and skill helper checks pass there. Temporary
+files are removed automatically. `git diff --check` passes.
+
+T032 repair 1 confirms that the combined check also failed from exhausted
+disk space, rather than a detection failure. Preserve the retained fix and
+regression tests. The complete `make test` command passes with `TMPDIR` in a
+private `LOOPER_RESOURCE_PREFIX` directory under `/dev/shm`. All 56 runtime
+fixtures pass. The temporary directory is removed after the command exits.
+Detection tests also pass with the race detector. Existing ignore rules cover
+all generated output; no build artifacts are tracked. No shared files,
+repository settings, or backlog files are changed.
+
+## T033 settings on the first keypress, 2026-11-04
+
+The settings key set an exit action without returning the quit command.
+The next key triggered that command through the dialog handler. Return
+`tea.Quit` in the same update that handles `s`. The existing wrappers then
+open the settings form. Keep the current dashboard view during this handoff
+because settings has no inline dialog view.
+
+The regression test fails before the fix for both `s` and `S`, with local
+and attached controls. It passes after the fix and verifies that the view
+does not become blank. Tests also preserve read-only rejection and the
+existing add-plan, drain, exit, help, tail, and unknown-key behavior.
+
+Validation passes: `go test ./internal/ui -count=1`, the full interface suite
+with the race detector, focused Looper dashboard and attachment tests, and
+`git diff --check`. Existing ignore rules cover `/build/`, `*.test`, and
+`coverage.out`; no generated build artifacts are tracked. This change needs
+no external services, installation, publication, or backlog changes.
+
+## Default coding agent changed to Claude, 2026-11-04
+
+Owner feedback after the self-run: the controller used codex workers
+because the non-interactive `looper start` path cannot ask the first-run
+form, and the built-in default was codex. The owner discovered this only
+after workers were running and had to fix it with `looper config` by
+hand (the project profile now pins agent=claude and verify=make test).
+
+Change (commit 468284a): the built-in default agent is now claude, the
+first-run form preselects it through the same default, and a controller
+start with no saved profile and no explicit agent prints a one-line
+notice naming the agent and pointing at `looper config`. JSON output is
+unchanged; TestParseDefaults and the new TestDefaultAgentNotice pin the
+behavior.
+
+The commit was staged selectively: settings.go and README.md also carry
+uncommitted self-run task work (T023, T026), which stays in the working
+tree for the resumed run to publish. The installed binary is 0.9.1-dev.9
+built from 468284a alone (previous binary kept at
+/tmp/looper-before-claude-default); the running stackfall controller
+keeps its own image and is unaffected.
+
+## Add tasks through the controller, 2026-11-04
+
+Reviewed Codex session `01a1a3d0-10a2-7460-be34-e15714b6dfcb` from
+Stackfall. It added six refactoring tasks by editing `to-do.json` because
+only `add-plan` existed. Add `looper add-task <file.json> [--json]` for one
+task or a batch. Reuse the typed controller request transport. Apply at loop
+boundaries, including idle polling, without stopping workers. Validate the
+combined backlog before mutation. Preserve existing metadata and attempts.
+Reject external edit conflicts, stale sessions, duplicate IDs, invalid
+statuses, unknown dependencies, and cycles. Export through the existing
+journal. Requests use the existing session lifetime; they are not durable
+imports across controller restarts. A timeout does not cancel a request.
+Existing controllers need a later restart to support the new request type.
+No live runs, backlog files, installations, or publications are changed.
+
+Validation: focused task-add, request transport, requeue, and parser tests pass
+with the race detector. `go vet ./internal/looper` and `git diff --check` pass.
+
+The full `go test ./...` run fails in agent fixtures with `invalid_result:
+final output must contain one JSON object`. A temporary Go overlay removes
+the new request handler from the run loop. With that overlay,
+`TestRunWithoutAssessmentAddsNoProcess` still fails with the same planner
+error. This failure occurs independently of task submission. The interface
+package passes. The overlay leaves repository sources unchanged.
+
+## Claude-default test regression and tui recovery refusal, 2026-11-04
+
+`looper tui` refuses to start with "the project branch moved" because the
+killed self-run saved its session head before four commits landed; recovery
+accepts only a new commit whose tree equals the run's last published tree,
+so that session can never resume. The refusal is correct. The run's
+integrated work sits uncommitted in the working tree and a fresh session
+will carry it as the baseline.
+
+Preparing the restart exposed a regression from the Claude default
+(468284a): the agent stubs answered only through the codex result file,
+and codex and claude parse different channels - codex reads the
+--output-last-message file, claude reads a structured_output envelope from
+stdout, and the claude adapter passes no --output-last-message at all, so
+the unattended-recovery stub crashed on an empty redirect under set -e.
+Commit fc79fa9 makes the stubs answer on both channels, guards the empty
+redirect, and sets both bins in the two default-coupled fixtures. The full
+package passes at fc79fa9 on a frozen tree; the working tree still holds
+the killed run's task work and the owner's concurrent agent edits, so a
+full make test runs once that work lands.
+
+Restart procedure once the tree is quiet: make test, archive
+~/.looper/looper-f42bdd84 (keep runtime/profile.json), then looper start
+--jobs 1 --once; the profile pins agent=claude and verify=make test.

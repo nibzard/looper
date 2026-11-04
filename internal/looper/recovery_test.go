@@ -125,6 +125,41 @@ func TestRunRecoveryRejectsUnsafeProposals(t *testing.T) {
 	}
 }
 
+func TestRunRepairVerificationCommands(t *testing.T) {
+	for _, source := range []string{"plan", "override", "recovered"} {
+		t.Run(source, func(t *testing.T) {
+			e, a, p := recoveryEngine(t)
+			const original = "head -c 1 retained.txt"
+			switch source {
+			case "plan":
+				e.State.Plan.Verify = original
+			case "override":
+				e.Config.Verify = original
+			case "recovered":
+				e.State.RecoveredCommands = &RecoveryCommands{Verify: original}
+			}
+			p.Verify = original
+			// Preserve an explicit override so rejection tests reach the
+			// replacement guard rather than the future-task requirement.
+			e.State.Backlog.Task("T002").Details += "\n" + e.Config.Verify
+			if err := e.validateRunRepair(p); err != nil {
+				t.Fatalf("unchanged command rejected: %v", err)
+			}
+			for _, replacement := range []string{"", "true", "head -c 2 retained.txt", "go test ./... || true", "go test ./...; exit 0", "set +e; go test ./..."} {
+				p.Verify = replacement
+				if err := e.validateRunRepair(p); err == nil || !strings.Contains(err.Error(), "replacement must retain executable checks") {
+					t.Fatalf("replacement %q: %v", replacement, err)
+				}
+			}
+			p.Verify = original
+			a.Worktree = filepath.Join(t.TempDir(), "missing")
+			if err := e.validateRunRepair(p); err == nil || !strings.Contains(err.Error(), "no retained implementation") {
+				t.Fatalf("unchanged command bypassed retained-work validation: %v", err)
+			}
+		})
+	}
+}
+
 func TestRecoveryPreservesUnknownSource(t *testing.T) {
 	e, _, _ := recoveryEngine(t)
 	path := filepath.Join(e.Dir, "bootstrap-fixture", "context", "backlog.json")
@@ -162,11 +197,19 @@ func TestVerificationRetainsChangedPaths(t *testing.T) {
 
 func TestUnattendedRecoveryIntegratesAndDispatchesSuccessor(t *testing.T) {
 	for _, interrupted := range []bool{false, true} {
-		t.Run(fmt.Sprint(interrupted), func(t *testing.T) { testUnattendedRecovery(t, interrupted) })
+		t.Run(fmt.Sprint(interrupted), func(t *testing.T) { testUnattendedRecovery(t, interrupted, "") })
 	}
 }
 
-func testUnattendedRecovery(t *testing.T, interrupted bool) {
+func TestRunRecoveryWithUnchangedKeywordlessVerification(t *testing.T) {
+	for _, interrupted := range []bool{false, true} {
+		t.Run(fmt.Sprint(interrupted), func(t *testing.T) {
+			testUnattendedRecovery(t, interrupted, "head -c 1 retained.txt")
+		})
+	}
+}
+
+func testUnattendedRecovery(t *testing.T, interrupted bool, originalVerify string) {
 	e, a, p := recoveryEngine(t)
 	// A real shell fixture checks retained content. The worker must keep it and
 	// add an ignore rule before the ordinary integration repair can pass.
@@ -208,6 +251,13 @@ printf '{"structured_output":%s}\n' "$result"
 	// Use a check that generates an unignored cache. The first integration must
 	// fail with paths, and the task repair must add the ignore rule.
 	p.Verify = "bash -c 'test -f retained.txt; mkdir -p .cache; echo cache > .cache/generated'"
+	if originalVerify != "" {
+		e.State.Plan.Verify = originalVerify
+		p.Verify = originalVerify
+		if err := e.save(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("LOOPER_RECOVERY_PROPOSAL", proposalJSON(t, p))
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -224,7 +274,11 @@ printf '{"structured_output":%s}\n' "$result"
 	if e.State.Integrated != 2 || e.State.Backlog.Task("T001").Status != "done" || e.State.Backlog.Task("T002").Status != "done" {
 		t.Fatal("no implementation progress")
 	}
-	if len(e.State.Attempts) != 2 || e.State.Attempts[0].ID != a.ID || e.State.Attempts[0].Repairs != 1 {
+	wantRepairs := 1
+	if originalVerify != "" {
+		wantRepairs = 0
+	}
+	if len(e.State.Attempts) != 2 || e.State.Attempts[0].ID != a.ID || e.State.Attempts[0].Repairs != wantRepairs {
 		t.Fatalf("retained attempt or ordinary repair lost: %+v", e.State.Attempts)
 	}
 	if _, err := os.Stat(filepath.Join(e.Config.Root, "successor.txt")); err != nil {

@@ -22,6 +22,7 @@ Usage: looper [run] [task-file] [options]
        looper start [--plan <path>...]
        looper tui [--plan <path>...]
        looper attach
+       looper add-task <file.json> [--json]
        looper add-plan <path> [...]
        looper status [--json]
        looper stop
@@ -93,6 +94,8 @@ func Main(args []string, out, stderr io.Writer) int {
 		return 0
 	}
 	switch c.Command {
+	case "add-task":
+		return runAddTask(c, out, stderr)
 	case "add-plan":
 		return runAddPlan(c, out, stderr)
 	case "tui":

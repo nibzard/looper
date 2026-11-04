@@ -261,7 +261,10 @@ func (r *Repository) Remove(p string) {
 	}
 }
 func (r *Repository) Merge(work, commit string) error {
-	_, err := gitText(work, "-c", "user.name=Looper", "-c", "user.email=looper@localhost", "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", commit)
+	output, err := gitText(work, "-c", "user.name=Looper", "-c", "user.email=looper@localhost", "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", commit)
+	if err != nil && output != "" {
+		return fmt.Errorf("%w\n%s", err, output)
+	}
 	return err
 }
 func (r *Repository) Changes(base, commit string) ([]string, error) {

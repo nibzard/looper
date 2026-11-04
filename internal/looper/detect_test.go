@@ -1,9 +1,13 @@
 package looper
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, content string) {
@@ -93,6 +97,79 @@ func TestDetectNestedMixedRootsStayEmpty(t *testing.T) {
 	write(t, filepath.Join(root, "web", "package-lock.json"), "{}")
 	if d := DetectVerifyCommand(root); d.Command != "" {
 		t.Fatalf("a nested project root must leave the override empty: %+v", d)
+	}
+}
+
+func TestDetectNestedSameMarker(t *testing.T) {
+	for _, project := range []struct {
+		marker, content, command string
+	}{
+		{"go.mod", "module example.com/project\n", "go test ./..."},
+		{"package.json", `{"scripts":{"test":"node --test"},"packageManager":"npm@10"}`, "npm test"},
+		{"Cargo.toml", "[package]\nname = \"project\"\n", "cargo test"},
+	} {
+		t.Run(project.marker, func(t *testing.T) {
+			for _, child := range []string{"module", ".hidden", "node_modules", "vendor", "target", "tmp", "dist", "build"} {
+				t.Run(child, func(t *testing.T) {
+					root := t.TempDir()
+					write(t, filepath.Join(root, project.marker), project.content)
+					write(t, filepath.Join(root, child, project.marker), project.content)
+					want := Detection{project.command, project.marker}
+					if project.marker == "package.json" {
+						want.Source = "package.json test script via npm"
+					}
+					if child == "module" {
+						want = Detection{}
+					}
+					if got := DetectVerifyCommand(root); got != want {
+						t.Fatalf("detection = %+v, want %+v", got, want)
+					}
+					// Explicit test targets retain precedence over nested markers.
+					write(t, filepath.Join(root, "Makefile"), "test:\n\techo checks\n")
+					if got := DetectVerifyCommand(root); got != (Detection{"make test", "Makefile test target"}) {
+						t.Fatalf("explicit target detection = %+v", got)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDetectNestedGoModulePreservesPlannedCoverage(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "go.mod"), "module example.com/root\n")
+	write(t, filepath.Join(root, "root_test.go"), "package root\nimport \"testing\"\nfunc TestRoot(t *testing.T) {}\n")
+	write(t, filepath.Join(root, "module", "go.mod"), "module example.com/child\n")
+	childTest := filepath.Join(root, "module", "child_test.go")
+	write(t, childTest, "package child\nimport \"testing\"\nfunc TestChild(t *testing.T) { t.Fatal(\"nested module checked\") }\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	run := func(command string) (string, error) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
+		cmd.Dir = root
+		cmd.Env = cleanEnv(map[string]string{"GOWORK": "off", "GOFLAGS": "", "GOTOOLCHAIN": "local"})
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	// The root command alone misses the failing test in the child module.
+	if out, err := run("go test ./..."); err != nil {
+		t.Fatalf("root test: %v\n%s", err, out)
+	}
+	detection := DetectVerifyCommand(root)
+	plan := Plan{Verify: "go test ./... && (cd module && go test ./...)"}
+	if err := plan.Validate(Backlog{}, detection.Command); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(plan.Verify); err == nil || !strings.Contains(out, "nested module checked") {
+		t.Fatalf("verification must catch the child failure: %v\n%s", err, out)
+	}
+	write(t, childTest, "package child\nimport \"testing\"\nfunc TestChild(t *testing.T) {}\n")
+	if out, err := run(plan.Verify); err != nil {
+		t.Fatalf("verification after child repair: %v\n%s", err, out)
+	}
+	if err := (&Plan{}).Validate(Backlog{}, detection.Command); err == nil {
+		t.Fatal("nested modules must still require executable verification")
 	}
 }
 

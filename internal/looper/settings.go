@@ -304,6 +304,7 @@ const (
 // SettingsRequest is a typed controller request written atomically to
 // requests/<id>.json. Fields are assignment patches, never increments.
 type SettingsRequest struct {
+	Tasks         []Task                     `json:"tasks,omitempty"`
 	Version       int                        `json:"version"`
 	ID            string                     `json:"id"`
 	Type          string                     `json:"type"`
@@ -427,7 +428,8 @@ func claimNextRequest(dir, typ string) (*SettingsRequest, error) {
 
 // clearSessionFiles removes settings requests and acknowledgements left by
 // earlier controller sessions. Plan-import requests survive restarts with
-// their durable receipts and are never removed here.
+// their durable receipts and are never removed here. After state recovery,
+// recoverPlanImports completes claims left in processing/ and restores acks.
 func clearSessionFiles(dir string) {
 	for _, base := range []string{requestDir(dir), processingDir(dir)} {
 		entries, err := os.ReadDir(base)
@@ -450,6 +452,12 @@ func clearSessionFiles(dir string) {
 		return
 	}
 	for _, entry := range entries {
+		// Digest replays and rejected imports may have no state receipt.
+		// Keep their terminal answers so a pending submitter can finish.
+		var ack planImportAck
+		if readJSON(filepath.Join(ackDir(dir), entry.Name()), &ack) == nil && ack.Type == RequestTypePlanImport {
+			continue
+		}
 		os.Remove(filepath.Join(ackDir(dir), entry.Name()))
 	}
 }

@@ -109,6 +109,10 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		if e.err != nil {
 			return 1, e.err
 		}
+		e.processAddTaskRequests()
+		if e.err != nil {
+			return 1, e.err
+		}
 		e.processRequeueRequests()
 		if e.err != nil {
 			return 1, e.err
@@ -266,9 +270,17 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		busy := len(active)+len(pending)+len(checks) > 0
 		if !busy {
 			if draining {
+				if err := e.save(); err != nil {
+					return 1, err
+				}
+				// Consume the request only after draining and saving succeed,
+				// so the next controller can resume without losing startup requests.
+				if err := os.Remove(stopPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return 1, fmt.Errorf("remove completed drain request: %w", err)
+				}
 				exitReason = "drained"
 				e.event("stop", "Stopped after draining active work. Run looper to resume.")
-				return 0, e.save()
+				return 0, nil
 			}
 			if err := e.refreshIdle(); err != nil {
 				if !e.idleInputWait(err) {
@@ -401,7 +413,9 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				if err != nil {
 					return 1, err
 				}
-				active[a.ID] = true
+				if a.Phase == "running" {
+					active[a.ID] = true
+				}
 				attempted++
 			}
 		}

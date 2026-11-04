@@ -194,7 +194,7 @@ func Parse(args []string) (Config, error) {
 		}
 		var v string
 		switch a {
-		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-plan", "events", "inspect":
+		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-task", "add-plan", "events", "inspect":
 			c.Command = a
 		case "--help", "-h":
 			c.Command = "help"
@@ -294,7 +294,7 @@ func Parse(args []string) (Config, error) {
 			if strings.HasPrefix(a, "-") {
 				return c, fmt.Errorf("unknown option %s", a)
 			}
-			if c.Command == "add-plan" {
+			if c.Command == "add-plan" || c.Command == "add-task" {
 				// The positional argument of add-plan is a plan path, never
 				// a task file, so Markdown cannot be mistaken for a backlog.
 				path, e := filepath.Abs(a)

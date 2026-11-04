@@ -38,9 +38,13 @@ test -x "$PREFIX_DIR/bin/looper"
 "$PREFIX_DIR/bin/looper" --help >/dev/null
 test "$("$PREFIX_DIR/bin/looper" --version)" = "$("$ROOT_DIR/build/looper" --version)"
 test -f "$PREFIX_DIR/share/looper/skills/looper-backlog/SKILL.md"
+mkdir -p "$PREFIX_DIR/share/looper/skills/git-commit"
+printf 'User-authored skill.\n' > "$PREFIX_DIR/share/looper/skills/git-commit/SKILL.md"
 "$BREW_DIR/bin/looper-uninstall" --prefix "$PREFIX_DIR"
 test ! -e "$PREFIX_DIR/bin/looper"
 test ! -e "$PREFIX_DIR/share/looper/skills/looper-backlog"
 test ! -e "$PREFIX_DIR/share/looper/skills/looper-diagnose"
+test "$(cat "$PREFIX_DIR/share/looper/skills/git-commit/SKILL.md")" = 'User-authored skill.'
+test ! -e "$PREFIX_DIR/share/looper/skills/.looper-installed-skills"
 
 echo "Package smoke test passed."

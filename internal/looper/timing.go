@@ -308,8 +308,8 @@ func (s *Store) timing(now time.Time, alive func(int, string) bool) (TimingRepor
 				end = now
 			}
 			if end.Before(start) {
-				rows.Close()
-				return report, fmt.Errorf("%s interval ends before it starts", table)
+				fmt.Fprintf(os.Stderr, "Warning: %s interval for PID %d ends before it starts (start %s, end %s); clamped to zero.\n", table, pid, started, ended.String)
+				end = start
 			}
 			extend(end)
 			interval := timeInterval{start, end}

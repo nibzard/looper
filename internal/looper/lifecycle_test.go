@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,97 @@ func lastShutdown(t *testing.T, s *Store) sessionExit {
 		t.Fatal(err)
 	}
 	return exit
+}
+
+func TestStartupDrainAndResume(t *testing.T) {
+	for _, beforeEngine := range []bool{true, false} {
+		t.Run(fmt.Sprintf("before_engine=%t", beforeEngine), func(t *testing.T) {
+			e, c, closeEngine := assessRunEngine(t, "", 0)
+			closeEngine()
+			stopPath := filepath.Join(e.Dir, "stop")
+			requestStop := func() {
+				t.Helper()
+				if err := atomicWrite(stopPath, []byte("drain\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if beforeEngine {
+				requestStop()
+			}
+			startEngine := func() (*Engine, func()) {
+				t.Helper()
+				e, lock, err := NewEngine(c, io.Discard)
+				if err != nil {
+					t.Fatal(err)
+				}
+				closed := false
+				close := func() {
+					if !closed {
+						closed = true
+						e.Store.Close()
+						lock.Close()
+					}
+				}
+				t.Cleanup(close)
+				return e, close
+			}
+			e, closeEngine = startEngine()
+			if !beforeEngine {
+				requestStop()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			code, err := e.Run(ctx)
+			if code != 0 || err != nil {
+				t.Fatalf("startup drain: %d %v", code, err)
+			}
+			if exit := lastShutdown(t, e.Store); exit.Reason != "drained" {
+				t.Fatalf("startup request was lost: %+v", exit)
+			}
+			if len(e.State.Attempts) != 0 || e.State.Plan != nil || e.State.Backlog.Tasks[0].Status != "todo" {
+				t.Fatal("startup drain must stop before planning or dispatch")
+			}
+			if _, err := os.Stat(stopPath); !os.IsNotExist(err) {
+				t.Fatalf("completed drain left a stop request: %v", err)
+			}
+			closeEngine()
+			e, _ = startEngine()
+			code, err = e.Run(ctx)
+			if code != 0 || err != nil {
+				t.Fatalf("resume after drain: %d %v", code, err)
+			}
+			if exit := lastShutdown(t, e.Store); exit.Reason != "complete" {
+				t.Fatalf("resume did not complete: %+v", exit)
+			}
+			if e.State.Backlog.Tasks[0].Status != "done" {
+				t.Fatal("resume must execute the pending task")
+			}
+		})
+	}
+}
+
+func TestDrainReportsRequestCleanupFailure(t *testing.T) {
+	c := preparedRepo(t, "--once")
+	e, lock, err := NewEngine(c, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	defer e.Store.Close()
+	stopPath := filepath.Join(e.Dir, "stop")
+	if err := os.Mkdir(stopPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stopPath, "child"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	code, err := e.Run(context.Background())
+	if code != 1 || err == nil || !strings.Contains(err.Error(), "remove completed drain request") {
+		t.Fatalf("cleanup failure must surface: %d %v", code, err)
+	}
+	if exit := lastShutdown(t, e.Store); exit.Reason != "error" {
+		t.Fatalf("failed cleanup recorded as a completed drain: %+v", exit)
+	}
 }
 
 func TestControllerRecordsCompletedAndFailedExits(t *testing.T) {

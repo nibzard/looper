@@ -1,11 +1,13 @@
 package looper
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -240,6 +242,114 @@ func TestTimingObservationCutoff(t *testing.T) {
 	report, err := s.timing(now, func(int, string) bool { return true })
 	if err != nil || *report.WorkerSeconds != 90 || report.RunningProcesses != 0 {
 		t.Fatalf("concurrent writes exceeded the observation: %+v %v", report, err)
+	}
+}
+
+func TestTimingClampsPersistedNegativeIntervals(t *testing.T) {
+	for _, table := range []string{"sessions", "processes"} {
+		t.Run(table, func(t *testing.T) {
+			s := timingStore(t)
+			addTiming(t, s, table, "negative", 20, 10, "stopped")
+			state := &State{Backlog: Backlog{Tasks: []Task{{ID: "T1", Status: "done"}}},
+				Attempts: []*Attempt{{ID: "task-a", Task: Task{ID: "T1"}, Phase: "done"}}}
+			if err := s.Save(state); err != nil {
+				t.Fatal(err)
+			}
+			if table == "processes" {
+				if _, err := s.db.Exec("UPDATE processes SET attempt_id='task-a'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			read, err := OpenStoreReadonly(filepath.Join(s.dir, "state.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer read.Close()
+			warnings, err := os.CreateTemp(t.TempDir(), "warnings-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer warnings.Close()
+			stderr := os.Stderr
+			os.Stderr = warnings
+			defer func() { os.Stderr = stderr }()
+			now, _ := time.Parse(time.RFC3339Nano, timingAt(100))
+			for _, healthy := range []bool{false, true} {
+				want := 0.0
+				if healthy {
+					addTiming(t, s, table, "healthy", 30, 40, "stopped")
+					want = 10
+				}
+				report, err := read.Timing(now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				worker, controller := 0.0, 0.0
+				if table == "processes" {
+					worker = want
+					task := report.task("T1")
+					if !task.Available || task.OtherSeconds == nil || *task.OtherSeconds != 0 || *task.ActiveSeconds != 0 || *task.ElapsedSeconds != 0 {
+						t.Fatalf("negative task interval must report zero: %+v", task)
+					}
+				} else {
+					controller = want
+				}
+				if !report.Available || *report.WorkerSeconds != worker || *report.ActiveSeconds != worker || *report.ControllerSeconds != controller {
+					t.Fatalf("incorrect clamped timing: %+v", report)
+				}
+				stats, err := read.Statistics(now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if *stats.WorkerSeconds != worker || *stats.ActiveSeconds != worker || *stats.ControllerSeconds != controller {
+					t.Fatalf("incorrect clamped statistics: %+v", stats)
+				}
+				daily := 0.0
+				for _, day := range stats.Days {
+					daily += day.WorkerSeconds
+				}
+				if daily != worker {
+					t.Fatalf("daily worker seconds = %v, want %v", daily, worker)
+				}
+			}
+			var ended string
+			if err := read.db.QueryRow("SELECT ended FROM " + table + " WHERE id='negative'").Scan(&ended); err != nil || ended != timingAt(10) {
+				t.Fatalf("persisted end changed: %s, %v", ended, err)
+			}
+			data, err := os.ReadFile(warnings.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), "Warning: "+table+" interval") || !strings.Contains(string(data), "clamped to zero") {
+				t.Fatalf("missing interval warning: %s", data)
+			}
+		})
+	}
+}
+
+func TestTimingNegativeIntervalObservationCommands(t *testing.T) {
+	c := Config{Root: t.TempDir(), BaseDir: t.TempDir(), InspectTask: "T1"}
+	_, dir := projectPaths(c)
+	s, err := OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Save(&State{Backlog: Backlog{Tasks: []Task{{ID: "T1", Status: "done"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	addTiming(t, s, "processes", "negative", 20, 10, "success")
+	for _, command := range []string{"status", "inspect"} {
+		for _, jsonOutput := range []bool{false, true} {
+			c.Command, c.JSON = command, jsonOutput
+			var out bytes.Buffer
+			if err := inspect(context.Background(), c, &out); err != nil {
+				t.Fatalf("%s (json=%v): %v", command, jsonOutput, err)
+			}
+			if out.Len() == 0 || (jsonOutput && !json.Valid(out.Bytes())) {
+				t.Fatalf("invalid %s output: %s", command, out.String())
+			}
+		}
 	}
 }
 

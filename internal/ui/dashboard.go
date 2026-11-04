@@ -348,7 +348,8 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.dialog = "settings"
-		return m, nil
+		// The wrapper runs the form as soon as the dashboard exits.
+		return m, tea.Quit
 	case "a":
 		if m.ctrl.ReadOnly {
 			m.err = "Read-only observers cannot import plans."
@@ -781,7 +782,8 @@ func (m model) renderView() string {
 	if m.width == 0 {
 		return "starting..."
 	}
-	if m.dialog != "" {
+	// Settings is an exit action. Keep the current view until the form starts.
+	if m.dialog != "" && m.dialog != "settings" {
 		return m.dialogView()
 	}
 	switch m.mode {

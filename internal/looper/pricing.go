@@ -123,83 +123,117 @@ func applicablePrices(raw json.RawMessage, at time.Time) map[string]json.RawMess
 	return rates
 }
 
+// matchPrice prefers an exact ID to a pattern. Among matching patterns,
+// the longest model ID wins, as in the original provider-specific resolver.
+func matchPrice(p priceProvider, model string) *priceModel {
+	var selected *priceModel
+	for i := range p.Models {
+		m := &p.Models[i]
+		if m.ID == model {
+			return m
+		}
+		if m.Match.matches(model) && (selected == nil || len(m.ID) > len(selected.ID)) {
+			selected = m
+		}
+	}
+	return selected
+}
+
+// resolvePrice honors an explicit provider without falling back to another.
+// Bare Claude, GPT, reasoning, Codex, and GLM names keep their public API
+// provider defaults when that provider has a matching rule. Other names use
+// an exact catalog ID first, then a catalog pattern. Catalog order breaks
+// ties between providers; supply a provider to disambiguate shared names.
+func resolvePrice(model, provider string) (*priceModel, string) {
+	catalogOnce.Do(func() { _ = json.Unmarshal(priceData, &catalog) })
+	if provider != "" {
+		for _, p := range catalog {
+			if p.ID == provider {
+				return matchPrice(p, model), provider
+			}
+		}
+		return nil, provider
+	}
+	preferred := ""
+	switch {
+	case strings.HasPrefix(strings.ToLower(model), "glm-"):
+		preferred = "zai"
+	case strings.HasPrefix(model, "claude-"):
+		preferred = "anthropic"
+	case strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "codex-mini") || regexp.MustCompile(`^o[134]`).MatchString(model):
+		preferred = "openai"
+	}
+	for _, p := range catalog {
+		if p.ID == preferred {
+			if selected := matchPrice(p, model); selected != nil {
+				return selected, p.ID
+			}
+		}
+	}
+	for _, p := range catalog {
+		for i := range p.Models {
+			if p.Models[i].ID == model {
+				return &p.Models[i], p.ID
+			}
+		}
+	}
+	for _, p := range catalog {
+		if selected := matchPrice(p, model); selected != nil {
+			return selected, p.ID
+		}
+	}
+	return nil, preferred
+}
+
 // Session totals cannot identify per-request context tiers. Do not infer a
 // long-context price from cumulative input tokens. Such reports stay unpriced.
 func estimateUsage(u UsageRecord, at time.Time) (*float64, string) {
-	catalogOnce.Do(func() { _ = json.Unmarshal(priceData, &catalog) })
 	model := strings.TrimSuffix(u.Model, "[1m]")
-	provider := ""
-	switch {
-	case strings.HasPrefix(strings.ToLower(model), "glm-"):
-		provider = "zai"
-	case strings.HasPrefix(model, "claude-"):
-		provider = "anthropic"
-	case strings.HasPrefix(model, "gpt-") || regexp.MustCompile(`^o[134]`).MatchString(model):
-		provider = "openai"
+	selected, provider := resolvePrice(model, u.Provider)
+	if selected == nil {
+		return nil, provider
 	}
-	for _, p := range catalog {
-		if p.ID != provider {
+	rates := applicablePrices(selected.Prices, at)
+	if rates == nil {
+		return nil, provider
+	}
+	total := 0.0
+	counts := map[string]int64{
+		"input_mtok":          u.Input - u.CacheRead - u.CacheWrite,
+		"cache_read_mtok":     u.CacheRead,
+		"cache_write_mtok":    u.CacheWrite - u.CacheWrite1h,
+		"cache_write_1h_mtok": u.CacheWrite1h,
+		"output_mtok":         u.Output,
+	}
+	for unit, count := range counts {
+		if count < 0 {
+			return nil, provider
+		}
+		// An empty price object is the catalog's explicit free marker.
+		if count == 0 || len(rates) == 0 {
 			continue
 		}
-		var selected *priceModel
-		for i := range p.Models {
-			m := &p.Models[i]
-			if m.ID == model {
-				selected = m
-				break
+		raw, ok := rates[unit]
+		if !ok {
+			if unit == "cache_write_1h_mtok" {
+				raw, ok = rates["cache_write_mtok"]
 			}
-			if m.Match.matches(model) && (selected == nil || len(m.ID) > len(selected.ID)) {
-				selected = m
-			}
-		}
-		if selected != nil {
-			m := *selected
-			if m.ID != model && !m.Match.matches(model) {
-				continue
-			}
-			rates := applicablePrices(m.Prices, at)
-			if len(rates) == 0 {
+			if !ok {
 				return nil, provider
 			}
-			total := 0.0
-			counts := map[string]int64{
-				"input_mtok":          u.Input - u.CacheRead - u.CacheWrite,
-				"cache_read_mtok":     u.CacheRead,
-				"cache_write_mtok":    u.CacheWrite - u.CacheWrite1h,
-				"cache_write_1h_mtok": u.CacheWrite1h,
-				"output_mtok":         u.Output,
-			}
-			for unit, count := range counts {
-				if count < 0 {
-					return nil, provider
-				}
-				if count == 0 {
-					continue
-				}
-				raw, ok := rates[unit]
-				if !ok {
-					if unit == "cache_write_1h_mtok" {
-						raw, ok = rates["cache_write_mtok"]
-					}
-					if !ok {
-						return nil, provider
-					}
-				}
-				var rate float64
-				if json.Unmarshal(raw, &rate) != nil || rate < 0 {
-					return nil, provider
-				}
-				total += float64(count) * rate / 1e6
-			}
-			if u.WebSearches > 0 {
-				var rate float64
-				if json.Unmarshal(rates["web_searches_kcount"], &rate) != nil {
-					return nil, provider
-				}
-				total += float64(u.WebSearches) * rate / 1e3
-			}
-			return &total, provider
 		}
+		var rate float64
+		if json.Unmarshal(raw, &rate) != nil || rate < 0 {
+			return nil, provider
+		}
+		total += float64(count) * rate / 1e6
 	}
-	return nil, provider
+	if u.WebSearches > 0 && len(rates) > 0 {
+		var rate float64
+		if json.Unmarshal(rates["web_searches_kcount"], &rate) != nil {
+			return nil, provider
+		}
+		total += float64(u.WebSearches) * rate / 1e3
+	}
+	return &total, provider
 }

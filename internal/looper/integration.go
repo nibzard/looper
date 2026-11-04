@@ -241,7 +241,10 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 		return err
 	}
 	if a.ResultCommit != "" {
-		_ = e.Repo.Merge(work, a.ResultCommit)
+		if err = e.Repo.Merge(work, a.ResultCommit); err != nil {
+			e.Repo.Remove(work)
+			return e.hold(a, feedback+"\nThe retained result conflicts with the integrated project.\n"+err.Error())
+		}
 	} else {
 		e.Repo.Remove(work)
 		work = a.Worktree
