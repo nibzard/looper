@@ -52,6 +52,7 @@ if [ -n "$LOOPER_FAKE_REVIEW" ] && printf '%s' "$p" | grep -q "review pass for L
   result="$LOOPER_FAKE_REVIEW"
 fi
 if [ -n "$out" ]; then printf '%s' "$result" > "$out"; fi
+if [ -n "$result" ]; then printf '{"structured_output":%s}\n' "$result"; fi
 if [ -n "$LOOPER_FAKE_LOG" ]; then printf '%s\n' "$kind" >> "$LOOPER_FAKE_LOG"; fi
 if [ -n "$LOOPER_FAKE_TOUCH" ]; then touch "$LOOPER_FAKE_TOUCH"; fi
 if [ -n "$LOOPER_FAKE_BACKLOG_EDIT" ]; then
