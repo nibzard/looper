@@ -153,7 +153,11 @@ func (e *Engine) applyAddTaskRequest(req *SettingsRequest) SettingsAck {
 		return ack
 	}
 	e.State.Backlog = next
-	e.State.Plan = nil
+	// A request can apply while workers run, and the dispatch loop reads
+	// scopes from the live plan on every tick. Keep it and invalidate only
+	// the signature: the next planning pass rebuilds with the added tasks,
+	// and a task missing from the retained plan scopes to the whole tree,
+	// so parallel dispatch stays blocked until then.
 	e.State.PlanSignature = ""
 	e.State.Finished = false
 	e.State.ReviewedTip = ""

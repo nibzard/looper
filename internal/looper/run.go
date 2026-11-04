@@ -92,6 +92,9 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 	// A head that conflicts while a check runs waits for the chain to move
 	// instead of repeating a full prepare on every loop tick.
 	deferred := ""
+	// A nil plan defers checks and dispatch until a planning pass rebuilds
+	// it. The flag reports that deferral once instead of on every tick.
+	planWait := false
 	for {
 		if ctx.Err() != nil {
 			return 130, ctx.Err()
@@ -202,6 +205,13 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				// repair() normalizes the feedback itself: agents keep the
 				// raw output and artifact paths for the retry.
 				if err := e.repair(ctx, a, result.Feedback, results); err != nil {
+					if errors.Is(err, errPlanMissing) {
+						// The plan is gone; requeue the attempt so the
+						// failed check reaches its repair after the next
+						// planning pass.
+						pending = append(pending, a)
+						continue
+					}
 					return 1, err
 				}
 				if a.Phase == "running" {
@@ -227,7 +237,10 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		}
 	checked:
 		for len(pending) > 0 && len(checks) < e.Config.Checks {
-			if deferred == pending[0].ID {
+			if deferred == pending[0].ID || e.State.Plan == nil {
+				// A nil plan cannot be snapshotted for verification. The
+				// checks wait for a planning pass instead of dispatching
+				// against a nil pointer.
 				break
 			}
 			a := pending[0]
@@ -247,6 +260,12 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				}
 				pending = pending[1:]
 				if err = e.repair(ctx, a, candidate.Feedback, results); err != nil {
+					if errors.Is(err, errPlanMissing) {
+						// The plan is gone; requeue the attempt so its
+						// repair runs after the next planning pass.
+						pending = append(pending, a)
+						continue
+					}
 					return 1, err
 				}
 				if a.Phase == "running" {
@@ -268,6 +287,16 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			go func(c Candidate, ch chan Candidate) { defer e.wg.Done(); ch <- e.verify(ctx, op, aCopy, c, pCopy) }(candidate, entry.Done)
 		}
 		busy := len(active)+len(pending)+len(checks) > 0
+		if busy && e.State.Plan == nil {
+			// Work is in flight against a nil plan: checks and dispatch
+			// defer until a planning pass rebuilds it. Report the wait once.
+			if !planWait {
+				planWait = true
+				e.event("defer", "Execution plan is missing; checks and dispatch wait for a planning pass.")
+			}
+		} else {
+			planWait = false
+		}
 		if !busy {
 			if draining {
 				if err := e.save(); err != nil {
@@ -411,6 +440,11 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				}
 				a, err := e.start(ctx, t, results)
 				if err != nil {
+					if errors.Is(err, errPlanMissing) {
+						// A nil plan cannot gate concurrency; the task
+						// dispatches after the next planning pass.
+						continue
+					}
 					return 1, err
 				}
 				if a.Phase == "running" {

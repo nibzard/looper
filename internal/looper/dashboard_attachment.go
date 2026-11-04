@@ -2,6 +2,7 @@ package looper
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	"github.com/nibzard/looper/internal/ui"
@@ -37,6 +38,21 @@ func (a *dashboardAttachment) currentSession() (string, error) {
 		return "", fmt.Errorf("The controller changed or disconnected. Wait for the dashboard to reconnect, then retry.")
 	}
 	return a.session, nil
+}
+
+// addPlan submits a plan import on behalf of an attached viewer and returns
+// the request identifier, so the dashboard can name the queued import. The
+// published snapshot carries its later states; no event parsing is involved.
+func (a *dashboardAttachment) addPlan(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	session, err := a.currentSession()
+	if err != nil {
+		return "", err
+	}
+	return submitPlanImport(a.dir, session, []string{absolute})
 }
 
 func (a *dashboardAttachment) inspect(id string) (ui.TaskDetail, error) {

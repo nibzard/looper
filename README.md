@@ -188,6 +188,11 @@ retains the last known state. An attached dashboard reconnects when a replacemen
 controller appears. Task details refresh with the new session. Actions wait until
 the dashboard displays that session. Quiet worker output does not prove a failure.
 
+Add `--no-animation` to any dashboard start to disable animated motion. The
+bootstrap activity marker stays a fixed bullet instead of a spinner, and
+every status line, key, and refresh keeps its behavior. The option changes
+presentation only; `--json` output and normal execution are unchanged.
+
 ![The dashboard: run state and progress in the header, working and blocked
 tasks, recent events](docs/assets/tui.png)
 
@@ -537,6 +542,7 @@ and other controller behavior:
 | `LOOPER_TIMEOUT_SECONDS` | `0` | Worker timeout; 0 means unlimited |
 | `LOOPER_GIT_TIMEOUT_SECONDS` | `600` | Timeout for one Git command; 0 means unlimited |
 | `--verbose` | off | Print the run configuration at start |
+| `--no-animation` | off | Dashboard without animated motion; status stays readable |
 | `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure |
 | `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds |
 | `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |
@@ -672,6 +678,14 @@ Reviews publish their log path through `review-activity`. A `review-heartbeat`
 event appears every 30 seconds while the agent runs. It reports output size and
 the last output timestamp. Log silence alone does not establish a stalled review.
 The heartbeat does not change review tools, completion rules, or timeouts.
+
+Repair diagnoses and run-recovery consultations publish their stream through
+`diagnosis-activity` and `run-recovery-activity`, with a heartbeat event every
+30 seconds while the consultation runs. The published view reports the
+`diagnosing` or `recovering` state, the agent, and the last output time. A
+consultation blocks the controller loop, so worker activity keeps publishing
+through it and parallel work stays visible. The consultation keeps its normal
+review tools and result contract.
 
 `events --json` prints one JSON event per line. Save its `id` and reconnect
 with `looper events --json --follow --after 123`. Without `--follow`, the

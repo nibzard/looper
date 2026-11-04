@@ -23,6 +23,7 @@ type ViewSnapshot struct {
 	Root            string         `json:"root,omitempty"`
 	Project         string         `json:"project,omitempty"`
 	Tasks           []TaskView     `json:"tasks,omitempty"`
+	Imports         []ImportView   `json:"imports,omitempty"`
 	WorkerLimit     int            `json:"worker_limit,omitempty"`
 	CheckLimit      int            `json:"check_limit,omitempty"`
 	Pace            *PaceView      `json:"pace,omitempty"`
@@ -41,6 +42,54 @@ type ViewSnapshot struct {
 	Bootstrapping        bool    `json:"bootstrapping,omitempty"`
 	BootstrapBytes       int64   `json:"bootstrap_bytes,omitempty"`
 	BootstrapIdleSeconds float64 `json:"bootstrap_idle_seconds,omitempty"`
+}
+
+// Import statuses mirror the controller's durable receipt lifecycle.
+const (
+	ImportQueued   = "queued"
+	ImportWaiting  = "waiting"
+	ImportPlanning = "planning"
+	ImportApplied  = "applied"
+	ImportFailed   = "failed"
+)
+
+// ImportView describes one submitted plan import. The records come from the
+// controller's persisted receipts, so a reconnecting dashboard reads import
+// state from the snapshot instead of parsing event messages.
+type ImportView struct {
+	RequestID   string           `json:"request_id"`
+	Status      string           `json:"status"`
+	Plans       []string         `json:"plans,omitempty"`
+	AddedTasks  []string         `json:"added_tasks,omitempty"`
+	Covered     []CoveredView    `json:"covered,omitempty"`
+	Conflicts   []string         `json:"conflicts,omitempty"`
+	Adjustments []string         `json:"adjustments,omitempty"`
+	Gates       []ImportGateView `json:"gates,omitempty"`
+	Error       string           `json:"error,omitempty"`
+	Enqueued    string           `json:"enqueued,omitempty"`
+	Applied     string           `json:"applied,omitempty"`
+}
+
+// CoveredView records a requirement already satisfied by existing work.
+type CoveredView struct {
+	Requirement string `json:"requirement"`
+	TaskID      string `json:"task_id,omitempty"`
+	Evidence    string `json:"evidence,omitempty"`
+}
+
+// ImportGateView records dependencies an import added to an existing task.
+type ImportGateView struct {
+	TaskID    string   `json:"task_id"`
+	DependsOn []string `json:"depends_on"`
+}
+
+// Pending reports whether the import has not reached a terminal state.
+func (i ImportView) Pending() bool {
+	switch i.Status {
+	case ImportQueued, ImportWaiting, ImportPlanning:
+		return true
+	}
+	return false
 }
 
 // ViewCounters carries board counters. Missing timing fields render as

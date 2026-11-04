@@ -524,6 +524,25 @@ class ParallelTests(unittest.TestCase):
         self.assertEqual(shutdown["exit_code"], 1)
         self.assertIn("verification command", shutdown["error"])
 
+    def test_missing_startup_plan_fails_before_work(self):
+        # An unreadable --plan file must reject the invocation before any
+        # planning, dispatch, or publication, and preserve the backlog.
+        backlog = self.todo.read_text()
+        output = self.run_loop(1, "--plan", "missing-plan.md")
+        self.assertIn("cannot read plan", output)
+        self.assertFalse(self.events.exists(), "an agent ran despite rejected startup input")
+        errors = self.controller_events("import-error")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("cannot read plan", errors[0]["message"])
+        for name in ("T1.txt", "T2.txt"):
+            self.assertFalse((self.project / name).exists(), name)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
+        self.assertEqual(self.todo.read_text(), backlog)
+        self.assertEqual(self.controller_events("finish"), [])
+        shutdown = self.controller_events("shutdown")[-1]["data"]
+        self.assertEqual(shutdown["reason"], "error")
+        self.assertEqual(shutdown["exit_code"], 1)
+
     def test_review_failure_and_unapproved_code_are_not_published(self):
         self.tasks(count=1)
         self.env["TEST_MODE"]="review_code"

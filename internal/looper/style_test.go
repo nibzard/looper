@@ -205,3 +205,42 @@ func TestSanitizeConsumesStringSequences(t *testing.T) {
 		}
 	}
 }
+
+// The full decoration table, not only the done exemplar: success carries the
+// check in green, work in progress the arrow and dots in blue, repairs and
+// holds the loop and pause in yellow, and unclassified kinds stay undecorated.
+func TestEventStyleTable(t *testing.T) {
+	cases := []struct {
+		kind, glyph, color, label string
+	}{
+		{"result", "✓", ansiGreen, ""},
+		{"finish", "✓", ansiGreen, ""},
+		{"start", "▸", ansiBlue, ""},
+		{"check", "…", ansiBlue, "checking"},
+		{"plan", "…", ansiBlue, ""},
+		{"bootstrap", "…", ansiBlue, ""},
+		{"review", "…", ansiBlue, ""},
+		{"repair", "↻", ansiYellow, ""},
+		{"diagnosis", "↻", ansiYellow, ""},
+		{"blocker", "✗", ansiYellow, ""},
+		{"review-error", "✗", ansiYellow, ""},
+		{"hook-error", "✗", ansiYellow, ""},
+		{"diagnosis-error", "✗", ansiYellow, ""},
+		{"waiting", "⏸", ansiYellow, ""},
+		{"limit", "⏸", ansiYellow, ""},
+		{"stop", "⏸", ansiYellow, ""},
+		{"progress", "…", "", ""},
+		{"anything-else", "·", "", ""},
+	}
+	for _, tc := range cases {
+		got := styleFor(tc.kind)
+		if got.glyph != tc.glyph || got.color != tc.color || got.label != tc.label {
+			t.Errorf("styleFor(%q) = %+v; want glyph %q color %q label %q", tc.kind, got, tc.glyph, tc.color, tc.label)
+		}
+	}
+	// The three color classes stay distinct so color is a second channel,
+	// never the only one.
+	if ansiGreen == ansiBlue || ansiBlue == ansiYellow || ansiGreen == ansiYellow {
+		t.Fatal("done, doing, and blocked must use distinct colors")
+	}
+}

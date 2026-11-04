@@ -8,13 +8,17 @@ import (
 	"time"
 )
 
+// resourceSetupFixture follows the resource contract: it registers the
+// cleanup script before creating the external resource. A setup that
+// created resources first would lose them to a cancellation during
+// registration.
 const resourceSetupFixture = `set -e
-touch "$LOOPER_ARTIFACT_DIR/database"
 cat > "${LOOPER_RESOURCE_CLEANUP_FILE:-$LOOPER_ARTIFACT_DIR/cleanup-resources.sh}" <<'CLEANUP'
 test -f "$LOOPER_ARTIFACT_DIR/database"
 rm "$LOOPER_ARTIFACT_DIR/database"
 echo cleaned > "$LOOPER_ARTIFACT_DIR/cleanup-proof"
 CLEANUP
+touch "$LOOPER_ARTIFACT_DIR/database"
 `
 
 func TestVerifyCleansResourcesAfterSuccessAndFailure(t *testing.T) {
@@ -58,13 +62,16 @@ func TestCancelledCheckRetainsResourcesUntilRecovery(t *testing.T) {
 	defer cancel()
 	done := make(chan Candidate, 1)
 	go func() { done <- e.verify(ctx, op, a, c, Plan{Setup: resourceSetupFixture, Verify: "sleep 30"}) }()
+	// The database is the setup's last write, so waiting for it also proves
+	// the cleanup registration is complete: a cancellation can no longer tear
+	// the registered script between its creation and its content.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if _, err := os.Stat(filepath.Join(dir, resourceCleanupFile)); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "database")); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("setup did not register cleanup")
+			t.Fatal("setup did not create its resource")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -86,7 +93,11 @@ func TestCancelledCheckRetainsResourcesUntilRecovery(t *testing.T) {
 	a.Phase = "done"
 	e.sweepResources()
 	if _, err := os.Stat(filepath.Join(dir, "database")); !os.IsNotExist(err) {
-		t.Fatal("completed recovery retained its database")
+		var lease ResourceLease
+		leaseErr := readJSON(filepath.Join(dir, resourceLeaseFile), &lease)
+		script, _ := os.ReadFile(filepath.Join(dir, resourceCleanupFile))
+		t.Fatalf("completed recovery retained its database: lease status %q error %q (read %v), registered cleanup script %q",
+			lease.Status, lease.Error, leaseErr, script)
 	}
 }
 

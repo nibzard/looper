@@ -33,6 +33,10 @@ contains the immutable task contract, base revision, candidate revision, actual
 patch, worker report, and verification output. The adapter writes the full run
 report, check definition, profile, and qualification status.
 
+The command may name `assess.mjs` through a symlink. The adapter resolves the
+real path of its invocation and of its own module before it runs, so a linked
+path or a symlinked parent directory writes the same report as a direct call.
+
 Packets larger than 24,000 UTF-8 bytes return `review` before a provider call.
 This leaves room within Jev's input limit. The adapter does not truncate code and
 then claim to have assessed the full change. Split large tasks or inspect their

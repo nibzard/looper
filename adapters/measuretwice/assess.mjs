@@ -1,5 +1,16 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { readFile, writeFile, realpath } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// Node resolves the entry module to its real path but leaves process.argv[1]
+// as typed. Resolve both sides, or a symlinked invocation skips the CLI block.
+async function realFileUrl(path) {
+  try {
+    path = await realpath(path);
+  } catch {
+    // An unresolvable path keeps its typed spelling.
+  }
+  return pathToFileURL(path).href;
+}
 
 export async function assess(packet, options = {}) {
   const moduleName = options.module ?? process.env.MEASURETWICE_MODULE ?? 'measuretwice';
@@ -57,7 +68,7 @@ export async function assess(packet, options = {}) {
     fixture: Boolean(options.fixture), definition, profile };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && await realFileUrl(process.argv[1]) === await realFileUrl(fileURLToPath(import.meta.url))) {
   const output = process.env.LOOPER_ASSESS_REPORT;
   if (!output) throw new Error('LOOPER_ASSESS_REPORT is required');
   let report;

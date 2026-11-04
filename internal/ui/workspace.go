@@ -649,7 +649,7 @@ func (m model) overviewRows() []overviewRow {
 	if t := m.workspaceTask(); t != nil && taskPhase(*t) == "ready" {
 		taskRow(*t, "ready · "+plainText(t.Title))
 	}
-	if m.snap.State == "planning" && m.snap.ActivityLog != "" {
+	if streamEvidence(m.snap) {
 		output := "No agent output yet"
 		if m.snap.ActivityUpdated != "" {
 			output = "Last output " + ageLabel(m.snap.ActivityUpdated, m.referenceTime()) + " ago"

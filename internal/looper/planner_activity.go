@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // plannerActivity extracts observable actions, not private reasoning or tool output.
@@ -132,4 +134,19 @@ func (r *plannerActivityReader) poll(path string, emit func(string)) bool {
 		r.skipping = true
 	}
 	return true
+}
+
+// newestAgentLog returns the newest agent event stream in an operation
+// directory, keeping the current path when it stays the newest. A retry
+// writes a fresh stream, so followers switch to it and restart their reader.
+func newestAgentLog(dir, current string) string {
+	paths, _ := filepath.Glob(filepath.Join(dir, "events-*.jsonl"))
+	newest := current
+	var last time.Time
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil && info.ModTime().After(last) {
+			last, newest = info.ModTime(), path
+		}
+	}
+	return newest
 }

@@ -22,7 +22,7 @@ type Config struct {
 	Jobs, Checks, Limit, ReviewEvery, MaxRepairs, RetryLimit                                                                        int
 	Poll, RetryDelay, Timeout, GitTimeout                                                                                           time.Duration
 	Once, Follow, JSON, Verbose, Smart, GitInit, JobsAuto                                                                           bool
-	Plain, Yes, Reset, Detached                                                                                                     bool
+	Plain, Yes, Reset, Detached, NoAnimation                                                                                        bool
 	Sources                                                                                                                         Sources
 	ProfilePath                                                                                                                     string
 	Plans                                                                                                                           []string
@@ -221,6 +221,8 @@ func Parse(args []string) (Config, error) {
 			c.JSON = true
 		case "--plain":
 			c.Plain = true
+		case "--no-animation":
+			c.NoAnimation = true
 		case "--yes", "-y":
 			c.Yes = true
 		case "--reset":
@@ -422,18 +424,32 @@ func (c Config) SchemaPath() string {
 	return filepath.Join(filepath.Dir(c.Todo), base+".schema.json")
 }
 
+// memoryFiles names the files the memory bound reads: procfs for the host and
+// one entry per cgroup hierarchy (limit, usage, stat). Tests substitute fixture
+// paths so container bounds stay checkable on any host; production points at
+// the real files.
+type memoryFiles struct {
+	meminfo string
+	cgroups [][3]string
+}
+
+var hostMemoryFiles = memoryFiles{
+	meminfo: "/proc/meminfo",
+	cgroups: [][3]string{
+		{"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.stat"},
+		{"/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes", "/sys/fs/cgroup/memory/memory.stat"},
+	},
+}
+
 // Use a conservative bound when Linux reports memory or container limits:
 // inside a container, /proc/meminfo shows the host, not the cgroup limit.
 func availableMemory() int64 {
 	bounds := []int64{}
-	if n := memAvailable(); n > 0 {
+	if n := memAvailable(hostMemoryFiles.meminfo); n > 0 {
 		bounds = append(bounds, n)
 	}
-	for _, n := range []int64{
-		cgroupHeadroom("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.stat"),
-		cgroupHeadroom("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes", "/sys/fs/cgroup/memory/memory.stat"),
-	} {
-		if n > 0 {
+	for _, paths := range hostMemoryFiles.cgroups {
+		if n := cgroupHeadroom(paths[0], paths[1], paths[2]); n > 0 {
 			bounds = append(bounds, n)
 		}
 	}
@@ -446,8 +462,8 @@ func availableMemory() int64 {
 	}
 	return m
 }
-func memAvailable() int64 {
-	b, err := os.ReadFile("/proc/meminfo")
+func memAvailable(path string) int64 {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return 0
 	}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPlanningUsesInspectionToolsAndStreaming(t *testing.T) {
@@ -82,5 +83,27 @@ func TestPlannerPromptDefersExpensiveWork(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing instruction: %s", want)
 		}
+	}
+}
+
+func TestNewestAgentLogFollowsRetries(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "events-00.jsonl")
+	if err := os.WriteFile(first, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := newestAgentLog(dir, first); got != first {
+		t.Fatalf("switched away from the only stream: %s", got)
+	}
+	time.Sleep(10 * time.Millisecond)
+	second := filepath.Join(dir, "events-01.jsonl")
+	if err := os.WriteFile(second, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := newestAgentLog(dir, first); got != second {
+		t.Fatalf("retry stream not followed: %s", got)
+	}
+	if got := newestAgentLog(t.TempDir(), ""); got != "" {
+		t.Fatalf("invented a stream: %s", got)
 	}
 }

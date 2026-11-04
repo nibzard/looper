@@ -27,30 +27,36 @@ func TestReviewHeartbeatAndCancellation(t *testing.T) {
 			e.Config.ClaudeBin, e.Config.ReviewAgent, e.Config.RetryLimit = bin, "claude", 1
 			ctx := context.Background()
 			if cancel {
+				// Cancel from the first heartbeat instead of a fixed offset.
+				// Setup before the heartbeat loop has no bounded duration, so
+				// a deadline that expires there returns before any heartbeat
+				// exists and reports a silent review on a slow machine.
 				var stop context.CancelFunc
-				ctx, stop = context.WithTimeout(ctx, 70*time.Millisecond)
+				ctx, stop = context.WithCancel(ctx)
 				defer stop()
+				watched := make(chan struct{})
+				defer close(watched)
+				go func() {
+					defer stop()
+					for reviewHeartbeats(e) == 0 {
+						select {
+						case <-watched:
+							return
+						case <-time.After(time.Millisecond):
+						}
+					}
+				}()
 			}
 			started := time.Now()
 			raw, err := e.runReviewAgent(ctx, e.capture(), t.TempDir(), filepath.Join(e.Dir, "review-test"), "review", 10*time.Millisecond)
 			if cancel {
-				if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+				if !errors.Is(err, context.Canceled) || time.Since(started) > 3*time.Second {
 					t.Fatalf("cancellation: %v", err)
 				}
 			} else if err != nil || string(raw) != `{"ok":true}` {
 				t.Fatalf("review result: %s %v", raw, err)
 			}
-			events, err := e.Store.RecentEvents(-1, 100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			heartbeats := 0
-			for _, event := range events {
-				if event.Kind == "review-heartbeat" && strings.Contains(event.Message, "Log:") {
-					heartbeats++
-				}
-			}
-			if heartbeats == 0 {
+			if reviewHeartbeats(e) == 0 {
 				t.Fatal("silent review")
 			}
 			if e.activityLog != "" {
@@ -58,6 +64,20 @@ func TestReviewHeartbeatAndCancellation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func reviewHeartbeats(e *Engine) int {
+	events, err := e.Store.RecentEvents(-1, 100)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, event := range events {
+		if event.Kind == "review-heartbeat" && strings.Contains(event.Message, "Log:") {
+			count++
+		}
+	}
+	return count
 }
 
 func TestDashboardReadsReviewLog(t *testing.T) {

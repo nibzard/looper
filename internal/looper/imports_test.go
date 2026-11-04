@@ -110,6 +110,10 @@ func TestStartupImportAppliesAdditions(t *testing.T) {
 	if len(e.State.Imports) != 1 || e.State.Imports[0].Status != ImportQueued {
 		t.Fatalf("startup import not queued: %+v", e.State.Imports)
 	}
+	// A live plan must survive the applied import: the dispatch loop reads
+	// scopes from it, and only the signature forces the rebuild.
+	live := &Plan{Verify: "true", Tasks: []Scope{{TaskID: "T001", Paths: []string{"src/"}}}}
+	e.State.Plan, e.State.PlanSignature = live, "stale"
 	e.processPlanImports(context.Background())
 	if e.err != nil {
 		t.Fatal(e.err)
@@ -124,8 +128,8 @@ func TestStartupImportAppliesAdditions(t *testing.T) {
 	if e.State.Backlog.Task("T002") == nil || e.State.Backlog.Task("T002").Status != "todo" {
 		t.Fatal("addition not applied as a todo task")
 	}
-	// Scope expansion clears planning and satisfaction.
-	if e.State.Plan != nil || e.State.PlanSignature != "" || e.State.Finished || e.State.ReviewedTip != "" {
+	// Scope expansion clears the signature and satisfaction, not the live plan.
+	if e.State.Plan != live || e.State.PlanSignature != "" || e.State.Finished || e.State.ReviewedTip != "" {
 		t.Fatalf("scope expansion must clear planning state: %+v", e.State)
 	}
 	// The task file export carries the addition.
