@@ -22,6 +22,66 @@ func TestDashboardBeforeFirstSnapshot(t *testing.T) {
 	_ = m.View()
 }
 
+func TestSettingsOpensOnFirstKeypress(t *testing.T) {
+	for _, key := range []string{"s", "S"} {
+		for _, local := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/local=%t", key, local), func(t *testing.T) {
+				m := model{width: 80, height: 24}
+				if local {
+					m.ctrl.Snapshot = make(chan ViewSnapshot)
+				}
+				before := m.View()
+				next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+				m = next.(model)
+				if m.dialog != "settings" {
+					t.Fatalf("settings action missing: %q", m.dialog)
+				}
+				if cmd == nil {
+					t.Fatal("first keypress did not hand control to the settings form")
+				}
+				if _, ok := cmd().(tea.QuitMsg); !ok {
+					t.Fatal("settings did not exit the dashboard for the form")
+				}
+				if m.View() != before {
+					t.Fatal("settings handoff replaced the dashboard before the form opened")
+				}
+			})
+		}
+	}
+}
+
+func TestSettingsRejectsReadOnlyKeypress(t *testing.T) {
+	m := model{width: 80, height: 24, ctrl: Controls{ReadOnly: true}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = next.(model)
+	if cmd != nil || m.dialog != "" || m.err != "Read-only observers cannot change settings." {
+		t.Fatalf("read-only settings action: dialog=%q error=%q cmd=%v", m.dialog, m.err, cmd)
+	}
+}
+
+func TestDashboardOtherKeysKeepBehavior(t *testing.T) {
+	for _, tt := range []struct {
+		key, dialog string
+		mode        int
+	}{
+		{"a", "add-plan", ModeBoard},
+		{"x", "drain", ModeBoard},
+		{"q", "exit", ModeBoard},
+		{"?", "", ModeHelp},
+		{"t", "", ModeTail},
+		{"z", "", ModeBoard},
+	} {
+		t.Run(tt.key, func(t *testing.T) {
+			m := model{ctrl: Controls{Snapshot: make(chan ViewSnapshot)}}
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)})
+			m = next.(model)
+			if cmd != nil || m.dialog != tt.dialog || m.mode != tt.mode {
+				t.Fatalf("key %q: dialog=%q mode=%d cmd=%v", tt.key, m.dialog, m.mode, cmd)
+			}
+		})
+	}
+}
+
 func TestPlanningOnPhoneTerminal(t *testing.T) {
 	for _, size := range [][2]int{{58, 22}, {40, 18}, {30, 14}, {80, 24}} {
 		m := model{width: size[0], height: size[1], snap: &ViewSnapshot{

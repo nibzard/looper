@@ -365,11 +365,21 @@ class ParallelTests(unittest.TestCase):
         events=self.recorded()
         self.assertEqual([e["kind"] for e in events if e["kind"] in ("start","end")], ["start","end","start","end"])
 
-    def test_conflict_returns_to_worker(self):
+    def test_conflict_blocks_with_retained_work(self):
         self.env["TEST_MODE"]="conflict"
-        self.run_loop()
-        self.assertEqual((self.project/"shared.txt").read_text(), "T1\nT2\n")
-        self.assertTrue(any(a["repairs"] for a in self.state()["attempts"]))
+        self.run_loop(2)
+        state = self.state()
+        self.assertFalse(state["finished"])
+        done = next(a for a in state["attempts"] if a["phase"] == "done")
+        blocked = next(a for a in state["attempts"] if a["phase"] == "blocked")
+        self.assertEqual((self.project/"shared.txt").read_text(), done["task"]["id"]+"\n")
+        self.assertEqual((Path(blocked["worktree"])/"shared.txt").read_text(), blocked["task"]["id"]+"\n")
+        self.assertIn("CONFLICT", blocked["feedback"])
+        self.assertIn("shared.txt", blocked["feedback"])
+        starts = [e for e in self.recorded() if e["kind"] == "start"]
+        self.assertEqual(len(starts), 2, starts)
+        self.assertEqual(len(blocked["worktrees"]), 1)
+        self.assertEqual(self.controller_events("repair"), [])
 
     def test_combined_verification_repairs_semantic_conflict(self):
         self.env["TEST_MODE"]="semantic"

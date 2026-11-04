@@ -148,6 +148,29 @@ warn_missing() {
     fi
 }
 
+SKILLS_RECEIPT="$SKILLS_DIR/.looper-installed-skills"
+if [ "$INSTALL_SKILLS" -eq 1 ] && { [ -e "$SKILLS_RECEIPT" ] || [ -L "$SKILLS_RECEIPT" ]; }; then
+    if [ ! -f "$SKILLS_RECEIPT" ] || [ -L "$SKILLS_RECEIPT" ]; then
+        echo "Error: invalid skill receipt: $SKILLS_RECEIPT" >&2
+        exit 1
+    fi
+    while IFS= read -r name; do
+        case "$name" in
+            looper-diagnose|looper-backlog|git-commit|github-release) ;;
+            *) echo "Error: invalid skill receipt: $SKILLS_RECEIPT" >&2; exit 1 ;;
+        esac
+    done < "$SKILLS_RECEIPT"
+    if [ -n "$name" ]; then
+        echo "Error: incomplete skill receipt: $SKILLS_RECEIPT" >&2
+        exit 1
+    fi
+fi
+
+record_skill() {
+    # Record ownership before copying so an interrupted copy can be removed.
+    printf '%s\n' "$1" >> "$SKILLS_RECEIPT"
+}
+
 if [ "$INSTALL_BIN" -eq 1 ]; then
     if [ -f "$ROOT_DIR/go.mod" ]; then
         run mkdir -p "$ROOT_DIR/build"
@@ -165,6 +188,22 @@ if [ "$INSTALL_SKILLS" -eq 1 ]; then
         selected_skills+=(git-commit github-release)
     fi
     for skill in "${selected_skills[@]}"; do
+        if [ ! -d "$SRC_SKILLS/$skill" ]; then
+            echo "Error: missing $SRC_SKILLS/$skill" >&2
+            exit 1
+        fi
+        owned=0
+        if [ -f "$SKILLS_RECEIPT" ] && grep -Fxq -- "$skill" "$SKILLS_RECEIPT"; then
+            owned=1
+        fi
+        target="$SKILLS_DIR/$skill"
+        if [ -L "$target" ] || { [ -e "$target" ] && { [ "$owned" -eq 0 ] || [ ! -d "$target" ]; }; }; then
+            echo "Keeping existing skill: $target" >&2
+            continue
+        fi
+        if [ "$owned" -eq 0 ]; then
+            run record_skill "$skill"
+        fi
         run cp -a "$SRC_SKILLS/$skill" "$SKILLS_DIR/"
     done
 fi

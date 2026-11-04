@@ -59,6 +59,11 @@ The latest release can lag behind `main`. To build the current source:
    directory after preserving any local edits. Installation does not remove
    or rename existing user skills.
 
+   Installation skips existing skills unless a previous Looper install owns them.
+   It records installed skills in `.looper-installed-skills` in the skills directory.
+   Run `./uninstall.sh` with the same location options to remove the recorded skills.
+   Without a receipt, uninstall preserves all skills, including skills from older installations.
+
 2. In your project's repository root, describe the intended outcome and
    exclusions in a file such as `PROJECT.md`.
 
@@ -723,3 +728,37 @@ It preserves your commit and finishes retained publication through the usual che
 Staged project changes, other file edits, branch switches, and changed backlog
 contracts require reconciliation. `looper doctor --json` reports a moved branch
 and the last recorded shutdown before you attempt recovery.
+
+### Add tasks during a run
+
+Use `looper add-task tasks.json` to add tasks through the active controller.
+The file contains one task object or an array of task objects:
+
+```json
+[
+  {
+    "id": "T044",
+    "title": "Share storage loading checks",
+    "priority": 2,
+    "details": "Share bounded file reads. Preserve the independent parsers.",
+    "steps": ["Run the storage tests."],
+    "depends_on": []
+  }
+]
+```
+
+The status defaults to `todo`. You can also supply `blocked`. Use unique IDs
+and priorities from 1 through 5. Dependencies can refer to existing tasks or
+other tasks in the batch. The controller validates the complete batch before
+adding it. Existing tasks and active attempts stay intact.
+
+Add `--json` for a structured acknowledgement. The command waits up to 30
+seconds. A timeout reports the request ID; the request can still apply later.
+Check `looper status` before submitting it again. Requests belong to the
+current controller session. If that session ends before application, inspect
+the backlog before resubmitting. An invalid batch adds no tasks.
+
+This command needs an active controller built with support for `add-task`.
+Installing a new binary does not update an existing controller. Use
+`looper add-plan requirements.md` when the planner should create tasks from
+requirements.

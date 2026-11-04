@@ -169,8 +169,12 @@ func (e *Engine) validateRunRepair(p runRepair) error {
 			return fmt.Errorf("verification override is not preserved in future task requirements")
 		}
 	}
-	if !executableCheck.MatchString(p.Verify) || strings.Contains(p.Verify, "||") || strings.Contains(p.Verify, "exit 0") || strings.Contains(p.Verify, "set +e") {
-		return fmt.Errorf("replacement must retain executable checks")
+	// Keep an accepted command usable even when its syntax does not match
+	// the stricter guard for replacement commands.
+	if p.Verify != e.effectiveRecoveryPlan().Verify {
+		if !executableCheck.MatchString(p.Verify) || strings.Contains(p.Verify, "||") || strings.Contains(p.Verify, "exit 0") || strings.Contains(p.Verify, "set +e") {
+			return fmt.Errorf("replacement must retain executable checks")
+		}
 	}
 	if len(p.RemoveSources) == 0 && len(p.DeferredTasks) == 0 {
 		return fmt.Errorf("no proven source or future-task defect")

@@ -104,13 +104,6 @@ else
     fi
 fi
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ROOT_DIR="$SCRIPT_DIR"
-SRC_SKILLS="$ROOT_DIR/skills"
-if [ ! -d "$SRC_SKILLS" ] && [ -d "$SCRIPT_DIR/../share/looper/skills" ]; then
-    SRC_SKILLS="$SCRIPT_DIR/../share/looper/skills"
-fi
-
 run() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf 'dry-run: %s\n' "$*"
@@ -118,6 +111,25 @@ run() {
         "$@"
     fi
 }
+
+SKILLS_RECEIPT="$SKILLS_DIR/.looper-installed-skills"
+if [ "$REMOVE_SKILLS" -eq 1 ] && { [ -e "$SKILLS_RECEIPT" ] || [ -L "$SKILLS_RECEIPT" ]; }; then
+    if [ ! -f "$SKILLS_RECEIPT" ] || [ -L "$SKILLS_RECEIPT" ]; then
+        echo "Error: invalid skill receipt: $SKILLS_RECEIPT" >&2
+        exit 1
+    fi
+    # Validate the complete receipt before removing anything.
+    while IFS= read -r name; do
+        case "$name" in
+            looper-diagnose|looper-backlog|git-commit|github-release) ;;
+            *) echo "Error: invalid skill receipt: $SKILLS_RECEIPT" >&2; exit 1 ;;
+        esac
+    done < "$SKILLS_RECEIPT"
+    if [ -n "$name" ]; then
+        echo "Error: incomplete skill receipt: $SKILLS_RECEIPT" >&2
+        exit 1
+    fi
+fi
 
 if [ "$REMOVE_BIN" -eq 1 ]; then
     if [ -f "$BIN_DIR/looper" ]; then
@@ -133,21 +145,13 @@ if [ "$REMOVE_BIN" -eq 1 ]; then
 fi
 
 if [ "$REMOVE_SKILLS" -eq 1 ]; then
-    if [ ! -d "$SRC_SKILLS" ]; then
-        echo "Error: missing skill list: $SRC_SKILLS" >&2
-        exit 1
-    fi
-    if [ -d "$SRC_SKILLS" ] && [ -d "$SKILLS_DIR" ]; then
-        shopt -s dotglob nullglob
-        for skill in "$SRC_SKILLS"/*; do
-            [ -d "$skill" ] || continue
-            name=$(basename "$skill")
-            target="$SKILLS_DIR/$name"
-            if [ -e "$target" ]; then
-                run rm -rf "$target"
-            fi
-        done
-        shopt -u dotglob nullglob
+    if [ -f "$SKILLS_RECEIPT" ]; then
+        while IFS= read -r name || [ -n "$name" ]; do
+            run rm -rf -- "$SKILLS_DIR/$name"
+        done < "$SKILLS_RECEIPT"
+        run rm -f -- "$SKILLS_RECEIPT"
+    else
+        echo "No skill receipt found; keeping existing skills: $SKILLS_DIR" >&2
     fi
 fi
 

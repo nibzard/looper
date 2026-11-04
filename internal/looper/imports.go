@@ -148,8 +148,59 @@ func (e *Engine) claimPlanImports() {
 			return
 		}
 		e.acceptPlanImport(raw.ID, raw.Paths, raw.Session != e.controller.Session)
-		os.Remove(filepath.Join(processingDir(e.Dir), raw.ID+".json"))
+		if e.err != nil {
+			return
+		}
+		if err := os.Remove(filepath.Join(processingDir(e.Dir), raw.ID+".json")); err != nil {
+			e.err = err
+			return
+		}
 	}
+}
+
+// recoverPlanImports runs after state and pending exports recover, under the
+// repository lock. Receipts own accepted content; source paths are read again
+// only when a claim has no receipt. Such a claim was never acknowledged.
+func (e *Engine) recoverPlanImports() error {
+	// Restore missing acknowledgements, including receipts written by older
+	// controllers whose session cleanup removed terminal acknowledgements.
+	for _, record := range e.State.Imports {
+		e.writePlanAck(record)
+		if e.err != nil {
+			return e.err
+		}
+	}
+	entries, err := os.ReadDir(processingDir(e.Dir))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(processingDir(e.Dir), entry.Name())
+		req, err := loadSettingsRequest(path)
+		if err != nil {
+			return err
+		}
+		if req.Type != RequestTypePlanImport {
+			continue
+		}
+		// A claim belongs to the interrupted controller. Recover it rather
+		// than rejecting its old session. Acceptance replays an existing
+		// receipt or compares fresh content with applied receipt digests.
+		e.acceptPlanImport(req.ID, req.Paths, false)
+		if e.err != nil {
+			return e.err
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // acceptPlanImport validates, captures, and receipts one import. Imports for
@@ -237,7 +288,7 @@ func (e *Engine) matchingImport(plans []capturedPlan, statuses ...string) *Impor
 // writePlanAck persists the acknowledgement file for a receipt.
 func (e *Engine) writePlanAck(record *ImportRecord) {
 	ack := planImportAck{
-		Version: SettingsRequestVersion, ID: record.RequestID, Session: e.controller.Session,
+		Version: SettingsRequestVersion, Type: RequestTypePlanImport, ID: record.RequestID, Session: e.controller.Session,
 		Status: record.Status, AddedTasks: record.AddedTasks, Covered: record.Covered,
 		Conflicts: record.Conflicts, Error: record.Error, Adjustments: record.Adjustments, Gates: record.Gates,
 	}
@@ -247,7 +298,7 @@ func (e *Engine) writePlanAck(record *ImportRecord) {
 }
 
 func (e *Engine) ackPlanImport(id, status, message string, record *ImportRecord) {
-	ack := planImportAck{Version: SettingsRequestVersion, ID: id, Session: e.controller.Session, Status: status}
+	ack := planImportAck{Version: SettingsRequestVersion, Type: RequestTypePlanImport, ID: id, Session: e.controller.Session, Status: status}
 	if message != "" {
 		ack.Error = message
 	}
@@ -267,6 +318,7 @@ func (e *Engine) ackPlanImport(id, status, message string, record *ImportRecord)
 // planImportAck is the machine-readable request result.
 type planImportAck struct {
 	Version     int          `json:"version"`
+	Type        string       `json:"type,omitempty"`
 	ID          string       `json:"id"`
 	Status      string       `json:"status"`
 	Session     string       `json:"controller_session"`

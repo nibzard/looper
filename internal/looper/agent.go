@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -171,7 +172,7 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		if errors.As(err, &launchErr) {
 			return nil, &AgentError{"invalid_request", fmt.Sprintf("%v; see %s and %s", err, filepath.Join(dir, "prompt.txt"), filepath.Join(dir, "invocation.json"))}
 		}
-		raw, readErr := readBounded(log, 64<<20)
+		raw, readErr := readAgentLog(log, 64<<20)
 		if readErr == nil {
 			recordAgentUsage(ctx, log, kind, map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], raw)
 		}
@@ -285,6 +286,45 @@ func readBounded(path string, limit int64) ([]byte, error) {
 	}
 	return os.ReadFile(path)
 }
+
+// readAgentLog retains the end of oversized logs, where agents report final
+// results and failures. Log size alone must not reject a completed run.
+func readAgentLog(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	s, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if s.Size() <= limit {
+		return io.ReadAll(io.LimitReader(f, limit))
+	}
+	marker := []byte("{\"type\":\"looper.log_truncated\",\"message\":\"Event log truncated; only the tail is retained\"}\n")
+	if limit <= int64(len(marker)) {
+		return nil, fmt.Errorf("event log limit is too small for truncation marker")
+	}
+	keep := limit - int64(len(marker))
+	raw, err := io.ReadAll(io.NewSectionReader(f, s.Size()-keep, keep))
+	if err != nil {
+		return nil, err
+	}
+	// The retained bytes can start in the middle of a JSON event. Discard
+	// that fragment so the marker and remaining events stay on separate lines.
+	if newline := bytes.IndexByte(raw, '\n'); newline >= 0 {
+		raw = raw[newline+1:]
+	} else {
+		raw = nil
+	}
+	raw = append(marker, raw...)
+	if err := atomicWrite(path, raw, 0600); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 func extractObject(b []byte) (json.RawMessage, error) {
 	b = bytes.TrimSpace(b)
 	var v map[string]json.RawMessage

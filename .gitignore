@@ -11,6 +11,7 @@ __pycache__/
 # Looper runtime artifacts (if run inside this repo)
 to-do.json
 to-do.schema.json
+to-do.json.context/
 *.jsonl
 
 # OS
@@ -18,6 +19,9 @@ to-do.schema.json
 
 # Build and optional adapter dependencies
 /build/
+*.test
+coverage.out
+.looper-installed-skills
 node_modules/
 
 # Local AXINBOX credentials

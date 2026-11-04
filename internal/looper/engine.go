@@ -115,7 +115,8 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 		lock.Close()
 		return nil, nil, err
 	}
-	os.Remove(filepath.Join(dir, "stop"))
+	// Preserve drain requests received before or during startup. A completed
+	// drain removes its request at the final safe boundary in Run.
 	entries, _ := os.ReadDir(filepath.Join(dir, "worktrees"))
 	for _, entry := range entries {
 		for _, prefix := range []string{"plan-", "review-", "check-", "bootstrap-"} {
@@ -253,6 +254,9 @@ func retained(s *State) bool {
 }
 func (e *Engine) initialize(ctx context.Context) error {
 	if err := e.initializeState(ctx); err != nil {
+		return err
+	}
+	if err := e.recoverPlanImports(); err != nil {
 		return err
 	}
 	e.startupImportPlans()
@@ -796,7 +800,10 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 				if err != nil {
 					return nil, err
 				}
-				_ = e.Repo.Merge(work, partial)
+				if err = e.Repo.Merge(work, partial); err != nil {
+					e.Repo.Remove(work)
+					return a, e.hold(a, "The retained partial implementation conflicts with the integrated project.\n"+err.Error())
+				}
 				a.Worktree = work
 				a.Worktrees = append(a.Worktrees, work)
 				a.Base = e.State.Tip
