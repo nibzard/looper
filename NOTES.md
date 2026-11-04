@@ -2615,3 +2615,24 @@ full make test runs once that work lands.
 Restart procedure once the tree is quiet: make test, archive
 ~/.looper/looper-f42bdd84 (keep runtime/profile.json), then looper start
 --jobs 1 --once; the profile pins agent=claude and verify=make test.
+
+## Self-run restarted on Claude, 2026-11-04
+
+The owner said "you fix it". The killed run's T025 work was half-landed:
+its oversized-log fixture emitted the result envelope before the bulk
+output, so the 64 MiB tail truncation dropped it and the claude adapter
+saw no result ("invalid summary", then the dispatch limit). The fixture
+now re-emits the envelope after the bulk output with a leading newline,
+matching how real Claude streams end.
+
+Full make test then passed on the combined tree (the killed run's stage-1
+work, the concurrent add-task/config work, and the T025 finish), landed
+as d26f12e with the whole validated state. Binary 0.9.1-dev.11 installed
+(previous kept at /tmp/looper-before-d26f12e). The dead session moved to
+~/.looper/looper-f42bdd84-killed-selfrun; profile.json kept, pinning
+agent=claude and verify=make test.
+
+Fresh controller: session run-5aff45ad4e2d0a66, jobs 1, --once, and the
+first worker dispatch runs under claude. Remaining ready work: T034
+(redoing, it was in flight at the kill), T035, T036, T038, T039, T040,
+T041; eleven tasks stay blocked for stage 2 and the owner.
