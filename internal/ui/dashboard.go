@@ -42,7 +42,7 @@ type Controls struct {
 	Diff       func(attemptID string) (string, error)
 	Log        func(path string) (string, error)
 	WorkerLog  func(attemptID string) (string, string, error)
-	AddPlan    func(path string) error
+	AddPlan    func(path string) (string, error)
 	Inspect    func(taskID string) (TaskDetail, error)
 	Statistics func() (StatisticsView, error)
 	Requeue    func(taskID, revision string) error
@@ -55,6 +55,9 @@ type Controls struct {
 	// Notice shows in the message area on start (for example a settings
 	// acknowledgement after the form flow).
 	Notice string
+	// NoAnimation suppresses decorative motion such as the bootstrap spinner.
+	// Status text, controls, and refresh behavior stay unchanged.
+	NoAnimation bool
 }
 
 var (
@@ -558,10 +561,13 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.dialog, m.err = "", "plan import is not available in this build"
 				return m, nil
 			}
-			if err := m.ctrl.AddPlan(path); err != nil {
+			id, err := m.ctrl.AddPlan(path)
+			if err != nil {
 				m.err = err.Error()
 			} else {
-				m.message = "Plan queued: " + path
+				// The identifier ties this notice to the import's entry under
+				// Plan imports, where each state change is tracked.
+				m.message = "Plan queued " + id + " · " + path + " · watch it under Plan imports"
 			}
 			m.dialog = ""
 			return m, nil
@@ -654,10 +660,23 @@ func (m *model) trackBootstrap(v *ViewSnapshot) {
 }
 
 // spinActive reports recent agent output. A short grace period keeps the
-// spinner steady between sparse writes.
+// spinner steady between sparse writes. The animation opt-out freezes the
+// spinner without changing any status evidence.
 func (m model) spinActive() bool {
+	if m.ctrl.NoAnimation {
+		return false
+	}
 	return m.snap != nil && m.snap.Bootstrapping && !m.staleView &&
 		(m.bootstrapGrew || m.snap.BootstrapIdleSeconds < 5)
+}
+
+// spinnerMark renders the activity glyph beside bootstrap evidence: the
+// animated frames normally, or one fixed bullet when motion is disabled.
+func (m model) spinnerMark() string {
+	if m.ctrl.NoAnimation {
+		return busyStyle.Render("•")
+	}
+	return m.spin.View()
 }
 
 // byteLabel sizes the bootstrap event stream in familiar units.
@@ -741,6 +760,12 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 	if v.State == "reviewing" {
 		return "REVIEWING"
 	}
+	if v.State == "diagnosing" {
+		return "DIAGNOSING"
+	}
+	if v.State == "recovering" {
+		return "RUN RECOVERY"
+	}
 	if v.Counters.InFlight > 0 && v.Counters.Checking > 0 {
 		return "IMPLEMENTING / CHECKING"
 	}
@@ -752,6 +777,13 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 	}
 	if len(v.Attempts) > 0 {
 		return strings.ToUpper(PhaseLabel(v.Attempts[0].Phase))
+	}
+	// An accepted import pauses ordinary dispatch, so pending imports explain
+	// why ready work has not started.
+	for _, imp := range v.Imports {
+		if imp.Pending() {
+			return "IMPORTING"
+		}
 	}
 	if v.Finished && v.Counters.Ready == 0 {
 		return "Waiting for new work"
@@ -766,6 +798,13 @@ func activityLabel(v *ViewSnapshot, stale bool) string {
 		return plainText(v.DispatchReason)
 	}
 	return "SCHEDULING"
+}
+
+// streamEvidence reports whether the current activity state carries an agent
+// stream an operator can watch. Output age is what separates a long
+// consultation from a hang, so every streaming state reports it.
+func streamEvidence(v *ViewSnapshot) bool {
+	return v != nil && v.State != "" && v.State != "waiting" && v.ActivityLog != ""
 }
 
 func (m model) View() string {
@@ -808,7 +847,7 @@ func (m model) renderView() string {
 
 // bootstrapHeaderLine carries the spinner and stream evidence under the title.
 func (m model) bootstrapHeaderLine() string {
-	items := []string{m.spin.View() + " Reading project requirements and creating the first tasks"}
+	items := []string{m.spinnerMark() + " Reading project requirements and creating the first tasks"}
 	if m.snap.ActivityAgent != "" {
 		items = append(items, "Agent: "+plainText(m.snap.ActivityAgent))
 	}
@@ -827,7 +866,7 @@ func (m model) bootstrapHeaderLine() string {
 // separates "agent works" from "agent stalled" using stream evidence.
 func (m model) bootstrapPanel() string {
 	var b strings.Builder
-	b.WriteString(busyStyle.Render(m.spin.View()+" Bootstrapping — the controller starts after the first tasks exist") + "\n")
+	b.WriteString(busyStyle.Render(m.spinnerMark()+" Bootstrapping — the controller starts after the first tasks exist") + "\n")
 	switch {
 	case m.snap.BootstrapBytes <= 0:
 		b.WriteString(dimStyle.Render("  preparing the bootstrap agent...") + "\n")
@@ -879,7 +918,7 @@ func (m model) header() string {
 		}
 	}
 	parts = nil
-	if m.snap != nil && m.snap.State == "planning" && m.snap.ActivityLog != "" {
+	if streamEvidence(m.snap) {
 		output := "No agent output yet"
 		if at, err := time.Parse(time.RFC3339, m.snap.ActivityUpdated); err == nil {
 			output = fmt.Sprintf("Last output %s ago", max(time.Duration(0), time.Since(at)).Round(time.Second))
@@ -1005,6 +1044,14 @@ func (m model) boardContent() string {
 		}
 		b.WriteString(gap)
 	}
+	if imports := visibleImports(m.snap.Imports); len(imports) > 0 {
+		b.WriteString(sectionStyle.Render("Plan imports · " + countLabel(len(imports), "result")))
+		b.WriteString("\n")
+		for _, imp := range imports {
+			b.WriteString(m.importRow(imp))
+		}
+		b.WriteString(gap)
+	}
 	if m.snap.State == "planning" {
 		latest := "Latest: " + plainText(m.snap.ActivityDetail)
 		if compact {
@@ -1012,7 +1059,29 @@ func (m model) boardContent() string {
 		}
 		b.WriteString(busyStyle.Render(latest) + "\n")
 		if !compact {
-			b.WriteString(dimStyle.Render("Planning task scopes and checks.") + "\n\n")
+			note := "Planning task scopes and checks."
+			for _, imp := range m.snap.Imports {
+				if imp.Status == ImportPlanning {
+					// The planning state belongs to an import analysis, not
+					// an execution planning pass.
+					note = "Analyzing imported requirements."
+					break
+				}
+			}
+			b.WriteString(dimStyle.Render(note) + "\n\n")
+		}
+	} else if m.snap.State == "diagnosing" || m.snap.State == "recovering" {
+		latest := "Latest: " + plainText(m.snap.ActivityDetail)
+		if compact {
+			latest = truncate(latest, m.width)
+		}
+		b.WriteString(busyStyle.Render(latest) + "\n")
+		if !compact {
+			note := "Consulting the review agent about a repeated failure."
+			if m.snap.State == "recovering" {
+				note = "Consulting the review agent about retained orchestration failures."
+			}
+			b.WriteString(dimStyle.Render(note) + "\n\n")
 		}
 	}
 	b.WriteString(sectionStyle.Render("Recent activity"))
@@ -1089,6 +1158,90 @@ func plainText(s string) string {
 		}
 		return r
 	}, ansi.Strip(s))
+}
+
+// maxImportResults bounds terminal receipts on the board, like the bounded
+// event tail. Pending imports always show; a long import history must not
+// flood the board.
+const maxImportResults = 3
+
+// visibleImports selects board rows: every pending import plus the newest
+// terminal receipts, in submission order.
+func visibleImports(all []ImportView) []ImportView {
+	kept := make([]ImportView, 0, len(all))
+	terminal := 0
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i].Pending() {
+			kept = append(kept, all[i])
+		} else if terminal < maxImportResults {
+			terminal++
+			kept = append(kept, all[i])
+		}
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept
+}
+
+// importStatusLabel maps a receipt status to the state names the plan
+// requires: queued, waiting for active work, planning, applied, or a
+// specific failure.
+func importStatusLabel(status string) (string, lipgloss.Style) {
+	switch status {
+	case ImportQueued:
+		return "Queued", textStyle
+	case ImportWaiting:
+		return "Waiting for active work", blockedStyle
+	case ImportPlanning:
+		return "Planning", busyStyle
+	case ImportApplied:
+		return "Applied", okStyle
+	case ImportFailed:
+		return "Failed", errorStyle
+	default:
+		return status, textStyle
+	}
+}
+
+func (m model) importRow(imp ImportView) string {
+	label, style := importStatusLabel(imp.Status)
+	lines := []string{"  " + imp.RequestID + "  " + style.Render(label)}
+	if plans := strings.Join(imp.Plans, ", "); plans != "" {
+		lines = append(lines, m.boardText(plans))
+	}
+	switch imp.Status {
+	case ImportApplied:
+		if len(imp.AddedTasks) > 0 {
+			lines = append(lines, m.boardText("Added "+strings.Join(imp.AddedTasks, ", ")))
+		} else {
+			lines = append(lines, m.boardText("No new tasks"))
+		}
+		for _, ref := range imp.Covered {
+			detail := "Covered: " + ref.Requirement
+			if ref.TaskID != "" {
+				detail += " -> " + ref.TaskID
+			}
+			if ref.Evidence != "" {
+				detail += " · " + ref.Evidence
+			}
+			lines = append(lines, m.boardText(detail))
+		}
+		for _, adjustment := range imp.Adjustments {
+			lines = append(lines, m.boardText("Adjustment: "+adjustment))
+		}
+		for _, gate := range imp.Gates {
+			lines = append(lines, m.boardText("Gate: "+gate.TaskID+" depends on "+strings.Join(gate.DependsOn, ", ")))
+		}
+	case ImportFailed:
+		if imp.Error != "" {
+			lines = append(lines, errorStyle.Render(m.boardText(imp.Error)))
+		}
+		for _, conflict := range imp.Conflicts {
+			lines = append(lines, errorStyle.Render(m.boardText("Conflict: "+conflict)))
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func eventStyle(kind string) lipgloss.Style {
@@ -1223,8 +1376,9 @@ const helpText = `Run state
   STOPPED       no active controller (gray)
 
 RUNNING confirms the controller is active. It does not prove agent progress.
-BOOTSTRAPPING spins while the bootstrap agent produces output; a frozen
-spinner with growing idle time reports a stalled agent stream.
+BOOTSTRAPPING animates while the bootstrap agent produces output; a frozen
+spinner with growing idle time reports a stalled agent stream. Start looper
+with --no-animation to keep this status without animated motion.
 
 Keys (letters work in either case)
   [j/k], arrows     select workers; scroll at the ends
@@ -1302,6 +1456,10 @@ func (m model) maxBoardScroll() int {
 	return max(0, len(body)-available)
 }
 
+// fitBoard keeps the board inside the terminal. The footer reserves its rows
+// first; whatever is left holds board lines and, when one row remains, the
+// scroll hint. A short screen gives that row to board lines before clipping
+// them, so a bootstrap panel never pushes the controls off the bottom.
 func (m model) fitBoard(content string) string {
 	header, body, available := m.boardLines(content)
 	offset := min(m.scroll, max(0, len(body)-available))
@@ -1316,7 +1474,16 @@ func (m model) fitBoard(content string) string {
 	case offset > 0:
 		hint = "[k] More above"
 	}
-	return strings.Join(lines, "\n") + "\n" + dimStyle.Render(truncate(hint, m.width)) + "\n" + m.footer()
+	footer := m.footer()
+	if len(lines) > m.height-lipgloss.Height(footer)-1 {
+		// No row left for the hint. Clip board lines at the footer instead,
+		// from the bottom, so the header keeps its context.
+		if room := m.height - lipgloss.Height(footer); len(lines) > room {
+			lines = lines[:max(0, room)]
+		}
+		return strings.Join(lines, "\n") + "\n" + footer
+	}
+	return strings.Join(lines, "\n") + "\n" + dimStyle.Render(truncate(hint, m.width)) + "\n" + footer
 }
 
 func (m *model) refreshLog() {

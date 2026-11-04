@@ -100,6 +100,9 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 			}
 			v.Blocked = append(v.Blocked, ui.BlockedView{ID: t.ID, Title: t.Title, Reasons: append([]string(nil), t.Blockers...), UnblockWhen: t.UnblockWhen})
 		}
+		for _, r := range e.State.Imports {
+			v.Imports = append(v.Imports, importView(r))
+		}
 	}
 	if v.State == "" && !draining && len(v.Attempts) == 0 && v.Counters.Ready > 0 {
 		if e.reviewDue() {
@@ -107,6 +110,24 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		} else {
 			v.DispatchReason = "Preparing ready tasks for dispatch"
 		}
+	}
+	return v
+}
+
+// importView copies one durable receipt into the presentation contract.
+// Dashboards read import state from these records, never from event text.
+func importView(r *ImportRecord) ui.ImportView {
+	v := ui.ImportView{
+		RequestID: r.RequestID, Status: r.Status,
+		Plans: append([]string(nil), r.SourcePaths...), AddedTasks: append([]string(nil), r.AddedTasks...),
+		Conflicts: append([]string(nil), r.Conflicts...), Adjustments: append([]string(nil), r.Adjustments...),
+		Error: r.Error, Enqueued: r.Enqueued, Applied: r.Applied,
+	}
+	for _, c := range r.Covered {
+		v.Covered = append(v.Covered, ui.CoveredView{Requirement: c.Requirement, TaskID: c.TaskID, Evidence: c.Evidence})
+	}
+	for _, g := range r.Gates {
+		v.Gates = append(v.Gates, ui.ImportGateView{TaskID: g.TaskID, DependsOn: append([]string(nil), g.DependsOn...)})
 	}
 	return v
 }

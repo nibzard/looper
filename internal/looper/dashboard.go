@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,14 +74,15 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	}
 	defer observer.Close()
 	controls := ui.Controls{
-		Statistics: func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
-		Inspect:    observer.inspect,
-		WorkerLog:  func(id string) (string, string, error) { return workerLog(dir, id) },
-		Log:        func(path string) (string, error) { return plannerLog(dir, path) },
-		Snapshot:   e.viewNotify,
-		Poll:       func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
-		Events:     observer.events,
-		Diff:       func(id string) (string, error) { return attemptDiff(dir, id) },
+		NoAnimation: c.NoAnimation,
+		Statistics:  func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
+		Inspect:     observer.inspect,
+		WorkerLog:   func(id string) (string, string, error) { return workerLog(dir, id) },
+		Log:         func(path string) (string, error) { return plannerLog(dir, path) },
+		Snapshot:    e.viewNotify,
+		Poll:        func() *ui.ViewSnapshot { return observer.view(dir, info.Session) },
+		Events:      observer.events,
+		Diff:        func(id string) (string, error) { return attemptDiff(dir, id) },
 		Done: func() bool {
 			select {
 			case <-done:
@@ -96,17 +98,14 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	}
 	controls.Drain = drain
 	controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }
-	controls.AddPlan = func(path string) error {
+	controls.AddPlan = func(path string) (string, error) {
 		planPath, err := filepath.Abs(path)
 		if err != nil {
-			return err
+			return "", err
 		}
-		id, err := submitPlanImport(dir, info.Session, []string{planPath})
-		if err != nil {
-			return err
-		}
-		go waitForPlanImport(dir, id, time.Hour)
-		return nil
+		// The published snapshot carries each receipt's state, so the
+		// dashboard follows the import without polling its acknowledgement.
+		return submitPlanImport(dir, info.Session, []string{planPath})
 	}
 	for {
 		action, err := runDashboard(controls)
@@ -247,14 +246,15 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	defer observer.Close()
 	attachment := &dashboardAttachment{observer: observer, dir: dir, session: info.Session}
 	controls := ui.Controls{
-		Statistics: func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
-		Inspect:    attachment.inspect,
-		WorkerLog:  func(id string) (string, string, error) { return workerLog(dir, id) },
-		Log:        func(path string) (string, error) { return plannerLog(dir, path) },
-		Poll:       attachment.poll,
-		Events:     observer.events,
-		ReadOnly:   !withControls,
-		Diff:       func(id string) (string, error) { return attemptDiff(dir, id) },
+		NoAnimation: c.NoAnimation,
+		Statistics:  func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
+		Inspect:     attachment.inspect,
+		WorkerLog:   func(id string) (string, string, error) { return workerLog(dir, id) },
+		Log:         func(path string) (string, error) { return plannerLog(dir, path) },
+		Poll:        attachment.poll,
+		Events:      observer.events,
+		ReadOnly:    !withControls,
+		Diff:        func(id string) (string, error) { return attemptDiff(dir, id) },
 	}
 	if withControls {
 		controls.Requeue = func(taskID, revision string) error {
@@ -270,18 +270,7 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			}
 			return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
 		}
-		controls.AddPlan = func(path string) error {
-			absolute, err := filepath.Abs(path)
-			if err != nil {
-				return err
-			}
-			session, err := attachment.currentSession()
-			if err != nil {
-				return err
-			}
-			_, err = submitPlanImport(dir, session, []string{absolute})
-			return err
-		}
+		controls.AddPlan = attachment.addPlan
 	}
 	for {
 		action, err := ui.RunDashboard(controls)
@@ -375,19 +364,40 @@ func attemptDiff(dir, attemptID string) (string, error) {
 	return "", fmt.Errorf("unknown attempt %s", attemptID)
 }
 
+// attemptDirName matches the runtime attempt directories that own a repair
+// diagnosis stream beside the attempt's worker and check records.
+var attemptDirName = regexp.MustCompile(`^task-[0-9a-f]{16}$`)
+
 // plannerLog accepts only controller agent output files within this runtime
-// directory: planner, review, and bootstrap streams.
+// directory: planner, review, bootstrap, and import-analysis streams, plus a
+// repair diagnosis stream inside its attempt directory.
 func plannerLog(dir, path string) (string, error) {
 	rel, err := filepath.Rel(dir, path)
 	if err != nil {
 		return "", err
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) != 2 || (!strings.HasPrefix(parts[0], "plan-") && !strings.HasPrefix(parts[0], "review-") && !strings.HasPrefix(parts[0], "bootstrap-")) ||
+	// A diagnosis consultation records under the attempt it repairs, so its
+	// stream sits one directory deeper than every other controller stream.
+	if len(parts) == 3 && attemptDirName.MatchString(parts[0]) {
+		parts = parts[1:]
+	}
+	if len(parts) != 2 || !controllerStreamDir(parts[0]) ||
 		!strings.HasPrefix(parts[1], "events-") || !strings.HasSuffix(parts[1], ".jsonl") {
 		return "", fmt.Errorf("invalid controller log path")
 	}
 	return readDashboardLog(path)
+}
+
+// controllerStreamDir names the runtime directories that hold controller
+// agent streams a dashboard may open.
+func controllerStreamDir(name string) bool {
+	for _, prefix := range []string{"plan-", "review-", "bootstrap-", "import-analysis-", "run-repair-", "diagnose-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readDashboardLog(path string) (string, error) {

@@ -3,6 +3,7 @@ package looper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,11 @@ import (
 type Repository struct {
 	Root, Common, Dir string
 	Excluded          []string
+	// Runtime is the repository-relative, slash-separated path of the
+	// controller's runtime tree, or empty when it lives outside the
+	// repository. Concurrent atomic writes under it create and rename
+	// .looper-write-* temporaries, which a root scan must never stat.
+	Runtime string
 }
 
 // One slow git operation on a large repository must not abort a run. The limit
@@ -110,6 +116,7 @@ func OpenRepository(c Config, dir string) (*Repository, error) {
 			return nil, fmt.Errorf("LOOPER_BASE_DIR must not be the project root")
 		}
 		r.Excluded = append(r.Excluded, filepath.ToSlash(rel))
+		r.Runtime = filepath.ToSlash(rel)
 	}
 	return r, nil
 }
@@ -120,6 +127,31 @@ func (r *Repository) excluded(p string) bool {
 		}
 	}
 	return false
+}
+
+// scanExcludes keeps the repository-root scan away from the runtime tree.
+// Workers, checks, and the controller write lease, context, prompt, and view
+// files under it while a publication snapshots the root. Every atomic write
+// creates a .looper-write-* temporary in the target directory and renames it
+// into place. A traversing git add that stats a renamed-away temporary exits
+// 128 and fails the publication. An exclude pathspec prunes the traversal, so
+// the scan never reads those names. The pathspec is used only when the runtime
+// path is not ignored: naming an ignored path in an exclude pathspec makes git
+// add fail on it, and an ignored directory is already skipped without a stat.
+// The check runs per snapshot because ignore rules are versioned content that
+// an integrated task can change between two snapshots.
+func (r *Repository) scanExcludes(cwd string) []string {
+	if r.Runtime == "" || cwd != r.Root {
+		return nil
+	}
+	_, err := gitCommand(cwd, nil, nil, "check-ignore", "-q", "--", r.Runtime)
+	var exit *exec.ExitError
+	if err == nil || !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		// Ignored (exit 0) or undetermined: keep the plain scan rather
+		// than risk the ignored-pathspec failure.
+		return nil
+	}
+	return []string{":(exclude)" + r.Runtime}
 }
 func (r *Repository) Head() (string, string) {
 	h, _ := gitText(r.Root, "rev-parse", "--verify", "HEAD")
@@ -167,9 +199,13 @@ func (r *Repository) SnapshotFrom(cwd, base string, knownTrees ...string) (strin
 		return "", err
 	}
 	args := []string{"add", "-A", "--", "."}
-	// Control files leave the temporary index through git rm below. An
-	// exclude pathspec that names an ignored file makes git add fail on
+	// The runtime tree is pruned from the scan itself: concurrent atomic
+	// writes under it rename .looper-write-* temporaries away while the add
+	// walks the tree, and a stat of one of those vanished names exits 128.
+	// Control files instead leave the temporary index through git rm below.
+	// An exclude pathspec that names an ignored file makes git add fail on
 	// it, and private context is filtered out by the loop below either way.
+	args = append(args, r.scanExcludes(cwd)...)
 	if _, err = gitCommand(cwd, nil, e, args...); err != nil {
 		return "", err
 	}

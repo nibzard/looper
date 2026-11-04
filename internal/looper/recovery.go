@@ -415,7 +415,19 @@ Optional administrative_closures [{"task_id":"...","source":"removed private sna
 If external input is needed, omit run_repair. Do not disable checks, grant credentials, publish, or add tasks.
 `, plan.Setup, plan.Verify) + c.references()
 	op := e.capture()
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
+	// The consultation blocks the loop at a drained boundary. It carries the
+	// consultation activity plumbing so a long wait reads as a live agent
+	// instead of a silent controller.
+	raw, err := e.runConsultation(ctx, op, work, dir, prompt, consultation{
+		state:       "recovering",
+		startDetail: "Starting the run-recovery consultation agent",
+		openKind:    "run-recovery-activity",
+		openMessage: "Consulting the review agent about retained orchestration failures",
+		actionKind:  "run-recovery-activity",
+		waitKind:    "run-recovery-heartbeat",
+		waitLabel:   "the run-recovery consultation",
+		heartbeat:   e.consultHeartbeat,
+	})
 	if err != nil {
 		return diagnosis{}, err
 	}

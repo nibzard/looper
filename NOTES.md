@@ -2636,3 +2636,631 @@ Fresh controller: session run-5aff45ad4e2d0a66, jobs 1, --once, and the
 first worker dispatch runs under claude. Remaining ready work: T034
 (redoing, it was in flight at the kill), T035, T036, T038, T039, T040,
 T041; eleven tasks stay blocked for stage 2 and the owner.
+
+## Symlinked assessment entry, 2026-11-04
+
+T035. The Measuretwice adapter skipped its CLI block when Node loaded it
+through a symlink: Node resolves the entry module to its real path but
+leaves `process.argv[1]` as typed, so the URL comparison failed, the
+process exited 0, and no report was written. `assessWithin` treats a
+missing report as success, so the skip was silent. Reproduced before the
+fix: direct invocation with a missing evidence file exits 1 and writes an
+error report; the same call through a temporary symlink exits 0 and writes
+nothing.
+
+The entry check now resolves the real path of both `process.argv[1]` and
+its own module before comparing. Resolving both sides also keeps
+`--preserve-symlinks` working, where the module URL keeps the linked
+spelling. Verified direct, file-symlink, symlinked parent directory,
+relative path, and `--preserve-symlinks` invocations; the error path and
+the oversized-evidence path both write byte-identical reports to the
+direct call. A regression test runs both invocations and compares the
+reports. The four existing adapter tests need the optional Measuretwice
+package and were validated against the local checkout at
+`/home/agent/measuretwice`; `node_modules` stays untracked and was removed
+afterwards.
+
+## Acceptance pinning tests, T038, 2026-11-04
+
+T038. The 2026-11-03 audit found acceptance clauses of T001 through T017
+without a discriminating test. Every listed clause now has one, and each was
+verified to fail when its behavior is removed (a mutation pass over the
+production code, one mutation at a time, restored after each run).
+
+- T001: `TestResumeReceiptExpandsScopeAndBlocksDispatch` seeds a running
+  attempt with a matching receipt.json whose files list a path outside the
+  plan, restarts the controller, and asserts the scope expansion, the ready
+  phase, and the dispatch block. `TestObserveScopeBlocksCompetingNarrowScope`
+  is the TestObserveScope variant whose competing task carries its own narrow
+  scope, so the block comes from the observed path and not from a whole-tree
+  fallback.
+- T003: `memoryFiles` is the path-injection seam; production still reads
+  `/proc/meminfo` and both cgroup hierarchies. Tests cover the minimum of
+  bounds, the unlimited and unreadable branches, the jobs=auto container
+  clamp, and the dispatch throttle (`TestDispatchThrottleLimitsWorkersUnderLowMemory`
+  holds three stub workers at one while available memory stays under 1 GiB;
+  the ample-memory control keeps two).
+- T006: `TestCustomTaskFileExcludesItsDerivedSchema` runs on `plans/board.json`
+  and asserts the excluded pair and a snapshot without them;
+  `TestCustomTaskFileGuardsSchemaSymlink` rejects a symlinked derived schema
+  and a symlinked custom task file.
+- T008: `TestParseVerboseFlag` covers `--verbose` and `-v`;
+  `TestVerboseEmitsExactlyOneConfigEvent` runs a finished project twice and
+  asserts exactly one config event when the flag is set and none without it.
+- T009: `TestConflictingHeadPreparesOncePerCompletedCheck` runs two conflicting
+  results with two check slots and a one-second verification: exactly one
+  defer event while the first check is in flight, one retry after it
+  completes, and a decision for the conflicting head. An unthrottled loop
+  defers thirteen times in the same window.
+- T012: `internal/looper/pty_linux_test.go` allocates a real pseudoterminal,
+  because terminal detection is the behavior under test. It covers a piped
+  writer, TERM=dumb and an unset TERM, --plain on a terminal, and NO_COLOR
+  keeping the interactive layout without escapes. `TestEventStyleTable` pins
+  the whole glyph and color table.
+- T013: `TestEffortAndSessionSettingsApplyLive` applies effort and jobs
+  through a settings request and checks the captured operation plus an
+  unchanged check semaphore; `TestCaptureIsImmutableUnderEffortAndSessionChanges`
+  runs the mid-work application under -race;
+  `TestIdleWaitWakesForQueuedRequest` covers the request wake and the
+  cancellation return.
+- T014: `TestDispatchLimitExitReason` asserts exit code 2, the limit event,
+  the dispatch_limit shutdown record for its own session, and retained
+  undispatched work; `TestReadOnlyRejectsControlKeys` (internal/ui) covers the
+  x, s, and a keys in both cases, read-only and controlling.
+- T015: `TestTUIAttachesToOwnedRepository` runs runTUI on pseudoterminals with
+  the repository lock held and detaches with q;
+  `TestTUIAttachReportsUnverifiableMetadata` proves the same dispatch reaches
+  the attach path; `TestRemoveControllerKeepsForeignSessionRecord` pins the
+  foreign-session guard.
+- T017: `TestRepairFallsBackToRecordedEvidenceWhenDiagnosisFails` covers a
+  failed and a file-changing consultation, asserting the repair still
+  launches with the recorded evidence, no invented cause, the diagnosed mark,
+  and the diagnosis-error event.
+
+Production change: only the memoryFiles seam in internal/looper/config.go. No
+existing test was removed or weakened. Validation: `go test ./...`,
+`go vet ./...`, `go test -race ./...`, and the runtime suite all pass; darwin
+build and vet pass. The pseudoterminal tests carry a linux build tag and skip
+where no pty is available.
+
+## Detached controller mode, T039, 2026-11-04
+
+T039. `NewEngine` always published `ControllerModeForeground`, so a controller
+started by `looper start` recorded mode `foreground` in controller.json and in
+the durable session event, although `RunDaemon` sets `Config.Detached`. The
+engine now derives the published mode from that field: detached for the daemon
+child, foreground for `looper run` and `looper tui`. `docs/UI-PLAN.md` Part 5
+lists mode as a controller.json identity field, so the option to remove the
+constant was rejected; the recorded value is now correct.
+
+Pinning tests, both verified to fail against the original hardcoded call:
+
+- `TestStartDetachedRecordsDetachedMode` starts the real binary through
+  `StartDetached` (the `looper start` path), waits for readiness, and asserts
+  controller.json reports mode detached. It stops the controller with SIGINT
+  through the same cleanup guard the existing process tests use.
+- `TestRunDaemonRecordsDetachedSessionMode` runs the daemon entry point
+  in-process on a finished repository and asserts the durable `session` event
+  in state.db, which embeds the full ControllerInfo, reports mode detached for
+  the readiness session. This survives controller exit and metadata removal.
+
+Existing `view_test.go` still pins foreground for an ordinary engine, and the
+view snapshot carries the mode unchanged. No UI consumer branches on the mode
+string.
+
+Validation: the focused daemon tests, `go test ./...`, `go vet ./...`, the
+Git whitespace check, focused race tests on the daemon and controller paths,
+and the complete `make test` pass (8 installer tests, 9 skill-install tests,
+build stamps, all 56 runtime fixtures, package smoke, skill checks). The root
+filesystem was near full, so `make test` ran with `TMPDIR` and
+`LOOPER_RESOURCE_PREFIX` in a private directory under `/dev/shm`, removed
+afterwards. No commit, installation, push, or backlog edit is performed.
+
+### Repair round, 2026-11-04
+
+The first verification failed on `TestReviewHeartbeatAndCancellation/true`
+with "silent review", which is unrelated to the detached-mode change. Cause,
+reproduced directly: the cancel subtest gave the review 70 ms of context and
+asserted a heartbeat. `runReviewAgent` does unbounded setup work before its
+heartbeat loop starts, so on a loaded machine the deadline expired during
+setup. The agent then returned `context.DeadlineExceeded` at once, the loop
+exited before its first 10 ms tick, and zero heartbeats existed — a valid
+cancellation that still reads as a silent review. A scratch call with an
+already-expired context reproduced the exact signature (deadline error,
+1 ms elapsed, 0 heartbeats).
+
+The subtest now cancels from the first recorded heartbeat instead of a fixed
+offset, so both of its assertions hold by construction: heartbeats exist
+before the cancellation, and cancellation still returns long before the
+agent's 5 s sleep would finish. The promptness bound moved from 1 s to 3 s
+for the same reason; a missing heartbeat still fails the test. The unchanged
+`false` subtest still pins heartbeats for a review that runs to completion.
+
+Live confirmation of T039 outside the test harness: a temporary `looper start`
+on a scratch repository published `controller.json` with `"mode": "detached"`
+and the durable `session` event in `state.db` carried the same mode. The
+daemon survived its parent's exit (PPID 1). It was stopped with `looper stop`
+and SIGINT after it began a live review, and its scratch runtime is registered
+in the session cleanup file.
+
+Validation after the repair: 25 repeats of the review test, 10 repeats under
+16 CPU load loops, the focused daemon and review tests, `go test -count=1
+./...`, `go vet ./...`, the Git whitespace check, focused race tests, and the
+complete `make test` all pass. Changes stay uncommitted in this worktree.
+
+## Dashboard animation opt-out, T040, 2026-11-04
+
+T040. `docs/UI-PLAN.md:343` requires `--no-animation`; the built revision
+exited 2 with `unknown option --no-animation`, and the dashboard initialized
+and advanced its bootstrap spinner without any animation preference.
+
+- `--no-animation` now parses on every dashboard-capable command (`run`,
+  `tui`, `start`, `attach`) into `Config.NoAnimation`. It changes
+  presentation only: it never selects plain or JSON output, emits no events,
+  and does not alter execution. Help documents the flag.
+- `ui.Controls.NoAnimation` is the animation preference the engine hands to
+  the UI. Both entry points thread it: `runDashboardController` (controlling
+  dashboard) and `runAttach` (attached `tui`).
+- With the opt-out, `spinActive` stays false, so the poll tick never issues
+  spinner ticks and an arriving spinner tick is ignored without advancing a
+  frame. `spinnerMark` replaces the animated braille frames with one fixed
+  bullet `•`. All status evidence keeps updating: the BOOTSTRAPPING label,
+  stream size, output age, the stalled-stream warning, keys, and dialogs.
+  The one-second poll tick remains because it drives data refresh, which is
+  execution, not motion. The dashboard help names the option.
+
+Pinning tests, each verified to fail against a mutation that removes the
+behavior:
+
+- `TestParseNoAnimationFlag`: parse, default off, composed with `--json`,
+  output mode unchanged, help entry. Mutation: delete the flag case.
+- `TestNoAnimationRunKeepsEventsAndExitCode`: runs with and without the flag
+  exit 0 with identical event-kind sequences and no new events.
+- `TestDashboardControllerThreadsNoAnimation` (both directions).
+  Mutation: drop the controls wiring.
+- `internal/ui` `TestNoAnimationKeepsStatusReadableWithoutMotion`: frozen
+  spinner under a growing stream, ignored spinner tick, static marker, kept
+  evidence and stall text. Mutations: remove the `spinActive` gate or the
+  static marker.
+- `TestNoAnimationKeepsControls`: view keys, the settings handoff, and
+  read-only rejection behave as before.
+- `TestTUIAttachNoAnimationShowsStaticStatus` (linux PTY): a real attach on
+  pseudoterminals renders BOOTSTRAPPING through the static bullet, draws no
+  animated frame, and detaches cleanly on `q`. Mutation: restore the frame
+  view in `spinnerMark`.
+
+Pre-existing, unchanged: a 12-row bootstrap screen overflows its height with
+and without animation alike; 14 rows fits both. Not part of this change.
+
+Existing ignore rules cover `/build/`, `*.test`, and `coverage.out`; no
+generated artifacts are tracked.
+
+## Dashboard plan-import results, 2026-11-04 (T041)
+
+Both dashboard modes now track every submitted import from structured state.
+The finding: `runDashboardController` discarded the `waitForPlanImport`
+result, the attached callback discarded the request ID, the dialog only said
+"Plan queued", and `ViewSnapshot` carried no import records, so import
+progress was invisible after submission and after reconnecting.
+
+- `ViewSnapshot` gains `Imports []ImportView` (request ID, status, plan
+  paths, added task IDs, coverage, conflicts, adjustments, gates, error,
+  timestamps). The engine copies `State.Imports` receipts into every
+  published snapshot, so `view.json` is the reconnect path; no event parsing.
+- The board renders a bounded "Plan imports" section: all pending receipts
+  plus the three newest terminal ones, in submission order. Labels match the
+  plan: Queued, Waiting for active work, Planning, Applied, Failed, with
+  added task IDs, coverage (`requirement -> task · evidence`), gates,
+  adjustments, and failure detail. With a pending import and no active work,
+  the activity line reads IMPORTING because an accepted import pauses
+  ordinary dispatch.
+- `applyPlanImport` publishes the view when a receipt enters planning.
+  Analysis blocks the loop synchronously, so the boundary publish would
+  otherwise arrive only after the agent finished and dashboards showed a
+  stale queued status during the longest phase.
+- `Controls.AddPlan` returns the request identifier. Both the controlling
+  wrapper and `dashboardAttachment.addPlan` pass it through, and the dialog
+  notice names it ("Plan queued import-… · path · watch it under Plan
+  imports"). The dead ack-polling goroutine is removed; `waitForPlanImport`
+  remains for the CLI. The applied event now lists task IDs beside counts.
+
+Validation: new UI cases cover all five states, results, bounding, notice
+identity, held dispatch, and phone-size fits. New Looper cases cover
+published records read back by a fresh observer, the queued publish before
+processing, the planning publish held open by a gated analysis agent, the
+attachment submission path, and the controlling wrapper's published receipt.
+`make test` (56 runtime fixtures) and race suites pass. Scratch render
+inspected at 90 columns.
+
+### Repair round: resource fixture tear, 2026-11-04
+
+The first combined verification failed only in
+`TestCancelledCheckRetainsResourcesUntilRecovery`: "completed recovery
+retained its database". The T041 changes were green; the same test had
+already flaked once during T028 and passed alone.
+
+Reproduced under CPU load (about 15 failures per 100 iterations). The
+failure path dumped the lease: status `cleaned`, no error, no
+`cleanup-proof`, and a **zero-byte** `cleanup-resources.sh`. Root cause:
+the test fixture created the resource (`touch database`) before
+registering the cleanup script, violating the documented contract
+(register cleanup before creating external resources), and the test
+polled for the cleanup file's existence. Bash's `cat >` creates the file
+empty before the heredoc content lands; a cancel in that window tore the
+registration, the kill left an empty script, and the recovery sweep
+sourced nothing, exited 0, and marked the lease cleaned while the
+database survived.
+
+Fix, test-side only: `resourceSetupFixture` now registers the complete
+cleanup script first and creates the resource last, so waiting for the
+database proves the registration is complete and a cancel can no longer
+tear it. The poll target is the database; the assertion set is unchanged,
+and the failure message now reports the lease status, error, and
+registered script. Production is unchanged: with a contract-conforming
+setup, an empty registration means no external resources were created,
+so marking the lease cleaned stays correct.
+
+Verification: 300 iterations under the same CPU load that produced the
+failures all pass; a Go-overlay mutation that marks the lease cleaned
+without sourcing the script still fails the test. Full `make test`
+(installer, build, 56 runtime fixtures, package smoke, skill checks),
+`make race`, and the whitespace check pass.
+
+## Add-task request clearing the live plan, 2026-11-04
+
+T049. Two stackfall controller crashes (sessions `run-a1084b23a3fcfca4` and
+`run-d87d53c1fea47bba`) ended with `controller panic: runtime error:
+invalid memory address or nil pointer dereference` immediately after the
+`Added 1 task(s)` event, each with one attempt implementing.
+
+Cause confirmed in source. `applyAddTaskRequest` (internal/looper/add_task.go)
+set `State.Plan = nil` so the next planning pass would rebuild, but that pass
+runs only at an idle boundary. The dispatch tick that followed kept calling
+`compatible`, which reads `Plan.Scope` on a value receiver; a nil plan
+dereferences there. The sibling invalidations in `applyPlanImport`
+(internal/looper/imports.go) and `applyRequeueRequest`
+(internal/looper/dashboard_data.go) carried the same hazard, the requeue one
+through the window between its active-work guard and its export. The idle
+re-baseline in `refreshIdle` is not affected: it cannot run while work is
+retained.
+
+Change: all three sites keep the plan and clear only `State.PlanSignature`.
+`plan` already treats a stale signature as needing a rebuild, and
+`Plan.Scope` returns the full-tree scope for a task missing from the plan, so
+concurrency gating stays conservative for newly added tasks until the real
+replan. This is the same pattern `recovery.go` already used for command
+corrections.
+
+Regression coverage, both failing before the change and passing after:
+
+- `TestAddTaskWhileRunningKeepsLivePlan` applies a request against a running
+  attempt and a live plan, then checks the plan survives, the signature
+  clears, and the added task stays incompatible with the running work.
+- `TestAddTaskRequestWhileWorkerRuns` drives a full `Engine.Run` with a stub
+  agent that holds the first worker, submits the request while it implements,
+  and releases it only after the acknowledgement. It asserts the controller
+  completes all three tasks, replans after the request, and that the request
+  applied strictly between the first task's start and result events.
+
+Test-design note: the first version of the runtime fixture let two workers
+overlap a publication and exposed a separate, pre-existing race. `publish()`
+snapshots the repository root while a concurrent worker's `atomicWrite`
+renames a `.looper-write-*` temporary in the runtime tree; `git add -A -- .`
+stats the vanishing file and exits 128, which would fail the publication.
+About 5 failures in 20 runs. The fixture now scopes both planned tasks to one
+write path and makes the added task depend on the first, so exactly one
+attempt is ever in flight and the race cannot fire. The production race stays
+open and is reported as a follow-up.
+
+Verification: `make test` (Go suite, vet, installer, build stamp, 56 runtime
+fixtures, package smoke, skill checks), `make race`, and the whitespace check
+pass. 25 consecutive runs of the new runtime fixture pass.
+
+## Root snapshots skip the runtime tree, 2026-11-04
+
+T052. The follow-up race from the T049 fixture work: `publish()` snapshots the
+repository root while concurrent workers run, and their `atomicWrite` calls
+create and rename `.looper-write-*` temporaries under the runtime tree. When
+`git add -A -- .` read a directory between a temporary's creation and its
+rename, git stated the vanished name, exited 128, and the controller ended
+with an error shutdown. About 5 failures in 20 runs originally; the dedicated
+fixture below reproduces it on nearly every publication.
+
+Verified git behavior first (git 2.47.1): an `:(exclude)` pathspec on the
+runtime path prunes the traversal entirely, zero file syscalls under it; but
+the same pathspec fails the add with "The following paths are ignored" when
+the runtime path is itself ignored. An ignored directory is already skipped
+by the plain scan without a stat, so the two cases never overlap.
+
+Change: `Repository` records `Runtime`, the repository-relative path of the
+runtime tree (empty when `LOOPER_BASE_DIR` lives outside the repository).
+`SnapshotFrom` prunes that path from the staging add whenever it scans from
+the repository root. A `git check-ignore -q` gate runs per snapshot: the
+pathspec is passed only when the runtime path is not ignored, so the
+documented ignored-pathspec failure cannot fire. Ignore rules are versioned
+content, so the gate is not cached across snapshots. Scans from worktrees
+keep the plain command; their pathspec is already bounded to the worktree.
+Control files still leave the temporary index through the existing
+`git rm --cached`.
+
+Regression coverage, each failing before the change and passing after:
+
+- `TestSnapshotSurvivesConcurrentRuntimeWrites` hammers the real
+  `atomicWrite` against four files under the runtime tree with
+  production-scale payloads (a temporary's lifetime covers its write and
+  fsync) while 25 root snapshots run. Pre-fix it failed on the first or an
+  early snapshot with the exact production error; post-fix 10 consecutive
+  runs pass.
+- `TestPublishOverlapsConcurrentWorkerWrites` drives a full `Engine.Run`
+  with two stub-agent tasks on separate write scopes. The T002 worker
+  churns `.looper-write-*` temporaries in its artifact directory; T001
+  returns only after that churn starts, so its publication runs inside the
+  overlap, and the run ends only after the fixture releases T002. Pre-fix
+  the run died with `git add -A -- .: fatal: unable to stat
+  '.../work-00-session-<id>/.looper-write-<n>': exit status 128`; post-fix
+  15 consecutive runs complete both tasks and the event order proves the
+  publication ran inside the second worker's attempt.
+- `TestSnapshotSkipsIgnoredRuntimeTree` pins the check-ignore gate: an
+  ignored runtime tree keeps the plain scan and the snapshot still succeeds
+  and excludes the tree.
+
+Verification: `make test` (Go suite, vet, installer, build stamp, 57 runtime
+fixtures, package smoke, skill checks) passes. The race suite passed twice
+uncached and `make race` passes; one first-attempt `make race` failed once
+without a reproducible test name and did not recur in three later full runs
+or in five focused race runs of the new tests, matching the known flake
+class rather than this change. Git whitespace checks pass.
+
+## Invalid startup plans rejected before work, 2026-11-04
+
+T045. Live run at 5be18bd: in a temporary project, `looper --once --plan
+missing-plan.md to-do.json` printed "cannot read plan ...: no such file or
+directory" as a log line, then planned, executed, checked, and published T1
+and T2, reported goal satisfaction, and exited 0. docs/UI-PLAN.md Part 7
+requires rejecting unreadable input before starting work.
+
+Cause confirmed in source. `startupImportPlans`
+(internal/looper/requirements.go) logged the capture failure as an
+`import-error` event and returned without setting the controller error, so
+initialization completed and the run loop started normally.
+
+Change, three boundaries:
+
+- `Engine.initialize` validates every supplied plan file with
+  `validatePlanFiles` before any state work, bootstrap, recovery, retained
+  publication, or dispatch can run. A failure records one `import-error`
+  event and fails the run with exit 1.
+- `startupImportPlans` now sets the controller error when capture fails, so a
+  file that vanishes between validation and capture also stops the controller
+  instead of logging and continuing.
+- `StartDetached` validates in the parent before spawning the daemon child.
+  Without this, `looper start --plan missing.md` printed "Controller
+  detached", reported exit 0, and the child then died at initialization.
+
+Regression coverage, each failing before the change and passing after:
+
+- `TestInitializeRejectsInvalidStartupPlans`, the initialization gate and its
+  single `import-error` event.
+- `TestStartupImportCaptureFailurePropagates`, the capture boundary in
+  `startupImportPlans`.
+- `TestStartupPlanValidationCoversEveryFile`, one invalid path rejecting the
+  whole invocation, with no import queued and no artifacts captured.
+- `TestRunRejectsInvalidStartupPlansBeforeWork`, a full `Engine.Run`: exit 1,
+  no agent call, unchanged head, no task output, unchanged backlog, no start
+  or finish events, error shutdown record.
+- `TestBootstrapRejectsInvalidPlans`, the fresh-project path: no backlog is
+  created from a rejected invocation.
+- `TestStartDetachedRejectsInvalidPlans`, the parent gate: exit 1 with the
+  rejection on stderr and no detached-controller output.
+- Runtime fixture `test_missing_startup_plan_fails_before_work`: the evidence
+  command through the real binary. Before the fix it printed the full run
+  through "Project goal satisfied." and failed the exit-code assertion.
+
+Live verification with the built binary in a temporary project: the missing
+plan fails with exit 1 before any work; the same project with a valid plan
+still executes and publishes both tasks and reports satisfaction;
+`looper start --plan missing-plan.md` fails in the parent with exit 1.
+
+Verification: `make test` (Go suite, vet, installer, build stamp, 57 runtime
+fixtures, package smoke, skill checks) and `make race` pass. Backlog content,
+task transitions, publication rules, and JSON output for valid runs are
+unchanged.
+
+## Dispatch guards for a nil plan, 2026-11-04
+
+T050, defense in depth for the T049 crash class. `State.Plan` was
+dereferenced without a nil check at three sites that run while work is
+active: `compatible` (`Plan.Scope` on a value receiver), `launch`
+(`clone(*e.State.Plan)`), and the speculative check spawn in `Run` (the same
+clone). Every other reader already guards. Two self-run sessions
+(`run-3a03e3601fdd1152`, `run-4b9d54b1726b438d`) ended with the nil-pointer
+controller panic through this path.
+
+Change, per the accepted contract:
+
+- `compatible` reports a task not dispatchable when the plan is nil: without
+  scopes there is nothing to gate concurrency against.
+- `start` and `launch` return the new `errPlanMissing` before any attempt
+  state exists or event fires; the dispatch loop treats that sentinel as a
+  deferral, not an error. `repair` returns it before touching the attempt,
+  and both of its call sites in `Run` requeue the attempt into `pending` so
+  the work retries after the next planning pass.
+- The check-spawn loop breaks for the iteration when the plan is nil, the
+  same shape as the existing deferred-head break.
+- Applied-context validation keeps its original precedence in `start` and
+  `launch`; the missing-import error still surfaces first
+  (TestMissingAppliedContextPreventsWorkAndCompletion pins it).
+- While work is in flight against a nil plan, one `defer` event reports the
+  wait, deduplicated across ticks.
+
+Known property: the deferral waits for a planning pass, and planning runs
+only at an idle boundary, so a nil plan that persists while work stays
+active waits rather than progressing. After T049 no code path nils the plan
+mid-run, so this is the unreachable tail of the guard; the alternative was
+the panic. A restart resumes such state through the idle replan when no
+attempt is pending.
+
+Regression coverage, both failing before the change and passing after:
+
+- `TestNilPlanDefersDispatchSites` drives `compatible`, `launch`, `start`,
+  and `repair` with a nil plan: no panic, `errPlanMissing` from the launch
+  sites, attempt state untouched, and unchanged gating with a live plan.
+  Pre-fix it panicked inside `compatible` exactly at the `Plan.Scope` read.
+- `TestRunWithNilPlanDefersWork` resumes the persisted state a crashed
+  pre-T049 controller leaves (one ready attempt with its result commit, a
+  ready todo task, no plan) and drives the live loop: pre-fix the run ends
+  with `controller panic: runtime error: invalid memory address or nil
+  pointer dereference`; post-fix the iterations complete, the deferral
+  event is recorded exactly once, no agent runs, no check is spawned, the
+  attempt stays ready, the ready task stays todo, and cancellation stops
+  the controller cleanly.
+
+Verification: `make test` (Go suite, vet, installer, build stamp, 57 runtime
+fixtures, package smoke, skill checks), `make race` (race suite plus 57 race
+fixtures), and the whitespace check pass.
+
+## Bootstrap board clipped to short screens, 2026-11-04
+
+T048. A 30x12 terminal with a bootstrapping snapshot rendered 13 lines with
+animation (12 without), overflowing the screen; 30x14 was the smallest size
+where both modes fit. Reproduced in this worktree with a scratch model before
+the change.
+
+Cause confirmed in `fitBoard`. It always emitted header lines, one body-line
+window, the scroll-hint row, and the footer. `boardLines` floors the body
+window at one line, so once header plus footer already filled the screen the
+fixed extra rows pushed the total past the terminal height. The bootstrap
+screen is the visible case because its header wraps to five to seven lines at
+width 30 and the panel follows; the animated spinner frames carry a trailing
+space (two cells versus the static marker's one), which wraps one line further
+and overflows where the static mode still fits.
+
+Change: `fitBoard` now reserves the footer's rows first. Board lines fill what
+is left; the scroll-hint row is used only when one row remains for it. A short
+screen gives that row to board lines and clips the board at the footer from
+the bottom, so the header keeps its context and the controls never scroll off.
+Screens that already fit render exactly as before, hint and blank separator
+included.
+
+Regression coverage, failing before the change and passing after:
+
+- `TestBootstrapBoardFitsShortScreens` walks heights 8 through 16 at width 30
+  in both animation modes asserting the view stays inside the screen, checks
+  the reported 30x12 case keeps the BOOTSTRAPPING label, stream evidence, and
+  controls in both modes, checks the scrolled view fits too, and pins that a
+  roomier screen (30x14) keeps the `[j] More below` hint.
+- The T040 static-marker pin in `TestNoAnimationKeepsControls` moves from the
+  14-row workaround to 12 rows, where both modes now fit; its comment no
+  longer claims the 12-row overflow.
+
+Verification: `make test` (Go suite, vet, installer, build stamp, 57 runtime
+fixtures, package smoke, skill checks) and `make race` (race suite plus 57
+race fixtures) pass. `git diff --check` is clean.
+
+### Repair round: orphaned calibration hammers stalled verification
+
+The first combined verification of the T048 merge failed only in
+`TestCorrectionRunsNewTaskWithoutRepeatingCompletedWork`
+(inputwait_test.go:520): the first "Waiting for changed requirements" event
+never arrived inside the 5 second `waitEvent` budget. `internal/ui` passed.
+The failure repeated in one local full-package run and never in isolation
+(`-count=3` passes), so it depended on load, not on the change: the engine
+imports `internal/ui` for data types only, and `fitBoard` runs only in the
+TUI model.
+
+A live capture through sqlite3 on the fixture's running `state.db` showed the
+healthy path reaches that event in about one second, leaving roughly 5x
+headroom. The real stall was environmental: two orphaned
+`/tmp/gt052/repro.sh` processes from the T052 calibration session (PIDs
+1282166 and 1282168, started around 12:02, parented to init). Their hammer
+subshells rename payload files in a loop that stops only when the parent
+touches a stop file after 30 `git add -A` rounds. The scratch tree held 2.9
+million files and 19 GB, so every round ran slower than the last and the
+hammers never stopped. The rename and fsync storm (the engine store commits
+with `synchronous=FULL`) pushed the fixture past its deadline and had filled
+the root disk to 94 percent, 14 GB free.
+
+Remediation: create the scripts' own stop files, terminate both parents and
+their children, keep `repro.sh` and its logs under
+`/tmp/repair-t048-gt052-keep/`, and remove the 19 GB tree. The root disk
+returned to 84 percent used, 32 GB free. `make test` then passed
+(`internal/looper` 174 s against 268 to 306 s under the storm), `make race`
+passed, and `git diff --check` stayed clean. A scratch model on the merged
+tree renders 12 lines at 30x12 in both animation modes and 14 lines at
+30x14. The T052-era one-time race-suite blip in T054 plausibly shares this
+cause; the evidence belongs there.
+
+
+## Import analysis activity evidence (T051), 2026-11-04
+
+A long import analysis showed the board's "Planning" status with no agent
+evidence, unlike ordinary planning. Cause: analyzeImport called the review
+agent directly, so no activity fields, stream path, or heartbeats existed
+while it blocked the loop.
+
+- runImportAnalysis now wraps the synchronous analysis with the same plumbing
+  as runPlanner: planning activity state, agent identity, the
+  import-analysis stream path, readable action detail through the shared
+  planner activity reader, a per-second view refresh, and controller
+  heartbeats (30-second production cadence). The invocation keeps the normal
+  review contract: no planning JSON schema and no planning tool restriction.
+- A retry writes events-01.jsonl; newestAgentLog follows the newest stream
+  and resets the reader, so evidence survives transient-failure retries.
+- plannerLog accepts import-analysis-* runtime directories, so the dashboard
+  [l] shortcut opens the analysis stream; the imports/ capture directory
+  stays rejected.
+- Coverage: TestImportAnalysisPublishesActivityEvidence observes view state,
+  agent, stream path, action detail, last-output age, and a heartbeat while
+  a gated analysis agent is still running, then verifies cleared fields, the
+  normal invocation contract, and journaled import-activity events. Both new
+  behavioral tests fail on the pre-fix source and pass after it.
+
+## Diagnosis consultation activity evidence (T055), 2026-11-04
+
+Same class as T051: the repair diagnosis and the run-recovery consultation
+called `op.agent.Run` directly on the owner goroutine, so while they ran the
+loop published no worker activity and no heartbeats. A long consultation was
+indistinguishable from a hang.
+
+- `runConsultation` (internal/looper/consultation_activity.go) holds the shared
+  plumbing that `runImportAnalysis` used to hold inline: activity fields on the
+  published view, agent identity, the newest agent stream through
+  `newestAgentLog` (a retry switches the reader to the fresh stream), readable
+  action detail, per-second view refresh, and controller heartbeats at the
+  30-second planner cadence. `runImportAnalysis` now delegates to it, so
+  planning, import analysis, review, and both consultations share one
+  presentation contract.
+- The consultation blocks the loop, so its heartbeat tick also calls
+  `pollWorkerActivity`: worker evidence for parallel attempts keeps publishing
+  while a mid-repair diagnosis runs instead of going silent.
+- Both call sites keep their normal agent contracts (`op.agent.Run`, progress
+  nil): no planning schema, no tool restriction. The gated tests assert the
+  invocation arguments carry no `--tools` or `--json-schema`.
+- Event kinds: `diagnosis-activity` (start plus streamed actions),
+  `diagnosis-heartbeat`, `run-recovery-activity`, `run-recovery-heartbeat`. The
+  existing `diagnosis` event stays exactly one per successful consultation, so
+  the runtime fixture's count assertion is unchanged. Opening and heartbeat
+  events carry `session` and `log` in `data`.
+- The published view state is `diagnosing` for a repair diagnosis and
+  `recovering` for a run-recovery consultation. The dashboard maps them to a
+  DIAGNOSING and a RUN RECOVERY operation label, a board note naming each
+  consultation, and output age; the header and overview now report output age
+  for every streaming state, not only planning, so review gains the same line.
+- `plannerLog` opens a diagnosis stream inside its attempt directory
+  (`task-<16 hex>/diagnose-*/events-*.jsonl`) and the run-repair stream at the
+  runtime root. The attempt-name check keeps arbitrary nested paths rejected.
+- The consultation republishes with `drainingNow()`, so a drain request that
+  arrives before a repair stays visible instead of the view flipping back to
+  RUNNING for the consultation's duration.
+- Coverage: TestDiagnosePublishesActivityEvidence,
+  TestDiagnoseKeepsPublishingWorkerEvidence (parallel worker stream journaled
+  while the consultation is still gated), TestConsultRunRepairPublishes-
+  ActivityEvidence, TestDashboardReadsConsultationLogs, and
+  TestBoardNamesDiagnosisConsultation. All five fail on the pre-fix source and
+  pass after it. The diagnosis fixture attempt now uses a production-shaped
+  `task-<16 hex>` identifier so its records sit where the dashboard expects.
+
+Validation: `make test` (Go suite, vet, installer, build stamp, 57 runtime
+fixtures, package smoke, skill checks), `make race` (race suite plus 57 race
+fixtures), focused `-race -count=2` runs of the new tests, and
+`git diff --check` all pass. No installation or publication.

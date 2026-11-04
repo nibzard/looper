@@ -88,7 +88,8 @@ func (e *Engine) adoptStagedImports() {
 }
 
 // startupImportPlans captures invocation plans for an existing project and
-// queues them through the durable receipt path.
+// queues them through the durable receipt path. A capture failure is fatal:
+// invalid startup input must stop the controller before work starts.
 func (e *Engine) startupImportPlans() {
 	if len(e.Config.Plans) == 0 {
 		return
@@ -100,6 +101,7 @@ func (e *Engine) startupImportPlans() {
 	plans, err := capturePlans(e.Dir, requestID, e.Config.Plans)
 	if err != nil {
 		e.event("import-error", err.Error())
+		e.err = err
 		return
 	}
 	if prior := e.matchingImport(plans, ImportApplied, ImportQueued, ImportWaiting, ImportPlanning); prior != nil {
@@ -162,8 +164,7 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 		e.State.Tip, c.NewRequirements)
 	prompt += "\n" + taskClassificationInstructions
 	prompt += c.references()
-	e.event("import", "Analyzing imported requirements with the review agent...")
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
+	raw, err := e.runImportAnalysis(ctx, op, work, dir, prompt, e.importHeartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -190,4 +191,22 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 		return nil, fmt.Errorf("the analysis changed code; its result was not applied")
 	}
 	return &proposal, nil
+}
+
+// runImportAnalysis gives a synchronous import analysis the same activity
+// plumbing as ordinary planning: activity fields on the published view, the
+// agent stream path, readable action detail, and controller heartbeats. The
+// agent keeps its normal review tools and result contract; analysis of a
+// long run stays observable instead of presenting a silent planning label.
+func (e *Engine) runImportAnalysis(ctx context.Context, op operation, work, dir, prompt string, heartbeat time.Duration) (json.RawMessage, error) {
+	return e.runConsultation(ctx, op, work, dir, prompt, consultation{
+		state:       "planning",
+		startDetail: "Starting the import analysis agent",
+		openKind:    "import",
+		openMessage: "Analyzing imported requirements with the review agent",
+		actionKind:  "import-activity",
+		waitKind:    "import",
+		waitLabel:   "import analysis",
+		heartbeat:   heartbeat,
+	})
 }

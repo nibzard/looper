@@ -55,6 +55,17 @@ type Engine struct {
 	// full pipeline; zero keeps the production deadline. It is set before the
 	// run starts and never mutated while workers are live.
 	assessDeadline time.Duration
+
+	// importHeartbeat overrides the fixed import-analysis heartbeat interval
+	// for tests of the full pipeline; zero keeps the production interval. It
+	// is set before the run starts and never mutated while agents are live.
+	importHeartbeat time.Duration
+
+	// consultHeartbeat overrides the fixed diagnosis consultation heartbeat
+	// interval for tests of the full pipeline; zero keeps the production
+	// interval. It is set before the run starts and never mutated while
+	// agents are live.
+	consultHeartbeat time.Duration
 }
 
 // operation is the immutable execution configuration captured before each
@@ -129,7 +140,11 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 	// Controller identity publishes under the repository lock. Settings files
 	// from earlier sessions clear here; plan-import requests survive.
 	clearSessionFiles(dir)
-	info, err := publishController(dir, ControllerModeForeground, c.ReviewAgent)
+	mode := ControllerModeForeground
+	if c.Detached {
+		mode = ControllerModeDetached
+	}
+	info, err := publishController(dir, mode, c.ReviewAgent)
 	if err != nil {
 		s.Close()
 		lock.Close()
@@ -253,6 +268,13 @@ func retained(s *State) bool {
 	return false
 }
 func (e *Engine) initialize(ctx context.Context) error {
+	// Startup plan input is rejected before bootstrap, recovery, retained
+	// publication, or any dispatch can start: an invalid invocation must
+	// not begin work. Capture revalidates and stays authoritative.
+	if err := validatePlanFiles(e.Config.Plans); err != nil {
+		e.event("import-error", err.Error())
+		return err
+	}
 	if err := e.initializeState(ctx); err != nil {
 		return err
 	}
@@ -703,12 +725,23 @@ func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog
 	return r
 }
 
+// errPlanMissing marks dispatch work deferred because the live plan is nil.
+// The loop waits for a planning pass to rebuild the plan instead of
+// dereferencing it. Mid-flight invalidations keep the plan and clear only its
+// signature, so reaching this guard means an unexpected nil plan.
+var errPlanMissing = errors.New("execution plan is missing; a planning pass must rebuild it")
+
 // A retained attempt holds no live worker, so it cannot reserve its scope:
 // two retained attempts with overlapping scopes would veto each other forever
 // and no task would dispatch again. start() relaunches a retained attempt and
 // marks it running before the next candidate is evaluated, which restores
 // exclusivity from that moment.
 func (e *Engine) compatible(t Task) bool {
+	if e.State.Plan == nil {
+		// Without a plan there is no scope to gate concurrency against, so
+		// the task is not dispatchable until a planning pass rebuilds it.
+		return false
+	}
 	scope := e.State.Plan.Scope(t.ID)
 	for _, a := range e.State.Attempts {
 		switch a.Phase {
@@ -766,6 +799,11 @@ func (e *Engine) attempt(id string) *Attempt {
 func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*Attempt, error) {
 	if _, err := e.appliedContext(); err != nil {
 		return nil, err
+	}
+	if e.State.Plan == nil {
+		// Defer before any attempt state exists, so the task dispatches
+		// cleanly after a planning pass rebuilds the plan.
+		return nil, errPlanMissing
 	}
 	var a *Attempt
 	for _, v := range e.State.Attempts {
@@ -849,6 +887,12 @@ func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult
 	documents, err := e.appliedContext()
 	if err != nil {
 		return err
+	}
+	if e.State.Plan == nil {
+		// The worker snapshot needs the plan. Defer the launch until a
+		// planning pass rebuilds it instead of cloning a nil pointer, and
+		// report no start event for work that did not begin.
+		return errPlanMissing
 	}
 	e.event("start", a.Task.ID+"  "+a.Task.Title)
 	snapshot, backlog, plan := clone(*a), clone(e.State.Backlog), clone(*e.State.Plan)

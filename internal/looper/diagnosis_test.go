@@ -18,6 +18,13 @@ const diagnosisProposal = `{"root_cause":"the check asserts T001.txt exists","ev
 func diagnosisEngine(t *testing.T, result string) (*Engine, *Attempt) {
 	t.Helper()
 	bin, _ := fakeAgent(t, result)
+	return diagnosisEngineWithAgent(t, bin)
+}
+
+// diagnosisEngineWithAgent builds the diagnosis fixture around a caller-chosen
+// agent binary, so a test can gate or stream the consultation itself.
+func diagnosisEngineWithAgent(t *testing.T, bin string) (*Engine, *Attempt) {
+	t.Helper()
 	c := repoConfig(t, "run")
 	c.CodexBin = bin
 	c.ClaudeBin = bin
@@ -41,11 +48,14 @@ func diagnosisEngine(t *testing.T, result string) (*Engine, *Attempt) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { e.Repo.Remove(work) })
-	dir := filepath.Join(e.Dir, "task-x")
+	// The attempt id keeps the production shape so its retained records,
+	// including a diagnosis stream, sit where the dashboard expects them.
+	id := identifier("task")
+	dir := filepath.Join(e.Dir, id)
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	a := &Attempt{ID: "task-x", Task: todo.Tasks[0], Agent: "codex", Base: e.State.Tip, Worktree: work, Directory: dir, Ref: "refs/looper-tasks/task-x", Phase: "running", Worktrees: []string{work}}
+	a := &Attempt{ID: id, Task: todo.Tasks[0], Agent: "codex", Base: e.State.Tip, Worktree: work, Directory: dir, Ref: "refs/looper-tasks/" + id, Phase: "running", Worktrees: []string{work}}
 	e.State.Attempts = append(e.State.Attempts, a)
 	return e, a
 }
@@ -215,5 +225,59 @@ func TestRepairFeedbackOmitsMissingWorkerReport(t *testing.T) {
 	}
 	if !strings.Contains(a.Feedback, "check failed: T001.txt missing") {
 		t.Fatalf("raw evidence missing: %q", a.Feedback)
+	}
+}
+
+// A diagnosis consultation that fails or changes files must fall back to the
+// recorded evidence: the repair still launches, no root cause is invented, and
+// the attempt is marked diagnosed so the next repeat holds instead of
+// consulting forever.
+func TestRepairFallsBackToRecordedEvidenceWhenDiagnosisFails(t *testing.T) {
+	summary := `{"task_id":"T001","status":"done","summary":"finished","files":["T001.txt"],"blockers":[],"followups":[],"unblock_when":""}`
+	for _, mode := range []string{"failed consultation", "file-changing consultation"} {
+		t.Run(mode, func(t *testing.T) {
+			e, a := diagnosisEngine(t, summary)
+			t.Setenv("LOOPER_FAKE_DIAGNOSIS", diagnosisProposal)
+			if mode == "failed consultation" {
+				t.Setenv("LOOPER_FAKE_DIAGNOSIS", "not json")
+			} else {
+				t.Setenv("LOOPER_FAKE_TOUCH", filepath.Join(a.Worktree, "touched.txt"))
+			}
+			e.State.Plan = &Plan{}
+			feedback := "Combined verification failed:\nCommand: exit 1\nError: exit status 1"
+			// Pre-seed the failure history so this repair is a repeated failure.
+			a.FailureHash = digest([]byte(feedback))
+			a.Repeats = 1
+			results := make(chan workerResult, 1)
+			if err := e.repair(context.Background(), a, feedback, results); err != nil {
+				t.Fatal(err)
+			}
+			<-results
+			e.wg.Wait()
+			if !a.Diagnosed {
+				t.Fatal("a failed consultation must still mark the attempt diagnosed")
+			}
+			if a.Phase != "running" {
+				t.Fatalf("the repair must launch instead of holding, got %s", a.Phase)
+			}
+			if strings.Contains(a.Feedback, "Independent diagnosis") || strings.Contains(a.Feedback, "root cause") {
+				t.Fatalf("an unusable consultation must not inject a diagnosis: %q", a.Feedback)
+			}
+			if !strings.Contains(a.Feedback, "Fresh diagnosis required") {
+				t.Fatalf("the fallback must say why it proceeded: %q", a.Feedback)
+			}
+			if !strings.Contains(a.Feedback, "exit status 1") {
+				t.Fatalf("the recorded evidence must stay in the feedback: %q", a.Feedback)
+			}
+			var errorEvent bool
+			for _, ev := range storedEvents(t, e) {
+				if ev.Kind == "diagnosis-error" && strings.HasPrefix(ev.Message, a.Task.ID) {
+					errorEvent = true
+				}
+			}
+			if !errorEvent {
+				t.Fatal("the discarded consultation must be reported as an event")
+			}
+		})
 	}
 }

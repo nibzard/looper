@@ -302,7 +302,9 @@ func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
 	t.UnblockWhen = ""
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	e.State.Finished = false
-	e.State.Plan = nil
+	// Keep the live plan: a worker can finish between the active-work guard
+	// above and this export, leaving a pending attempt that reads its scope.
+	// The cleared signature forces the next planning pass to rebuild.
 	e.State.PlanSignature = ""
 	if err = e.export(); err != nil {
 		e.err = err

@@ -49,6 +49,7 @@ Options:
   --review-every N      Check product behavior after N integrations (default: 5)
   --once                Exit when no runnable work remains after review
   --plain               Plain text only; no forms, color, or glyphs
+  --no-animation        Dashboard without animated motion; status stays readable
   --yes                 Skip the first-run form and use defaults
   --json                Emit machine-readable progress
   --verbose             Show the run configuration at start

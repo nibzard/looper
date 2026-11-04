@@ -104,6 +104,67 @@ func TestIdleControllerDoesNotPlanWithoutWork(t *testing.T) {
 	}
 }
 
+// The controlling dashboard's submission must return the request identifier
+// and the controller must publish the receipt so the board tracks the import
+// from structured state rather than a one-shot "Plan queued" notice.
+func TestDashboardAddPlanPublishesImportRecord(t *testing.T) {
+	c := preparedRepo(t)
+	c.Poll = time.Hour
+	c.CodexBin, c.ClaudeBin = "/bin/false", "/bin/false"
+	var stdout, stderr strings.Builder
+	dashboard := func(controls ui.Controls) (ui.ExitAction, error) {
+		select {
+		case <-controls.Snapshot:
+		case <-time.After(5 * time.Second):
+			t.Error("no first snapshot")
+			controls.Cancel()
+			return ui.ExitAction{}, nil
+		}
+		id, err := controls.AddPlan(planFile(t, "Add a requirement through the dashboard."))
+		if err != nil {
+			t.Error(err)
+			controls.Cancel()
+			return ui.ExitAction{}, nil
+		}
+		if id == "" {
+			t.Error("controlling submission discarded the request identifier")
+		}
+		_, dir := projectPaths(c)
+		var published *ui.ImportView
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if v := LoadView(dir); v != nil {
+				for i := range v.Imports {
+					if v.Imports[i].RequestID == id {
+						published = &v.Imports[i]
+					}
+				}
+			}
+			if published != nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if published == nil {
+			t.Errorf("controller never published import %s", id)
+		} else if published.Status == "" {
+			t.Errorf("incomplete import record: %+v", published)
+		}
+		controls.Cancel()
+		return ui.ExitAction{}, nil
+	}
+	finished := make(chan int, 1)
+	go func() { finished <- runDashboardController(c, &stdout, &stderr, dashboard) }()
+	select {
+	case code := <-finished:
+		if code != 130 {
+			t.Fatalf("exit %d, want 130: %s", code, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("dashboard wrapper hung")
+	}
+}
+
 func TestDashboardExitUsesOwnSessionRecord(t *testing.T) {
 	store := timingStore(t)
 	if _, err := store.Event("shutdown", "older drain", sessionExit{Session: "drained", Reason: "drained", ExitCode: 0}); err != nil {

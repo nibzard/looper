@@ -2,11 +2,14 @@ package looper
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func publicationFixture(t *testing.T) (*Engine, *Candidate) {
@@ -59,6 +62,158 @@ func publicationFixture(t *testing.T) (*Engine, *Candidate) {
 		t.Fatal(err)
 	}
 	return e, p
+}
+
+// TestPublishOverlapsConcurrentWorkerWrites reproduces the publication race
+// recorded on 2026-11-04 in NOTES.md: while one task published, a concurrent
+// worker's atomic writes renamed .looper-write-* temporaries under the runtime
+// tree, the root scan of publish() stated a vanished name, git exited 128, and
+// the controller ended with an error shutdown. The T002 worker keeps that
+// churn alive across T001's publication. This is the overlap the earlier
+// add-task fixture had to scope away with one shared write path.
+func TestPublishOverlapsConcurrentWorkerWrites(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "agent.sh")
+	hammering, release := filepath.Join(dir, "hammering"), filepath.Join(dir, "release")
+	// The stub answers planning and review immediately. The T001 worker
+	// returns only after T002 churns temporary files, so T001's publication
+	// runs inside that churn. The T002 worker creates and renames
+	// .looper-write-* temporaries in its artifact directory, the shape
+	// atomicWrite produces, until the fixture releases it.
+	script := `#!/bin/bash
+out=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--output-last-message" ]; then out="$a"; fi
+  prev="$a"
+done
+p="$(cat)"
+result="$LOOPER_FAKE_RESULT"
+if printf '%s' "$p" | grep -q "Plan execution for Looper"; then
+  result="$LOOPER_FAKE_PLAN"
+elif printf '%s' "$p" | grep -q "^Complete task "; then
+  id="$(printf '%s' "$p" | sed -n 's/^Complete task \(T[0-9][0-9A-Za-z_-]*\):.*/\1/p')"
+  result="$(printf '{"task_id":"%s","status":"done","summary":"implemented","files":[],"blockers":[],"followups":[]}' "$id")"
+  if [ "$id" = T002 ]; then
+    touch "` + hammering + `"
+    for s in 1 2 3 4; do
+      (
+        h=0
+        while [ ! -f "` + release + `" ]; do
+          t="$LOOPER_ARTIFACT_DIR/.looper-write-$s-$h"
+          echo payload > "$t" 2>/dev/null || break
+          mv "$t" "$LOOPER_ARTIFACT_DIR/hammer-$s" 2>/dev/null || break
+          h=$((h+1))
+        done
+      ) &
+    done
+    while [ ! -f "` + release + `" ]; do sleep 0.02; done
+    wait
+  else
+    while [ ! -f "` + hammering + `" ]; do sleep 0.02; done
+  fi
+elif [ -n "$LOOPER_FAKE_REVIEW" ] && printf '%s' "$p" | grep -q "review pass for Looper"; then
+  result="$LOOPER_FAKE_REVIEW"
+fi
+if [ -n "$out" ]; then printf '%s' "$result" > "$out"; fi
+if [ -n "$result" ]; then printf '{"structured_output":%s}\n' "$result"; fi
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOPER_FAKE_PLAN", `{"setup":"","verify":"true","tasks":[{"task_id":"T001","write_paths":["one/"]},{"task_id":"T002","write_paths":["two/"]}]}`)
+	t.Setenv("LOOPER_FAKE_REVIEW", reviewComplete)
+	c := repoConfig(t, "run", "--jobs", "2")
+	c.CodexBin, c.ClaudeBin = bin, bin
+	c.ReviewEvery = 100
+	c.Once = true
+	// Separate write scopes keep both workers in flight at once, so T001's
+	// publication overlaps T002's writes.
+	b := Backlog{Version: 1, Sources: []string{}, Goal: "publish beside a running worker", Tasks: []Task{
+		{ID: "T001", Title: "publishing task", Priority: 1, Status: "todo"},
+		{ID: "T002", Title: "overlapping task", Priority: 1, Status: "todo"},
+	}}
+	if err := writeJSON(c.Todo, b); err != nil {
+		t.Fatal(err)
+	}
+	e, lock, err := NewEngine(c, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	defer e.Store.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Errorf("controller panic: %v", r)
+			}
+		}()
+		code, err := e.Run(ctx)
+		if err == nil && code != 0 {
+			err = fmt.Errorf("unexpected exit %d", code)
+		}
+		done <- err
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("run did not stop")
+		}
+	}()
+	waitForAddTaskPath(t, hammering, "the overlapping worker to start")
+	// T001 reaches done only after publish() and applyResult() complete, so
+	// the exported task file marks the publication as finished. A run that
+	// ends before that point failed the publication itself.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		data, err := os.ReadFile(c.Todo)
+		if err == nil {
+			var exported Backlog
+			if json.Unmarshal(data, &exported) == nil {
+				if task := exported.Task("T001"); task != nil && task.Status == "done" {
+					break
+				}
+			}
+		}
+		select {
+		case err = <-done:
+			done <- err
+			t.Fatalf("the run ended before T001 published: %v", err)
+		default:
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("timed out waiting for T001 to publish beside the running worker")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err = os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		done <- err
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("run timed out")
+	}
+	for _, id := range []string{"T001", "T002"} {
+		if task := e.State.Backlog.Task(id); task == nil || task.Status != "done" {
+			t.Fatalf("%s did not complete: %+v", id, task)
+		}
+	}
+	// The publication ran strictly inside the second worker's attempt.
+	second := eventID(t, e, `SELECT id FROM events WHERE kind='start' AND message LIKE 'T002  %'`)
+	first := eventID(t, e, `SELECT id FROM events WHERE kind='result' AND message LIKE 'T001  %'`)
+	if second > first {
+		t.Fatalf("the publication ran outside the overlapping attempt: start %d, result %d", second, first)
+	}
 }
 
 func TestPublishIncludesIgnoredCandidateFiles(t *testing.T) {

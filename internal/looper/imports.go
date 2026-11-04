@@ -417,6 +417,10 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 			return err
 		}
 		e.writePlanAck(record)
+		// Analysis runs the agent synchronously and blocks the loop, so the
+		// next boundary publish would only arrive after it finishes. Publish
+		// now so dashboards see the planning state while the agent works.
+		e.publishView(false)
 	}
 	// Refresh the baseline through the existing checks before analysis.
 	if err = e.refreshIdle(); err != nil {
@@ -446,8 +450,9 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	record.Adjustments = proposal.Adjustments
 	record.Gates = proposal.Gates
 	record.Applied = time.Now().UTC().Format(time.RFC3339Nano)
-	// Scope expansion invalidates execution planning and satisfaction.
-	e.State.Plan = nil
+	// Scope expansion invalidates execution planning and satisfaction. Keep
+	// the live plan: the dispatch loop reads scopes from it while work runs,
+	// and the cleared signature forces the next planning pass to rebuild.
 	e.State.PlanSignature = ""
 	e.State.Finished = false
 	e.State.ReviewedTip = ""
@@ -457,7 +462,11 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	if err = e.export(); err != nil {
 		return err
 	}
-	e.event("import", fmt.Sprintf("Applied plan import %s: %d task(s) added, %d covered.", record.RequestID, len(added), len(covered)))
+	detail := fmt.Sprintf("Applied plan import %s: %d task(s) added, %d covered", record.RequestID, len(added), len(covered))
+	if len(added) > 0 {
+		detail += " (" + strings.Join(added, ", ") + ")"
+	}
+	e.event("import", detail+".")
 	e.writePlanAck(record)
 	return nil
 }

@@ -1,6 +1,7 @@
 package looper
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -378,4 +379,110 @@ func TestClaimUsesEnvelopeIDForProcessingFile(t *testing.T) {
 
 func ackFor(e *Engine, id string) SettingsAck {
 	return SettingsAck{Version: SettingsRequestVersion, ID: id, Session: e.controller.Session, Status: AckApplied}
+}
+
+// Effort and parallel-session requests apply live: the captured operation for
+// the next worker sees them, the check semaphore does not change, and the
+// outcome names both fields.
+func TestEffortAndSessionSettingsApplyLive(t *testing.T) {
+	e := protocolEngine(t)
+	e.Config.Jobs, e.capacity = 4, 4
+	e.Config.Effort = "low"
+	e.checkSlots = make(chan struct{}, 2)
+	if err := SaveProfile(e.Config.ProfilePath, &Profile{Version: 1, Jobs: 4, Effort: "low"}); err != nil {
+		t.Fatal(err)
+	}
+	digest := profileDigest(e.Config.ProfilePath)
+	ack := e.applySettingsRequest(request(e, map[string]any{"effort": "high", "jobs": 2}, digest))
+	if ack.Status != AckApplied {
+		t.Fatalf("status %s: %s", ack.Status, ack.Message)
+	}
+	if e.Config.Effort != "high" {
+		t.Fatalf("effort must apply live, got %q", e.Config.Effort)
+	}
+	if e.Config.Jobs != 2 || e.capacity != 2 {
+		t.Fatalf("parallel sessions must apply live, got jobs=%d capacity=%d", e.Config.Jobs, e.capacity)
+	}
+	if cap(e.checkSlots) != 2 {
+		t.Fatalf("changing jobs must never change the check semaphore, got %d", cap(e.checkSlots))
+	}
+	if ack.Outcomes["effort"] != "saved; applied" || ack.Outcomes["jobs"] != "saved; applied at the next dispatch boundary" {
+		t.Fatalf("outcomes must name both fields: %+v", ack.Outcomes)
+	}
+	// The next captured operation sees the applied values.
+	op := e.capture()
+	if op.config.Effort != "high" || op.config.Jobs != 2 || op.agent.Config.Effort != "high" {
+		t.Fatalf("captured operation missed the applied settings: %+v", op.config)
+	}
+}
+
+// Live effort and session changes during work must never mutate the operation
+// a dispatched worker already captured. Run under -race.
+func TestCaptureIsImmutableUnderEffortAndSessionChanges(t *testing.T) {
+	e := protocolEngine(t)
+	e.Config.Jobs, e.capacity = 4, 4
+	e.Config.Effort = "low"
+	op := e.capture()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			// A worker goroutine reading only the captured operation.
+			_ = fmt.Sprintf("%s|%d", op.config.Effort, op.config.Jobs)
+			_ = fmt.Sprintf("%s|%d", op.agent.Config.Effort, op.agent.Config.Jobs)
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		e.applyLiveSettings(&Profile{Version: 1, Effort: fmt.Sprintf("e%d", i), Jobs: 1 + i%4},
+			map[string]json.RawMessage{"effort": json.RawMessage(`"x"`), "jobs": json.RawMessage("2")})
+	}
+	<-done
+	if op.config.Effort != "low" || op.config.Jobs != 4 {
+		t.Fatalf("captured operation mutated: effort=%q jobs=%d", op.config.Effort, op.config.Jobs)
+	}
+	if e.Config.Effort == "low" && e.Config.Jobs == 4 {
+		t.Fatal("the live settings never applied")
+	}
+}
+
+// Idle waiting must wake for a queued controller request instead of sleeping
+// out the whole poll interval.
+func TestIdleWaitWakesForQueuedRequest(t *testing.T) {
+	e := protocolEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan bool, 1)
+	go func() { returned <- e.idleWait(ctx, time.Minute) }()
+	select {
+	case <-returned:
+		t.Fatal("idleWait returned with no request and no deadline")
+	case <-time.After(400 * time.Millisecond):
+	}
+	req := SettingsRequest{Version: SettingsRequestVersion, ID: "settings-wake", Type: RequestTypeSettings, Session: e.controller.Session}
+	if err := writeJSON(filepath.Join(requestDir(e.Dir), "settings-wake.json"), req); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case woke := <-returned:
+		if !woke {
+			t.Fatal("idleWait must report true when a request is waiting")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a queued request must wake idleWait")
+	}
+	// Cancellation during the wait reports false so the caller stops.
+	if err := os.Remove(filepath.Join(requestDir(e.Dir), "settings-wake.json")); err != nil {
+		t.Fatal(err)
+	}
+	go func() { returned <- e.idleWait(ctx, time.Minute) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case woke := <-returned:
+		if woke {
+			t.Fatal("a cancelled wait must report false")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("idleWait ignored cancellation")
+	}
 }

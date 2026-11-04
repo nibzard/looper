@@ -36,6 +36,13 @@ func daemonLogPath(dir string) string { return filepath.Join(dir, "daemon.log") 
 // lifetime pipe: the child keeps running after the parent exits. The parent
 // terminates and reaps only the child it created.
 func StartDetached(c Config, out, stderr io.Writer) int {
+	// Startup plan input is rejected in the parent: a spawned child that
+	// dies at initialization would otherwise report a detached start that
+	// never runs any work.
+	if err := validatePlanFiles(c.Plans); err != nil {
+		fmt.Fprintln(stderr, "Error:", err)
+		return 1
+	}
 	_, dir := projectPaths(c)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		fmt.Fprintln(stderr, "Error:", err)

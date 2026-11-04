@@ -2,13 +2,15 @@ package ui
 
 import (
 	"fmt"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"strings"
-	"testing"
-	"time"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestDashboardBeforeFirstSnapshot(t *testing.T) {
@@ -413,6 +415,49 @@ func TestBlockedTaskScrollHintsOnPhone(t *testing.T) {
 	}
 }
 
+// A bootstrapping snapshot must fit short terminals in both animation modes:
+// fitBoard clips the bootstrap panel to the rows the footer leaves instead of
+// pushing the controls off the bottom of the screen.
+func TestBootstrapBoardFitsShortScreens(t *testing.T) {
+	base := ViewSnapshot{
+		Bootstrapping: true, Started: time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339),
+		ActivityLog: "runtime/bootstrap-1/events-00.jsonl", BootstrapBytes: 24576, BootstrapIdleSeconds: 3,
+	}
+	for _, noAnim := range []bool{false, true} {
+		for h := 8; h <= 16; h++ {
+			m := model{width: 30, height: h, snap: &base, ctrl: Controls{NoAnimation: noAnim}}
+			m.spin = spinner.New(spinner.WithSpinner(spinner.Dot))
+			view := m.View()
+			if lipgloss.Height(view) > h || lipgloss.Width(view) > 30 {
+				t.Fatalf("no-animation=%v height=%d renders %dx%d:\n%s", noAnim, h, lipgloss.Width(view), lipgloss.Height(view), view)
+			}
+		}
+	}
+	// The reported 30x12 case: both modes stay inside 12 rows while the
+	// status label, stream evidence, and controls remain readable.
+	for _, noAnim := range []bool{false, true} {
+		m := model{width: 30, height: 12, snap: &base, ctrl: Controls{NoAnimation: noAnim}}
+		m.spin = spinner.New(spinner.WithSpinner(spinner.Dot))
+		view := m.View()
+		for _, want := range []string{"BOOTSTRAPPING", "stream 24.0 KB", "[q] Detach"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("no-animation=%v missing %q:\n%s", noAnim, want, view)
+			}
+		}
+		// Scrolling through the clipped panel stays inside the screen too.
+		m.scroll = m.maxBoardScroll()
+		if scrolled := m.View(); lipgloss.Height(scrolled) > 12 || lipgloss.Width(scrolled) > 30 {
+			t.Fatalf("no-animation=%v scrolled view overflows:\n%s", noAnim, scrolled)
+		}
+	}
+	// Roomier screens keep the scroll hint that a cramped one gives up.
+	m := model{width: 30, height: 14, snap: &base}
+	m.spin = spinner.New(spinner.WithSpinner(spinner.Dot))
+	if view := m.View(); !strings.Contains(view, "[j] More below") || lipgloss.Height(view) > 14 {
+		t.Fatalf("hint lost on a screen that fits it:\n%s", view)
+	}
+}
+
 func TestControllerViewReloadsAfterSettings(t *testing.T) {
 	// No new channel notification is needed when a settings form closes.
 	ch := make(chan ViewSnapshot)
@@ -481,6 +526,103 @@ func TestCompactBoardPrioritizesTasksAndPreservesDetails(t *testing.T) {
 		}
 		if size == [2]int{100, 40} && !strings.Contains(m.boardContent(), "END OF REASON") {
 			t.Fatal("large window did not restore full details")
+		}
+	}
+}
+
+// Read-only observers keep every controlling action: drain, settings, and
+// plan import all report a refusal instead of reaching the controller.
+func TestReadOnlyRejectsControlKeys(t *testing.T) {
+	for _, tt := range []struct{ key, want string }{
+		{"x", "Read-only observers cannot drain work."},
+		{"s", "Read-only observers cannot change settings."},
+		{"a", "Read-only observers cannot import plans."},
+	} {
+		t.Run(tt.key, func(t *testing.T) {
+			m := model{width: 80, height: 24, ctrl: Controls{ReadOnly: true}}
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)})
+			m = next.(model)
+			if cmd != nil || m.dialog != "" || m.err != tt.want {
+				t.Fatalf("read-only %q: dialog=%q error=%q cmd=%v", tt.key, m.dialog, m.err, cmd)
+			}
+			// Uppercase forms are the same keys.
+			next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune(tt.key[0] - 32)}})
+			m = next.(model)
+			if cmd != nil || m.dialog != "" || m.err != tt.want {
+				t.Fatalf("read-only %q: dialog=%q error=%q cmd=%v", tt.key, m.dialog, m.err, cmd)
+			}
+		})
+	}
+}
+
+func TestBoardNamesImportAnalysis(t *testing.T) {
+	m := model{width: 100, height: 30, snap: &ViewSnapshot{
+		State: "planning", ActivityDetail: "Read to-do.json",
+		ActivityLog: "import-analysis-1/events-00.jsonl", ActivityUpdated: time.Now().Format(time.RFC3339),
+		Imports: []ImportView{{RequestID: "import-1", Status: ImportPlanning}},
+	}}
+	view := m.View()
+	if !strings.Contains(view, "Analyzing imported requirements.") || strings.Contains(view, "Planning task scopes and checks.") {
+		t.Fatalf("import analysis not named: %s", view)
+	}
+	if !strings.Contains(view, "Last output") {
+		t.Fatalf("missing output age: %s", view)
+	}
+	m.snap.Imports = nil
+	if view = m.View(); !strings.Contains(view, "Planning task scopes and checks.") {
+		t.Fatalf("ordinary planning note lost: %s", view)
+	}
+}
+
+// A diagnosis consultation names itself on the board and reports output age,
+// so a long consultation reads as a live agent instead of a hang.
+func TestBoardNamesDiagnosisConsultation(t *testing.T) {
+	m := model{width: 100, height: 30, snap: &ViewSnapshot{
+		State: "diagnosing", ActivityDetail: "Read verify.log",
+		ActivityLog:     "task-0123456789abcdef/diagnose-01-0123456789abcdef/events-00.jsonl",
+		ActivityUpdated: time.Now().Format(time.RFC3339),
+		Attempts:        []AttemptView{{ID: "task-1", TaskID: "T001", Phase: "verifying"}},
+	}}
+	if label := activityLabel(m.snap, false); label != "DIAGNOSING" {
+		t.Fatalf("activity label %q, want DIAGNOSING", label)
+	}
+	if state, _ := StatusLabel(m.snap, false); state != "RUNNING" {
+		t.Fatalf("state label %q, want RUNNING", state)
+	}
+	view := m.View()
+	for _, want := range []string{"Latest: Read verify.log", "Consulting the review agent about a repeated failure.", "Last output"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q: %s", want, view)
+		}
+	}
+	// The parallel worker stays visible beside the consultation.
+	if !strings.Contains(view, "T001") {
+		t.Fatalf("in-flight work disappeared during the consultation: %s", view)
+	}
+	// The overview names the operation and its agent.
+	m.snap.ActivityAgent = "claude"
+	if header := ansi.Strip(m.orientationHeader()); !strings.Contains(header, "Operation: DIAGNOSING · Agent: claude") {
+		t.Fatalf("diagnosis operation missing from the overview: %s", header)
+	}
+	// The run-recovery consultation names itself distinctly.
+	m.snap.State = "recovering"
+	if label := activityLabel(m.snap, false); label != "RUN RECOVERY" {
+		t.Fatalf("run-recovery label %q", label)
+	}
+	if view := m.View(); !strings.Contains(view, "Consulting the review agent about retained orchestration failures.") {
+		t.Fatalf("run-recovery note missing: %s", view)
+	}
+	// Small screens stay within their bounds; the clipped detail remains
+	// reachable through the scroll hint, like any longer board.
+	for _, size := range [][2]int{{30, 12}, {40, 16}} {
+		m.width, m.height = size[0], size[1]
+		m.snap.State = "diagnosing"
+		view := m.View()
+		if lipgloss.Width(view) > size[0] || lipgloss.Height(view) > size[1] {
+			t.Fatalf("%v: diagnosis board overflow:\n%s", size, view)
+		}
+		if !strings.Contains(view, "Read verify.log") && !strings.Contains(view, "More below") {
+			t.Fatalf("%v: diagnosis detail unreachable:\n%s", size, view)
 		}
 	}
 }

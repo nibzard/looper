@@ -189,6 +189,11 @@ func (e *Engine) assessWithin(ctx context.Context, op operation, a Attempt, c Ca
 }
 
 func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out chan<- workerResult) error {
+	if e.State.Plan == nil {
+		// The repair launch snapshots the plan. Defer the repair, with the
+		// attempt unchanged, until a planning pass rebuilds it.
+		return errPlanMissing
+	}
 	// The signature uses normalized evidence only. The repair header and any
 	// diagnosis text below must never change it.
 	signature := digest([]byte(failureEvidence(feedback)))
@@ -302,7 +307,20 @@ Return one JSON object: {"root_cause":"why the current approach keeps failing","
 		prompt += fmt.Sprintf("\nEffective run setup: %q\nEffective run verification: %q\n", e.effectiveRecoveryPlan().Setup, e.effectiveRecoveryPlan().Verify)
 	}
 	prompt += `If the task cannot repair a proven orchestration contract defect, include optional run_repair {"remove_sources":[],"setup":"dependency setup","verify":"meaningful current-stage check","reopen":["` + a.Task.ID + `"],"deferred_tasks":[]}. Remove only proven empty bootstrap context; preserve requirements and external blockers. Otherwise omit run_repair.`
-	raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
+	// The consultation runs on the owner goroutine while other workers may
+	// still be in flight, so it carries the consultation activity plumbing:
+	// stream evidence and heartbeats for itself, and continued worker
+	// activity publication for everyone else.
+	raw, err := e.runConsultation(ctx, op, work, dir, prompt, consultation{
+		state:       "diagnosing",
+		startDetail: "Starting the repair diagnosis agent",
+		openKind:    "diagnosis-activity",
+		openMessage: a.Task.ID + "  Consulting the review agent about the repeated failure",
+		actionKind:  "diagnosis-activity",
+		waitKind:    "diagnosis-heartbeat",
+		waitLabel:   "the repair diagnosis",
+		heartbeat:   e.consultHeartbeat,
+	})
 	if err != nil {
 		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation failed; repairing with the recorded evidence.")
 		return diagnosis{}, false

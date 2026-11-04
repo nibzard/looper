@@ -266,3 +266,85 @@ func TestStartDetachedWhileControllerStaysRunning(t *testing.T) {
 		t.Fatalf("controller exited with its parent: %v", err)
 	}
 }
+
+// A controller launched by looper start must record detached mode, so its
+// session metadata distinguishes the daemon from an interactive run.
+func TestStartDetachedRecordsDetachedMode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process-level daemon test")
+	}
+	bin := detachedBinary(t)
+	c := preparedRepo(t, "start")
+	c.Poll = 10 * time.Millisecond
+	c.CodexBin, c.ClaudeBin = "/bin/false", "/bin/false"
+	orig := startExecutable
+	startExecutable = func() (string, error) { return bin, nil }
+	t.Cleanup(func() { startExecutable = orig })
+	_, dir := projectPaths(c)
+	t.Cleanup(func() {
+		if info, err := readController(dir); err == nil {
+			syscall.Kill(info.PID, syscall.SIGINT)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(controllerPath(dir)); os.IsNotExist(err) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("detached controller did not stop")
+	})
+	var out, stderr bytes.Buffer
+	if code := StartDetached(c, &out, &stderr); code != 0 {
+		t.Fatalf("start failed: %s", stderr.String())
+	}
+	info, err := readController(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode != ControllerModeDetached {
+		t.Fatalf("controller started by looper start must record mode %q, got %q", ControllerModeDetached, info.Mode)
+	}
+}
+
+// The durable session record keeps the detached mode after the controller
+// exits and removes its controller.json.
+func TestRunDaemonRecordsDetachedSessionMode(t *testing.T) {
+	c := preparedRepo(t, "--once")
+	code, msg := daemonChild(t, c)
+	if code != 0 {
+		t.Fatalf("daemon exit %d: %+v", code, msg)
+	}
+	if msg.Status != "ok" || msg.Session == "" {
+		t.Fatalf("readiness broken: %+v", msg)
+	}
+	_, dir := projectPaths(c)
+	s, err := OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	events, err := s.Events(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded *ControllerInfo
+	for _, ev := range events {
+		if ev.Kind != "session" {
+			continue
+		}
+		var info ControllerInfo
+		if err = json.Unmarshal(ev.Data, &info); err != nil {
+			t.Fatalf("session event data is not controller metadata: %v", err)
+		}
+		if info.Session == msg.Session {
+			recorded = &info
+		}
+	}
+	if recorded == nil {
+		t.Fatalf("no durable session record for daemon session %s", msg.Session)
+	}
+	if recorded.Mode != ControllerModeDetached {
+		t.Fatalf("daemon session %s must record mode %q, got %q", msg.Session, ControllerModeDetached, recorded.Mode)
+	}
+}

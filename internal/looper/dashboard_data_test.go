@@ -201,6 +201,10 @@ func TestRequeuePreservesContractAndRetainedAttempt(t *testing.T) {
 	e := requeueEngine(t)
 	req := requeueRequest(e)
 	contract := e.State.Backlog.Tasks[0].Contract()
+	// A worker can finish between the active-work guard and the export, so
+	// the requeue must keep the live plan and clear only its signature.
+	live := &Plan{Verify: "true", Tasks: []Scope{{TaskID: "T1", Paths: []string{"src/"}}}}
+	e.State.Plan, e.State.PlanSignature = live, "stale"
 	ack := e.applyRequeueRequest(req)
 	if ack.Status != AckApplied {
 		t.Fatalf("requeue: %+v", ack)
@@ -208,6 +212,9 @@ func TestRequeuePreservesContractAndRetainedAttempt(t *testing.T) {
 	task := e.State.Backlog.Tasks[0]
 	if task.Status != "todo" || task.Contract() != contract || len(task.Blockers) != 0 || e.State.Attempts[0].Worktree != "retained" || e.State.Attempts[0].Phase != "blocked" {
 		t.Fatal("requeue changed contract or discarded work")
+	}
+	if e.State.Plan != live || e.State.PlanSignature != "" {
+		t.Fatal("requeue discarded the live plan instead of its signature")
 	}
 	var exported Backlog
 	if err := readJSON(e.Config.Todo, &exported); err != nil || exported.Tasks[0].Status != "todo" {
