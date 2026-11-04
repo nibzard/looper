@@ -3264,3 +3264,25 @@ Validation: `make test` (Go suite, vet, installer, build stamp, 57 runtime
 fixtures, package smoke, skill checks), `make race` (race suite plus 57 race
 fixtures), focused `-race -count=2` runs of the new tests, and
 `git diff --check` all pass. No installation or publication.
+
+## Self-run completion 2026-11-04
+
+Session run-1b3e9cd8d1600be9 ended `no_runnable_tasks` (exit 2) after the
+final goal review found no new defects. Published tree bb33ed5 landed on
+main as e31c13f; `git diff bb33ed5` is empty, so a future run start accepts
+the branch. 38/55 tasks done, 17 blocked on owner or Stage 2 decisions.
+
+Follow-ups outside the backlog:
+
+- The nil-plan controller panics (sessions run-3a03, run-4b9d) are fixed
+  in-tree by the run: guards at every `State.Plan` reader plus
+  `nil_plan_test.go`. The interim binary fix I installed locally
+  (`/tmp/looper-fix-build`) is superseded; the installed binary should be
+  rebuilt from e31c13f before the next run.
+- Two findings from operating the run are not yet tracked: installer test
+  fixtures must not write to the real user prefix (a worker's install test
+  silently replaced the binary with 0.8.3 mid-run), and an external
+  to-do.json edit that arrives during a check kills the session where a
+  pause-and-hold would retain it. Added as T056 and T057.
+- T034 and T036 keep verified fixes stranded in retained worktrees behind
+  NOTES.md merge conflicts; they gate T042 (Stage 2 scheduling).
