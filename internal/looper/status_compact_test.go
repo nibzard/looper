@@ -748,7 +748,7 @@ func TestStatusPlainPipedShowsLiveness(t *testing.T) {
 	f.save(t, s)
 	f.event(t, "check", "Checking T4 with integrated work...", nil)
 	f.ownRepository(t, "run-plain0001", time.Now().Add(-5*time.Minute))
-	f.publishView(t, ui.ViewSnapshot{Session: "run-plain0001", State: "reviewing", ActivityDetail: "Waiting for review agent"})
+	f.publishView(t, ui.ViewSnapshot{Session: "run-plain0001", State: "reviewing", ActivityDetail: "Waiting for review agent", ActivityUpdated: time.Now().Add(-90 * time.Second).UTC().Format(time.RFC3339)})
 
 	var out, stderr strings.Builder
 	if code := Main([]string{"status"}, &out, &stderr); code != exitOK {
@@ -761,7 +761,7 @@ func TestStatusPlainPipedShowsLiveness(t *testing.T) {
 		"T3 running",
 		"progress advancing",
 		"progress quiet",
-		"Controller phase: reviewing",
+		"Controller phase: reviewing | last output 1m ago",
 		"Waiting:",
 		"Cursor:",
 	} {

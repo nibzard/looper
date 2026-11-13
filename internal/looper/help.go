@@ -221,17 +221,19 @@ var commandDocs = map[string]commandDoc{
 		},
 	},
 	"stop": {
-		usage:   "stop [--wait] [--wait-timeout <seconds>] [--contract legacy|v2] [--json]",
+		usage:   "stop [--wait] [--wait-timeout <seconds>] [--interrupt] [--contract legacy|v2] [--json]",
 		summary: "Request a drain from the controller that owns the repository. Active work finishes; no new work starts.",
 		examples: []string{
 			"looper stop",
 			"looper stop --wait --contract v2 --json",
+			"looper stop --interrupt",
 		},
 		v2: v2Schemas + "request-receipt.schema.json",
 		notes: []string{
 			"The request binds to the owning session, so a stop without a live controller changes nothing and a later start runs normally.",
 			"Version 2 returns the receipt naming the derived stop request identity. `--wait` waits bounded for the durable drain result, bound to that session; a timeout leaves the drain running.",
 			"Nothing is stopped and nothing is written while no controller holds the repository lock.",
+			"`--interrupt` stops at once, like Ctrl+C: child processes stop and partial work is retained for the next run. It does not combine with `--wait` or version 2.",
 		},
 	},
 	"recovery": {

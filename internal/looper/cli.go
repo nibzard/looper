@@ -387,6 +387,9 @@ func runStop(c Config, dir string, out, stderr io.Writer) int {
 		p.withLegacyStdout("No controller is running. Nothing was stopped; a later start runs normally.", 1)
 		return emitError(c, p, out, stderr)
 	}
+	if c.Interrupt {
+		return runStopInterrupt(c, dir, out, stderr)
+	}
 	req := stopRequest{}
 	if info, err := readController(dir); err == nil {
 		// Refuse before publication when the live controller advertises that
@@ -444,6 +447,30 @@ func runStop(c Config, dir string, out, stderr io.Writer) int {
 		fmt.Fprintln(out, "Stop requested. Active work will drain.")
 	}
 	return reportStopWait(c, dir, &req, out, stderr)
+}
+
+// runStopInterrupt sends the owning controller the same interrupt as Ctrl+C:
+// child processes stop and the controller retains partial work for the next
+// run. signalController checks the recorded session and process start
+// identity first, so a reused process ID is never signaled.
+func runStopInterrupt(c Config, dir string, out, stderr io.Writer) int {
+	if c.Contract == ContractVersionV2 {
+		p := usageFailure("option_conflict", "--interrupt has no version 2 document; omit --contract v2 and run looper status to observe the exit")
+		p.Observed = map[string]any{"--interrupt": true, "--contract": "v2"}
+		return emitError(c, p, out, stderr)
+	}
+	info, err := readController(dir)
+	if err == nil {
+		err = signalController(dir, syscall.SIGINT)
+	}
+	if err != nil {
+		p := operationFailure("controller_not_signaled", "The controller could not be interrupted: "+err.Error())
+		p.Actions = []ErrorAction{{Description: "Request a drain instead.", Command: "looper stop"}}
+		p.withLegacy("The controller could not be interrupted: "+err.Error(), 1)
+		return emitError(c, p, out, stderr)
+	}
+	fmt.Fprintf(out, "Interrupt sent to session %s. Active work stops and is retained; run looper to resume.\n", info.Session)
+	return 0
 }
 
 // stopResultPollInterval is the observation cadence of one durable stop wait.
@@ -701,6 +728,26 @@ func importAckError(ack *planImportAck) *PublicError {
 		return p
 	}
 }
+
+// printDoctorController names a live controller and warns when it runs a
+// different build than this executable. A controller keeps its build until
+// it restarts, so a long-lived run can miss fixes that are already installed.
+// The warning is advice: it does not change the exit code.
+func printDoctorController(o Observation, out io.Writer) {
+	if !o.ControllerOwned || o.Controller == nil {
+		return
+	}
+	line := fmt.Sprintf("Controller: running | session %s | pid %d", sanitize(o.Controller.Session), o.Controller.PID)
+	if o.Controller.Started != "" {
+		line += " | since " + sanitize(o.Controller.Started)
+	}
+	fmt.Fprintln(out, line)
+	if o.BuildMismatch {
+		fmt.Fprintf(out, "  Warning: the controller runs %s; this executable is %s\n", o.Controller.Build, o.Executable)
+		fmt.Fprintln(out, "  Fix: run looper stop, then start looper again to use this build")
+	}
+}
+
 func doctor(c Config, out io.Writer) int {
 	mode := DetectMode(os.Stdin, out, c.Plain)
 	if c.JSON {
@@ -752,6 +799,7 @@ func doctor(c Config, out io.Writer) int {
 	if _, err := os.Stat(filepath.Join(dir, "state.db")); err == nil {
 		if store, err := openObservedStore(dir); err == nil {
 			if snap, err := store.Snapshot(); err == nil {
+				printDoctorController(observe(c, snap.State, snap), out)
 				summary := collectDoctorRequestsSummary(dir, snap.State, wallClock())
 				if summary.Pending > 0 || summary.Waiting > 0 {
 					oldest := ""

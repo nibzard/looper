@@ -908,7 +908,9 @@ func renderCompactStatus(doc *statusCompactDocument, statePath string, out io.Wr
 	for _, p := range doc.Work.Phases {
 		age := ""
 		if p.AgeSeconds != nil {
-			age = fmt.Sprintf(" | %s", statusDuration(*p.AgeSeconds))
+			// The age is the time since the agent last wrote output, not the
+			// phase duration: a review can run for minutes with fresh output.
+			age = fmt.Sprintf(" | last output %s ago", statusDuration(*p.AgeSeconds))
 		}
 		line("Controller phase: %s%s | %s", p.Phase, age, p.Detail)
 	}
