@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/nibzard/looper/internal/ui"
 )
@@ -38,6 +39,29 @@ func (a *dashboardAttachment) currentSession() (string, error) {
 		return "", fmt.Errorf("The controller changed or disconnected. Wait for the dashboard to reconnect, then retry.")
 	}
 	return a.session, nil
+}
+
+// lastSession returns the session this dashboard displayed last.
+func (a *dashboardAttachment) lastSession() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.session
+}
+
+// interrupt sends the attached controller the same interrupt as
+// `looper stop --interrupt`. It signals only the session this dashboard
+// attached to, and only while that process is alive.
+func (a *dashboardAttachment) interrupt() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	info, err := readController(a.dir)
+	if err != nil || info.Session != a.session {
+		return fmt.Errorf("The controller changed or disconnected. Wait for the dashboard to reconnect, then retry.")
+	}
+	if err = signalController(a.dir, syscall.SIGINT); err != nil {
+		return fmt.Errorf("The controller could not be interrupted: %w", err)
+	}
+	return nil
 }
 
 // addPlan submits a plan import on behalf of an attached viewer and returns

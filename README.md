@@ -56,7 +56,7 @@ Review them and commit them yourself.
 | `looper` | Starts or resumes a continuous run in the foreground. |
 | `looper --once` | Runs until the current backlog finishes, then exits. |
 | `looper start` | Starts a detached controller for an unattended run. |
-| `looper tui` | Opens the dashboard, or attaches to the active run. |
+| `looper tui` | Starts a background run if none is active, then opens the dashboard. `q` can detach. |
 | `looper status` | Shows the saved state of the run. |
 | `looper tail --follow` | Streams events. |
 | `looper preflight` | Shows the configuration a start would use. No agent runs. |
@@ -169,6 +169,7 @@ for planning, diagnosis, and product review. See
 | `LOOPER_GIT_TIMEOUT_SECONDS` | `600` | Timeout for one Git command; 0 means unlimited |
 | `--verbose` | off | Print the run configuration at start |
 | `--no-animation` | off | Dashboard without animated motion; status stays readable |
+| `--foreground` | off | `looper tui` runs the controller in the dashboard; exiting stops the run |
 | `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure |
 | `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds |
 | `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |
