@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // RunRecovery is saved before consultation. An interrupted consultation consumes
@@ -45,6 +47,95 @@ type administrativeClosure struct {
 	TaskID string `json:"task_id"`
 	Source string `json:"source"`
 	Reason string `json:"reason"`
+}
+
+// quarantineInvalidFiles holds every task whose files list carries an entry
+// that cannot scope repository work. A worker summary can merge an absolute
+// path into a task's files, and the next planning pass copies that entry into
+// its write paths, which used to end the controller with "invalid write path"
+// (session run-8240e3d146f82a22). One malformed entry must not end the
+// controller: each affected task holds blocked with the validation error as
+// its blocker, and the rest of the backlog continues.
+func (e *Engine) quarantineInvalidFiles() error {
+	dirty := false
+	for i := range e.State.Backlog.Tasks {
+		t := &e.State.Backlog.Tasks[i]
+		if t.Status == "done" || t.Marker() {
+			continue
+		}
+		// Done and marker tasks keep their recorded outcome: their entries
+		// never dispatch again, and the planning pass drops a scope they
+		// never use.
+		for _, path := range t.invalidFiles() {
+			dirty = e.holdQuarantined(t.ID, (&writePathError{TaskID: t.ID, Path: path}).Error()) || dirty
+		}
+	}
+	if !dirty {
+		return nil
+	}
+	return e.export()
+}
+
+// quarantineInvalidScopes validates the planner's result exactly as
+// Plan.Validate does, but a write path one task cannot use quarantines that
+// task instead of failing the controller. Each affected task holds blocked
+// with the validation error as its blocker, its scope returns to the
+// repository default, and the rest of the plan applies. Any other validation
+// defect keeps its fatal behavior.
+func (e *Engine) quarantineInvalidScopes(p *Plan, verify string) error {
+	dirty := false
+	for {
+		err := p.Validate(e.State.Backlog, verify)
+		if err == nil {
+			break
+		}
+		var bad *writePathError
+		if !errors.As(err, &bad) || e.State.Backlog.Task(bad.TaskID) == nil {
+			return err
+		}
+		p.dropScope(bad.TaskID)
+		dirty = e.holdQuarantined(bad.TaskID, bad.Error()) || dirty
+	}
+	if !dirty {
+		return nil
+	}
+	return e.export()
+}
+
+// holdQuarantined records one quarantine against a task: the task holds
+// blocked with the validation error as its blocker. A done or marker task
+// keeps its recorded outcome and logs the rejected entry without a status
+// change. The call reports whether the backlog changed, so a repeated
+// quarantine stays a no-op.
+func (e *Engine) holdQuarantined(id, reason string) bool {
+	t := e.State.Backlog.Task(id)
+	if t == nil {
+		return false
+	}
+	if t.Status == "done" || t.Marker() {
+		e.taskIDEvent("quarantine", id+"  rejected entry; outcome kept: "+reason, id)
+		return false
+	}
+	if t.Status == "blocked" && hasBlocker(t.Blockers, reason) {
+		return false
+	}
+	t.Status = "blocked"
+	t.Blockers = mergeUnique(t.Blockers, []string{reason})
+	if t.UnblockWhen == "" {
+		t.UnblockWhen = "Fix the invalid path and set this task to todo."
+	}
+	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	e.taskIDEvent("quarantine", id+"  held blocked: "+reason, id)
+	return true
+}
+
+func hasBlocker(blockers []string, reason string) bool {
+	for _, b := range blockers {
+		if b == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // disposableSource requires retained evidence, rather than trusting the agent's
@@ -290,7 +381,10 @@ func (e *Engine) recoverRun(ctx context.Context) (bool, error) {
 	if err != nil {
 		return reject(err.Error())
 	}
-	if digest(data) != exportHash || hashJSON(e.State.Backlog) != baseline {
+	// A formatting-only edit during the consultation changed no content
+	// (AX-018), so the proposal stays valid; a real edit still discards it.
+	edit := e.classifyBacklog(data)
+	if hashJSON(e.State.Backlog) != baseline || (digest(data) != exportHash && !edit.Equivalent) {
 		return reject("Backlog changed during consultation; discarded stale proposal.")
 	}
 	current := e.recoveryIdentity()
@@ -329,7 +423,7 @@ func (e *Engine) recoverRun(ctx context.Context) (bool, error) {
 		t.Status = "done"
 		t.Blockers = []string{"Administrative closure: " + closure.Reason}
 		t.UnblockWhen = ""
-		e.event("run-recovery-administrative", t.ID+"  Administrative closure: "+closure.Reason)
+		e.taskIDEvent("run-recovery-administrative", t.ID+"  Administrative closure: "+closure.Reason, t.ID)
 	}
 	r := &e.State.Recoveries[index]
 	r.Outcome = "applied"
@@ -356,7 +450,7 @@ func (e *Engine) recoveryProgress(taskID string) {
 		for _, id := range r.Tasks {
 			if id == taskID {
 				r.Outcome = "integrated"
-				e.event("run-recovery-retry", "Recovered task "+taskID+" passed integration.")
+				e.taskIDEvent("run-recovery-retry", "Recovered task "+taskID+" passed integration.", taskID)
 			}
 		}
 	}
@@ -374,7 +468,7 @@ func (e *Engine) recoveryDispatch(t Task) error {
 				if dep == id {
 					changed = true
 					r.Outcome = "progress"
-					e.event("run-recovery-progress", "Recovered task "+id+" integrated; successor "+t.ID+" started.")
+					e.taskIDEvent("run-recovery-progress", "Recovered task "+id+" integrated; successor "+t.ID+" started.", id)
 				}
 			}
 		}
@@ -493,7 +587,7 @@ func (e *Engine) recoveryBlocked(taskID string) {
 		for _, id := range r.Tasks {
 			if id == taskID {
 				r.Outcome = "retry_blocked"
-				e.event("run-recovery-retry", "Recovered task "+taskID+" remains blocked after retry; its work and evidence are retained.")
+				e.taskIDEvent("run-recovery-retry", "Recovered task "+taskID+" remains blocked after retry; its work and evidence are retained.", taskID)
 			}
 		}
 	}

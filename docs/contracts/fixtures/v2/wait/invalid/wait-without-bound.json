@@ -1,0 +1,23 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "outcome": "timeout",
+  "condition": {
+    "kind": "run_outcome",
+    "session": "run-8b31c07d9a24e510"
+  },
+  "observed": {
+    "at": "2026-11-09T12:06:02.311Z",
+    "high_water": 1420,
+    "session": { "id": "run-8b31c07d9a24e510", "outcome": "running" }
+  },
+  "cursor": { "event_id": 1420, "scope": "store" },
+  "wait": { "elapsed_seconds": 46 },
+  "detail": {
+    "command": "looper wait --contract v2 --run --timeout 120s",
+    "events": "looper events --contract v2 --after 1420",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json"
+  }
+}

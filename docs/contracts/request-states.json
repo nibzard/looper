@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "kind": "looper.request_states",
+  "description": "The lifecycle states of one durable controller request under contract version 2, shared by add-task, add-plan, settings, requeue, stop, cancel-task, and amend-task. The request-record and request-receipt schemas enumerate exactly these names; the contract tests cross-check that they stay identical. AX-009 implements the transitions and their crash boundaries.",
+  "states": [
+    {
+      "name": "submitted",
+      "terminal": false,
+      "writer": "submitter",
+      "meaning": "The request envelope is durable in the request store, but the controller has not yet recorded responsibility for it. A restart may still discard it, so recovery never treats an envelope alone as acceptance."
+    },
+    {
+      "name": "accepted",
+      "terminal": false,
+      "writer": "controller",
+      "meaning": "The controller durably recorded responsibility for the request. It survives a restart or receives an explicit terminal result; it is never silently dropped."
+    },
+    {
+      "name": "waiting",
+      "terminal": false,
+      "writer": "controller",
+      "meaning": "The request names a prerequisite that is not yet satisfied, for example active work, a planning pass, a held backlog edit, or controller startup. The record carries the reason and its current age."
+    },
+    {
+      "name": "applied",
+      "terminal": true,
+      "writer": "controller",
+      "meaning": "The change and its result are durable together. The record names the affected tasks, plan coverage, and any fields that need a restart to take effect."
+    },
+    {
+      "name": "rejected",
+      "terminal": true,
+      "writer": "controller",
+      "meaning": "The controller refused the request without changing saved work: invalid input, stale revision or session, unsupported capability, or a conflict with a concurrent edit."
+    },
+    {
+      "name": "failed",
+      "terminal": true,
+      "writer": "controller",
+      "meaning": "The controller attempted the request and the attempt failed. The record carries the structured error and its evidence references."
+    },
+    {
+      "name": "cancelled",
+      "terminal": true,
+      "writer": "controller",
+      "meaning": "The request was withdrawn through a supported cancellation operation before it applied. Completed work and retained results stay untouched."
+    }
+  ],
+  "notes": [
+    "If submission can establish durable acceptance before returning, the receipt reports accepted and omits the intermediate submitted state.",
+    "A wait timeout observes the current state; it is not a state and never moves a request to cancelled or failed.",
+    "Session-bound operations never replay silently into another controller: a restart either resumes accepted work or records an explicit terminal result for it.",
+    "The legacy acknowledgement statuses applied, reset, conflict, error, and stale-session remain the contract version 1 words for these outcomes in the settings and add-task paths."
+  ]
+}

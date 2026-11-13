@@ -64,8 +64,8 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 	if err != nil || p == nil || p.Version != ProfileVersion || p.Agent != "codex" {
 		t.Fatalf("missing version must default: %v %+v", err, p)
 	}
-	writeProfileFile(t, path, `{"version": 1, "agent": "gemini"}`)
-	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "gemini") {
+	writeProfileFile(t, path, `{"version": 1, "agent": "bad/name"}`)
+	if _, err := LoadProfile(path); err == nil || !strings.Contains(err.Error(), "bad/name") {
 		t.Fatalf("invalid agent must fail: %v", err)
 	}
 	writeProfileFile(t, path, `{"version": 1, "jobs": -2}`)
@@ -102,7 +102,7 @@ func TestProfileDefaultsAndValidation(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&Profile{Version: 1, Agent: "bad"}).Validate(); err == nil {
+	if err := (&Profile{Version: 1, Agent: "bad name"}).Validate(); err == nil {
 		t.Fatal("validate accepted bad agent")
 	}
 }

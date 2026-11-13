@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/events-page.schema.json",
+  "title": "Looper finite event page (contract version 2)",
+  "description": "One JSON document for a bounded, filtered event query. NDJSON remains reserved for explicit streaming (looper events --follow); a finite query never emits more than one document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema_version",
+    "kind",
+    "items",
+    "page",
+    "continuation"
+  ],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.events.page" },
+    "items": {
+      "type": "array",
+      "description": "Events in ascending identifier order. The default bare query returns the newest 50 events oldest-first within that tail.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "time", "kind", "message"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 1 },
+          "time": { "type": "string", "format": "date-time" },
+          "kind": { "type": "string", "minLength": 1 },
+          "message": { "type": "string" },
+          "task_id": { "type": "string", "description": "Present on new lifecycle events written by AX-007; historical records may omit it and stay readable." },
+          "attempt_id": { "type": "string" },
+          "controller_session": { "type": "string" },
+          "phase": { "type": "string" },
+          "request_id": { "type": "string" },
+          "data": { "type": "object" }
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["after", "high_water", "returned", "order", "has_more"],
+      "properties": {
+        "after": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The exclusive lower bound this page was read with. Zero means from the beginning of the store."
+        },
+        "high_water": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The store's committed high-water mark fixed when the page started. Concurrent writers cannot extend it, so a page always completes."
+        },
+        "returned": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 },
+        "order": { "const": "ascending" },
+        "has_more": { "type": "boolean" },
+        "empty_reason": {
+          "type": "string",
+          "description": "Present when items is empty, for example no_events_after_cursor or filter_matched_nothing."
+        }
+      }
+    },
+    "filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task": { "type": "string" },
+        "kind": { "type": "string" },
+        "request": { "type": "string" },
+        "full_history": { "type": "boolean", "description": "True when the query explicitly requested the complete history instead of a bounded tail." }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cursor", "command"],
+      "properties": {
+        "cursor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event_id", "scope"],
+          "properties": {
+            "event_id": { "type": "integer", "minimum": 0 },
+            "scope": { "const": "store" },
+            "store_id": { "type": "string" },
+            "store_epoch": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "command": { "type": "string", "minLength": 1 },
+        "has_more": { "type": "boolean" }
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "epoch"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "epoch": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

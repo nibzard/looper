@@ -1,0 +1,14 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.capabilities",
+  "client": {
+    "build": { "release": "0.10.0", "revision": "297e7ee1", "modified": false },
+    "contract_versions": [1, 2]
+  },
+  "compatibility": {
+    "default_contract_version": 1,
+    "oldest_supported_contract_version": 1,
+    "policy": "docs/AGENT-CONTRACT-MIGRATION.md"
+  }
+}

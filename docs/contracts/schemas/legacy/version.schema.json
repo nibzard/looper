@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/version.schema.json",
+  "title": "Looper version --json (legacy contract, frozen)",
+  "description": "The executable build identity document `looper version --json` and `looper --version --json` print. Identity comes from the executable's build metadata, never from a runtime Git repository (AX-024).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["release", "revision", "modified"],
+  "properties": {
+    "release": { "type": "string", "minLength": 1 },
+    "revision": { "type": "string" },
+    "modified": { "type": "boolean" }
+  }
+}

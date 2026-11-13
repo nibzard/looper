@@ -14,6 +14,7 @@ import (
 // automatic mode; an empty ReviewAgent follows the coding agent; empty model
 // fields use each agent's own configuration.
 type Settings struct {
+	AgentChoices  *[]string
 	Agent         string
 	ReviewAgent   string
 	Jobs          int
@@ -37,17 +38,25 @@ var ErrAborted = huh.ErrUserAborted
 // Field definitions are shared by the first-run form and the full editor so
 // both present and validate the same choices.
 
+func agentChoices(s *Settings) []string {
+	if s.AgentChoices != nil && len(*s.AgentChoices) > 0 {
+		return *s.AgentChoices
+	}
+	return []string{"codex", "claude", "zcode"}
+}
+
 func agentField(s *Settings) *huh.Select[string] {
 	return huh.NewSelect[string]().
-		Title("Coding agent").
-		Options(huh.NewOptions("codex", "claude", "zcode")...).
+		Title("Worker agent profile").
+		Options(huh.NewOptions(agentChoices(s)...)...).
 		Value(&s.Agent)
 }
 
 func reviewAgentField(s *Settings, selection *string) *huh.Select[string] {
 	return huh.NewSelect[string]().
-		Title("Review agent").
-		Options(huh.NewOptions(sameAsAgent, "codex", "claude", "zcode")...).
+		Title("Reviewer agent profile").
+		Description("Also used for planning and diagnosis.").
+		Options(huh.NewOptions(append([]string{sameAsAgent}, agentChoices(s)...)...)...).
 		Value(selection)
 }
 
@@ -129,23 +138,23 @@ func RunEditorForm(s *Settings) error {
 		sessions = strconv.Itoa(s.Jobs)
 	}
 	frequency := strconv.Itoa(s.ReviewEvery)
-	form := huh.NewForm(
-		huh.NewGroup(
-			agentField(s),
-			reviewAgentField(s, &review),
-			sessionsInput(s, &sessions),
-		),
-		huh.NewGroup(
-			huh.NewInput().Title("Codex model (empty uses the agent's configuration)").Value(&s.Model),
-			huh.NewInput().Title("Claude model (empty uses the agent's configuration)").Value(&s.ClaudeModel),
-			huh.NewInput().Title("Codex reasoning effort (empty uses the agent's configuration)").Value(&s.Effort),
-			numberField("Review frequency", "integrations between milestone reviews; 0 disables them", &frequency),
-		),
-		huh.NewGroup(
-			huh.NewInput().Title("Verify command (empty lets planning choose)").Value(&s.VerifyCommand),
-			huh.NewInput().Title("Setup command (empty lets planning choose)").Value(&s.SetupCommand),
-		),
-	)
+	groups := []*huh.Group{huh.NewGroup(
+		agentField(s), reviewAgentField(s, &review), sessionsInput(s, &sessions),
+	)}
+	// Adapter-wide values exist only for migration. New configurations set
+	// model and effort on each named command so roles stay independent.
+	if s.AgentChoices == nil || s.Model != "" || s.ClaudeModel != "" || s.Effort != "" {
+		groups = append(groups, huh.NewGroup(
+			huh.NewInput().Title("Codex model (legacy shared override)").Description("Clear this to use each agent profile's model.").Value(&s.Model),
+			huh.NewInput().Title("Claude model (legacy shared override)").Description("Clear this to use each agent profile's model.").Value(&s.ClaudeModel),
+			huh.NewInput().Title("Codex reasoning effort (legacy shared override)").Value(&s.Effort),
+		))
+	}
+	groups = append(groups, huh.NewGroup(numberField("Review frequency", "integrations between milestone reviews; 0 disables them", &frequency)), huh.NewGroup(
+		huh.NewInput().Title("Verify command (empty lets planning choose)").Value(&s.VerifyCommand),
+		huh.NewInput().Title("Setup command (empty lets planning choose)").Value(&s.SetupCommand),
+	))
+	form := huh.NewForm(groups...)
 	if err := form.Run(); err != nil {
 		return err
 	}

@@ -66,7 +66,7 @@ func TestProcessPrivateTMPDIR(t *testing.T) {
 					[]string{exe, "-test.run=^TestPrivateTMPDIRProbe$"}, nil, extra)
 			}()
 			if mode == "cancel" {
-				deadline := time.Now().Add(10 * time.Second)
+				deadline := time.Now().Add(testBudget(10 * time.Second))
 				for {
 					if _, err := os.Stat(filepath.Join(artifact, "probe")); err == nil {
 						break
@@ -80,7 +80,7 @@ func TestProcessPrivateTMPDIR(t *testing.T) {
 			}
 			select {
 			case err = <-done:
-			case <-time.After(10 * time.Second):
+			case <-time.After(testBudget(10 * time.Second)):
 				t.Fatal("child did not exit")
 			}
 			if mode == "success" && err != nil {

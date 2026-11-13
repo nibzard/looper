@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/nibzard/looper/internal/ui"
@@ -17,16 +20,33 @@ import (
 
 // runTUI starts or attaches a dashboard. With --plain, --json, or non-terminal
 // streams it falls back to the CLI for a new controller and to event
-// following for an existing one.
-func runTUI(c Config, out, stderr io.Writer) int {
+// following for an existing one; both fallbacks keep the invocation's parsed
+// flags. An owned repository receives the startup plans before the fallback
+// follows, with the receipt on stderr so the followed event stream stays one
+// document per line. An unattached start asks the first-run form before this
+// controller takes the repository lock, under the same suppression and
+// cancellation rules as run and start.
+func runTUI(args []string, c Config, out, stderr io.Writer) int {
 	if c.JSON || c.Plain || DetectMode(os.Stdin, out, false) != ModeInteractive {
 		if repositoryOwned(c) {
+			// The startup plans reach the owning controller through the same
+			// receipt-returning submission the interactive attach uses; the
+			// receipt prints on stderr because stdout is the followed event
+			// stream. A refused submission returns without following, so the
+			// plans are never dropped silently.
+			if len(c.Plans) > 0 {
+				if code := submitPlansToActive(c, stderr, stderr); code != 0 {
+					return code
+				}
+			}
 			fmt.Fprintln(stderr, "tui needs an interactive terminal; following events instead.")
-			c.Command, c.Follow = "tail", true
-			return Main([]string{"--tail", "--follow"}, out, stderr)
+			return followEvents(c, out, stderr)
 		}
 		fmt.Fprintln(stderr, "tui needs an interactive terminal; running with CLI output.")
-		return Main(nil, out, stderr)
+		// The parsed configuration keeps the invocation's flags — including
+		// --plain and --json, which must still suppress the first-run form.
+		c.Command = "run"
+		return runCLIController(args, c, out, stderr)
 	}
 	if repositoryOwned(c) {
 		// tui attaches to the controller it finds and submits its plans
@@ -38,20 +58,38 @@ func runTUI(c Config, out, stderr io.Writer) int {
 		}
 		return runAttach(c, out, stderr, true)
 	}
+	// The unattached tui start is an eligible controller start: the form runs
+	// before the dashboard controller exists, and cancelling it exits without
+	// saving answers or starting work.
+	c, start, err := maybeFirstRun(args, c, os.Stdin, out, stderr)
+	if err != nil {
+		return emitParseError(args, err, out, stderr)
+	}
+	if !start {
+		return 0
+	}
 	return runDashboardController(c, out, stderr, ui.RunDashboard)
 }
 
 func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(ui.Controls) (ui.ExitAction, error)) int {
 	_, dir := projectPaths(c)
+	// Main dispatches tui before its controller signal block, so this
+	// controller installs the same handlers itself: SIGTERM drains like
+	// `looper stop` without cancelling, and SIGINT cancels with retained
+	// work. Signals install before the lock, exactly like the daemon path, so
+	// an early drain request stays pending until the loop reaches its first
+	// boundary. The dashboard keeps Bubble Tea's signal capture off, so these
+	// handlers own the signals and the board exits through its Done poll when
+	// the drained or cancelled run ends.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	installControllerSignals(c, cancel)
 	var engineOut bytes.Buffer
 	e, lock, err := NewEngine(c, &engineOut)
 	if err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, err, out, stderr)
 	}
 	info := e.controller
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	type result struct {
 		code int
 		err  error
@@ -75,6 +113,7 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	defer observer.Close()
 	controls := ui.Controls{
 		NoAnimation: c.NoAnimation,
+		OwnSignals:  true,
 		Statistics:  func() (ui.StatisticsView, error) { return observer.store.Statistics(time.Now()) },
 		Inspect:     observer.inspect,
 		WorkerLog:   func(id string) (string, string, error) { return workerLog(dir, id) },
@@ -94,7 +133,9 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 		Cancel: cancel,
 	}
 	drain := func() error {
-		return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
+		// The request binds to this controller's session, exactly like
+		// `looper stop`, so it can never outlive the run that should drain.
+		return writeStopRequest(dir, stopRequest{Session: info.Session, PID: info.PID})
 	}
 	controls.Drain = drain
 	controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }
@@ -105,7 +146,11 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 		}
 		// The published snapshot carries each receipt's state, so the
 		// dashboard follows the import without polling its acknowledgement.
-		return submitPlanImport(dir, info.Session, []string{planPath})
+		req, err := submitPlanImportRequest(dir, info.Session, "", []string{planPath})
+		if err != nil {
+			return "", err
+		}
+		return req.ID, nil
 	}
 	for {
 		action, err := runDashboard(controls)
@@ -166,21 +211,24 @@ func printDashboardExit(out io.Writer, store *Store, session string, code int) {
 }
 
 // submitPlansToActive submits startup plans to the controller that already
-// owns the repository.
-func submitPlansToActive(c Config, out, stderr io.Writer) int {
+// owns the repository, through the same receipt-returning submission the CLI
+// mutation uses (AX-011). receiptOut is where the immediate receipt prints:
+// the interactive tui names its stdout, and the non-interactive fallback names
+// its stderr so the followed event stream stays one event document per line.
+func submitPlansToActive(c Config, receiptOut, stderr io.Writer) int {
 	_, dir := projectPaths(c)
 	info, err := readController(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, "A controller owns this repository, but its metadata cannot be verified:", err)
 		return 1
 	}
-	id, err := submitPlanImport(dir, info.Session, c.Plans)
+	req, err := submitPlanImportRequest(dir, info.Session, "", c.Plans)
 	if err != nil {
 		fmt.Fprintln(stderr, "Error:", err)
 		return 1
 	}
-	fmt.Fprintln(out, "Queued plan import", id)
-	return 0
+	return emitMutationReceipt(c, newMutationReceipt(req.ID, PublicRequestAddPlan, RequestSubmitted, req.CreatedAt, info.Session),
+		"Queued "+strings.Join(c.Plans, ", "), drainingImportNote(dir, info), receiptOut)
 }
 
 // submitSettingsFromForm runs the full editor against the current profile and
@@ -225,18 +273,22 @@ func submitSettingsFromForm(c Config, dir, session string, in *os.File) (string,
 // tui attaches through the same request protocol; plain attach stays read-only.
 func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	if !repositoryOwned(c) {
-		fmt.Fprintln(stderr, "No active run. Start one with: looper")
-		return 1
+		p := runNotFoundError("", "looper")
+		p.Message = "No active run. Start one with: looper"
+		p.Paths = nil
+		p.withLegacy("No active run. Start one with: looper", 1)
+		return emitError(c, p, out, stderr)
 	}
 	_, dir := projectPaths(c)
 	info, err := readController(dir)
 	if err != nil {
-		fmt.Fprintln(stderr, "A controller owns this repository, but its metadata cannot be verified:", err)
-		return 1
+		p := controllerMetadataError(err)
+		p.withLegacy(fmt.Sprintf("A controller owns this repository, but its metadata cannot be verified: %s", err), 1)
+		return emitError(c, p, out, stderr)
 	}
 	if c.JSON || c.Plain || DetectMode(os.Stdin, out, false) != ModeInteractive {
 		fmt.Fprintln(stderr, "attach needs an interactive terminal; following events instead.")
-		return Main([]string{"--tail", "--follow"}, out, stderr)
+		return followEvents(c, out, stderr)
 	}
 	observer, err := openObserver(dir)
 	if err != nil {
@@ -265,10 +317,13 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			return requeueTask(dir, session, taskID, revision)
 		}
 		controls.Drain = func() error {
-			if _, err := attachment.currentSession(); err != nil {
+			session, err := attachment.currentSession()
+			if err != nil {
 				return err
 			}
-			return atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
+			// Bind the request to the attached controller's session so it
+			// cannot drain a future run if that controller exits first.
+			return writeStopRequest(dir, stopRequest{Session: session})
 		}
 		controls.AddPlan = attachment.addPlan
 	}
@@ -277,6 +332,9 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 		if err != nil {
 			fmt.Fprintln(stderr, "Error:", err)
 			return 1
+		}
+		if action.Kind == "drain" {
+			fmt.Fprintln(out, "Drain requested. The controller finishes active work, then stops. Check it with `looper status`.")
 		}
 		if action.Kind != "settings" {
 			break
@@ -296,6 +354,21 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 	return 0
 }
 
+// followEvents runs the tail command with the parsed configuration. The tui
+// and attach fallbacks re-entered Main with the fixed argument list
+// ["--tail", "--follow"], so Parse rebuilt defaults and --json, --plain, and
+// the contract selection were dropped from the followed stream; switching the
+// parsed configuration to tail keeps every flag (T022).
+func followEvents(c Config, out, stderr io.Writer) int {
+	c.Command, c.Follow = "tail", true
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := inspect(ctx, c, out); err != nil {
+		return emitError(c, err, out, stderr)
+	}
+	return 0
+}
+
 // observer pages the event journal through a read-only store connection.
 type observer struct {
 	store       *Store
@@ -305,6 +378,10 @@ type observer struct {
 	outcomes    []ui.JournalEvent
 }
 
+// openObserver attaches the dashboard's event reader. The dashboard holds
+// this connection for its whole session — an attach survives the controller
+// transitions it observes — so it keeps the through-WAL attach instead of the
+// immutable read a stopped run allows (T105).
 func openObserver(dir string) (*observer, error) {
 	store, err := OpenStoreReadonly(filepath.Join(dir, "state.db"))
 	if err != nil {
@@ -318,7 +395,16 @@ func (o *observer) Close() error { return o.store.Close() }
 func (o *observer) events(after int64, limit int) []ui.JournalEvent {
 	events, err := o.store.RecentEvents(after, limit)
 	if err != nil {
-		return nil
+		var invalid *cursorInvalidError
+		if after < 0 || !errors.As(err, &invalid) {
+			return nil
+		}
+		// The retained store was reset or replaced while the dashboard was
+		// attached. Restart the tail from the newest events instead of
+		// freezing the journal on a cursor that no longer exists.
+		if events, err = o.store.RecentEvents(-1, limit); err != nil {
+			return nil
+		}
 	}
 	out := make([]ui.JournalEvent, 0, len(events))
 	for _, e := range events {
@@ -359,7 +445,10 @@ func attemptDiff(dir, attemptID string) (string, error) {
 		if len(patch) == 0 {
 			patch = []byte("(no changes against the integration base yet)")
 		}
-		return string(patch), nil
+		// Patch content is worker-written file text. Escape its control
+		// characters for this human view, like readDashboardLog's raw fallback.
+		// The retained worktree keeps the original bytes.
+		return sanitize(string(patch)), nil
 	}
 	return "", fmt.Errorf("unknown attempt %s", attemptID)
 }

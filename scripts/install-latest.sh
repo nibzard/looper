@@ -26,6 +26,14 @@ Options:
   --with-skills         Also install the skills bundled with that release
   --skills-dir <path>   Skill directory (used with --with-skills)
   --codex-home <path>   Codex directory (used with --with-skills)
+
+Environment:
+  LOOPER_USER_PREFIX    Default prefix for the release installer instead of
+                        ~/.local; the environment reaches the inner install.sh.
+
+The release archive carries no Git metadata, so the installed binary reports
+revision "unknown". The installer warns when the destination binary is in use
+by a running process; running controllers keep their original build.
 HELP
                 return 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
@@ -58,7 +66,8 @@ HELP
     local source_dir="$install_temp/looper-${version#v}"
     [ -f "$source_dir/install.sh" ] || { echo 'Release archive has no installer.' >&2; return 1; }
     if [ "$with_skills" -eq 0 ]; then install_args+=(--skip-skills); fi
-    bash "$source_dir/install.sh" "${install_args[@]}"
+    # The guard keeps an empty install_args usable under set -u on Bash < 4.4.
+    bash "$source_dir/install.sh" ${install_args[@]+"${install_args[@]}"}
     rm -rf -- "$install_temp"
     trap - EXIT
 )

@@ -23,7 +23,7 @@ func TestPlannerPublishesWhileWaitingAndCancels(t *testing.T) {
 		_, err := e.runPlanner(ctx, e.capture(), t.TempDir(), filepath.Join(e.Dir, "plan-test"), "plan")
 		done <- err
 	}()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(testBudget(5 * time.Second))
 	var first string
 	updates := 0
 	for updates < 2 {
@@ -52,7 +52,7 @@ func TestPlannerPublishesWhileWaitingAndCancels(t *testing.T) {
 		if err == nil {
 			t.Fatal("cancel succeeded unexpectedly")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testBudget(5 * time.Second)):
 		t.Fatal("planner did not stop")
 	}
 	v := LoadView(e.Dir)
@@ -100,7 +100,7 @@ func TestPlannerReportsRetryAndCompletes(t *testing.T) {
 	script := `#!/bin/sh
 if [ ! -f attempted ]; then
  touch attempted
- echo '429 rate limit'
+ printf '%s\n' '{"type":"error","message":"stub upstream reports 429 rate limit; retry later"}'
  exit 1
 fi
 printf '%s\n' '{"result":"{\"tasks\":[]}"}'

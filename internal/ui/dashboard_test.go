@@ -84,6 +84,49 @@ func TestDashboardOtherKeysKeepBehavior(t *testing.T) {
 	}
 }
 
+func TestAttachedQuitOffersDrain(t *testing.T) {
+	drains := 0
+	attached := func() model {
+		return model{width: 80, height: 24, ctrl: Controls{Poll: func() *ViewSnapshot { return nil }, Drain: func() error { drains++; return nil }}}
+	}
+	key := func(m model, k string) (model, tea.Cmd) {
+		typ := tea.KeyRunes
+		if k == "esc" {
+			typ = tea.KeyEsc
+		}
+		next, cmd := m.Update(tea.KeyMsg{Type: typ, Runes: []rune(k)})
+		return next.(model), cmd
+	}
+	m, cmd := key(attached(), "q")
+	if m.dialog != "detach" || cmd != nil {
+		t.Fatalf("attached quit skipped the dialog: dialog=%q cmd=%v", m.dialog, cmd)
+	}
+	if !strings.Contains(m.View(), "Drain, then detach") || strings.Contains(m.View(), "Interrupt") {
+		t.Fatalf("detach dialog offers the wrong actions: %s", m.View())
+	}
+	if m, cmd = key(m, "esc"); m.dialog != "" || cmd != nil || drains != 0 {
+		t.Fatalf("esc did not stay: dialog=%q drains=%d", m.dialog, drains)
+	}
+	m, _ = key(m, "q")
+	if _, cmd = key(m, "q"); cmd == nil || drains != 0 {
+		t.Fatalf("second q did not detach without draining: drains=%d", drains)
+	}
+	m, _ = key(attached(), "q")
+	if m, cmd = key(m, "d"); cmd == nil || !m.drainAsked || drains != 1 {
+		t.Fatalf("d did not drain and detach: drains=%d", drains)
+	}
+	m = attached()
+	m.ctrl.Drain = func() error { return fmt.Errorf("controller changed") }
+	m, _ = key(m, "q")
+	if m, cmd = key(m, "d"); cmd != nil || m.err != "controller changed" || m.dialog != "" {
+		t.Fatalf("failed drain detached: err=%q dialog=%q", m.err, m.dialog)
+	}
+	observer := model{ctrl: Controls{ReadOnly: true, Poll: func() *ViewSnapshot { return nil }}}
+	if m, cmd = key(observer, "q"); cmd == nil || m.dialog != "" {
+		t.Fatal("read-only observer did not detach at once")
+	}
+}
+
 func TestPlanningOnPhoneTerminal(t *testing.T) {
 	for _, size := range [][2]int{{58, 22}, {40, 18}, {30, 14}, {80, 24}} {
 		m := model{width: size[0], height: size[1], snap: &ViewSnapshot{
@@ -137,6 +180,39 @@ func TestPlannerLogFollowsRetry(t *testing.T) {
 	}
 }
 
+func TestDiffViewStripsTerminalControls(t *testing.T) {
+	// The diff text is raw git output over worker-written files, so a worker
+	// controls the bytes that reach the viewport.
+	hostile := "diff --git a/fixture b/fixture\n" +
+		"+\x1b[31mred text\x1b[0m\n" +
+		"+\x1b]0;owned title\x07plain\n" +
+		"+carriage\x0breturn\x07\n"
+	m := model{width: 60, height: 20, diffView: viewport.New(60, 10),
+		snap: &ViewSnapshot{Attempts: []AttemptView{{ID: "task-1", TaskID: "T1", Phase: "running"}}}}
+	m.ctrl.Diff = func(string) (string, error) { return hostile, nil }
+	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = next.(model)
+	if m.mode != ModeDiff {
+		t.Fatal("diff did not open")
+	}
+	if hasControl(ansi.Strip(m.diffText)) {
+		t.Fatalf("terminal controls reached the diff viewport: %q", m.diffText)
+	}
+	if !strings.Contains(m.diffText, "red text") || !strings.Contains(m.diffText, "plain") {
+		t.Fatalf("readable patch content lost: %q", m.diffText)
+	}
+	if strings.Contains(m.diffText, "owned title") {
+		t.Fatalf("escape payload survived: %q", m.diffText)
+	}
+	// Resizing re-renders the stored text, so the sanitized copy must be the
+	// one the viewport keeps.
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = next.(model)
+	if hasControl(ansi.Strip(m.diffText)) {
+		t.Fatalf("resize reintroduced controls: %q", m.diffText)
+	}
+}
+
 func TestPhoneBoardScrollAndResize(t *testing.T) {
 	m := model{width: 40, height: 16, snap: &ViewSnapshot{State: "planning", ActivityDetail: "claude attempt 1/3", Counters: ViewCounters{Ready: 12}}}
 	for i := 0; i < 12; i++ {
@@ -179,7 +255,7 @@ func TestPhoneLogLeavesRoomForOutput(t *testing.T) {
 }
 
 func TestPhoneDialogsFit(t *testing.T) {
-	for _, dialog := range []string{"exit", "drain", "add-plan"} {
+	for _, dialog := range []string{"exit", "detach", "drain", "add-plan"} {
 		m := model{width: 30, height: 12, dialog: dialog, planPath: strings.Repeat("long-path/", 20)}
 		view := m.View()
 		if lipgloss.Width(view) > 30 || lipgloss.Height(view) > 12 {
@@ -388,6 +464,36 @@ func TestCapitalShortcutsPreservePlanPathCase(t *testing.T) {
 	}
 	if m.planPath != "MyPlan.md" {
 		t.Fatalf("plan path case changed: %q", m.planPath)
+	}
+}
+
+// A typed space arrives as KeySpace, not KeyRunes, and must reach the path.
+func TestAddPlanPathAcceptsSpaces(t *testing.T) {
+	submitted := ""
+	m := model{width: 80, height: 24, ctrl: Controls{AddPlan: func(path string) (string, error) {
+		submitted = path
+		return "import-1", nil
+	}}}
+	m.dialog = "add-plan"
+	const want = "docs/road map v2.md"
+	for _, key := range want {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}}
+		if key == ' ' {
+			msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+		}
+		next, _ := m.keys(msg)
+		m = next.(model)
+	}
+	if m.planPath != want {
+		t.Fatalf("spaces swallowed from path: got %q, want %q", m.planPath, want)
+	}
+	next, _ := m.keys(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.dialog != "" {
+		t.Fatalf("dialog still open: %q", m.dialog)
+	}
+	if submitted != want {
+		t.Fatalf("submitted path changed: got %q, want %q", submitted, want)
 	}
 }
 

@@ -1,0 +1,7 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": { "id": "req-01h3ef", "type": "stop", "state": "accepted" },
+  "continuation": { "command": "looper requests req-01h3ef --contract v2" }
+}

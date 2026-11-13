@@ -1,0 +1,40 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "outcome": "satisfied",
+  "condition": {
+    "kind": "request_outcome",
+    "request_id": "import-01h5f2"
+  },
+  "observed": {
+    "at": "2026-11-09T12:04:44.927Z",
+    "high_water": 1319,
+    "request": {
+      "id": "import-01h5f2",
+      "type": "add-plan",
+      "state": "applied",
+      "age_seconds": 12,
+      "controller_session": "run-4f39faa5451b464d",
+      "idempotency_key": "import-ui-plan-v3",
+      "submitted_at": "2026-11-09T12:04:32.104Z",
+      "decided_at": "2026-11-09T12:04:44.618Z",
+      "affected_tasks": ["T021"],
+      "plan_coverage": {
+        "added_tasks": ["T021"],
+        "covered": [{ "requirement": "publish the receipt", "task_id": "T021", "evidence": "internal/looper/receipt.go" }]
+      },
+      "result": { "summary": "1 task added", "added_task_ids": ["T021"] }
+    }
+  },
+  "cursor": { "event_id": 1319, "scope": "store", "store_id": "store-3f9c1a2b", "store_epoch": 1 },
+  "store": { "id": "store-3f9c1a2b", "epoch": 1 },
+  "controller": { "state": "owning", "session": "run-4f39faa5451b464d" },
+  "wait": { "timeout_seconds": 60, "elapsed_seconds": 12 },
+  "detail": {
+    "command": "looper wait --contract v2 --request import-01h5f2 --timeout 60s",
+    "events": "looper requests import-01h5f2 --contract v2",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json"
+  }
+}

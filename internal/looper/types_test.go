@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -121,6 +122,10 @@ func TestClassifyFailure(t *testing.T) {
 		"error code: 503",
 		"connection reset by peer",
 		"the server is temporarily unavailable",
+		// A bare status number still counts when a status word stands
+		// before it with no digit between.
+		"HTTP 502",
+		"request failed with status code 429",
 	}
 	for _, in := range transient {
 		if got := classifyFailure("exit status 1\n" + in); got != "transient" {
@@ -128,11 +133,16 @@ func TestClassifyFailure(t *testing.T) {
 		}
 	}
 	// Session output that only mentions a timeout or a bare number must not
-	// turn a deterministic failure into hours of retries.
+	// turn a deterministic failure into hours of retries. A bare status
+	// number without a status word before it stays a plain number, and the
+	// process error's own "exit status 1" never pairs with a later code.
 	execution := []string{
 		"FAIL: TestServerTimeout timed out after 10s",
 		"edited net_timeout.go and ran checks; elapsed 502ms",
 		"exit status 1",
+		"429",
+		"health check responses: 502 failed, 1024 passed",
+		"0 errors, 502 passed",
 	}
 	for _, in := range execution {
 		if got := classifyFailure("exit status 1\n" + in); got != "execution" {
@@ -288,13 +298,30 @@ func TestObserveScope(t *testing.T) {
 		t.Fatal("observed overlap did not block parallel dispatch")
 	}
 }
+
+// shippedSchemaPath anchors the shipped schema copy at this file's location:
+// other tests in this package chdir into temporary projects, so a relative
+// path would resolve against whichever directory ran last.
+func shippedSchemaPath(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("the test file location is unavailable")
+	}
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "docs", "to-do.schema.json")
+}
+
 func TestShippedSchemaMatchesDefault(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "to-do.schema.json"))
+	b, err := os.ReadFile(shippedSchemaPath(t))
 	if err != nil {
-		t.Skip(err)
+		// The shipped copy is tracked content that assembly cannot strip
+		// (unlike the control file at the repository root), so a missing
+		// file means the tree dropped tracked files. Fail instead of
+		// skipping: a skip let stale assemblies pass without the copy.
+		t.Fatal(err)
 	}
 	if string(b) != backlogSchema {
-		t.Fatal("to-do.schema.json differs from the default Looper writes")
+		t.Fatal("docs/to-do.schema.json differs from the default Looper writes")
 	}
 	var schema map[string]any
 	if err = json.Unmarshal([]byte(backlogSchema), &schema); err != nil {
@@ -308,4 +335,113 @@ func TestShippedSchemaMatchesDefault(t *testing.T) {
 	if _, ok := tasks["unblock_when"]; !ok {
 		t.Fatal("schema rejects the engine's unblock_when field")
 	}
+}
+
+// Every published contract schema that constrains a task status must accept
+// each status the engine itself writes. The in-code backlog schema is the
+// source of truth; a published copy that lags it rejects documents the CLI
+// really produces. Cancellation made this concrete: cancelled tasks reached
+// the backlog while the published status enums stopped at done.
+func TestContractTaskStatusEnumsCoverEngineStatuses(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Tasks struct {
+				Items struct {
+					Properties struct {
+						Status struct {
+							Enum []string `json:"enum"`
+						} `json:"status"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"tasks"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(backlogSchema), &schema); err != nil {
+		t.Fatal(err)
+	}
+	engine := map[string]bool{}
+	for _, s := range schema.Properties.Tasks.Items.Properties.Status.Enum {
+		engine[s] = true
+	}
+	if len(engine) == 0 {
+		t.Fatal("the engine schema states no task statuses")
+	}
+	// The path is anchored at this file because fixtures chdir into a
+	// temporary project before this comparison runs.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("the test file location is unavailable")
+	}
+	checked := 0
+	for _, root := range []string{"v2", "legacy"} {
+		dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "docs", "contracts", "schemas", root)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Skipf("contract schemas are absent: %v", err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc any
+			if err = json.Unmarshal(data, &doc); err != nil {
+				t.Fatalf("%s is not valid JSON: %v", entry.Name(), err)
+			}
+			for _, enum := range taskStatusEnums(doc) {
+				checked++
+				published := map[string]bool{}
+				for _, s := range enum {
+					published[s] = true
+				}
+				for status := range engine {
+					if !published[status] {
+						t.Errorf("%s rejects task status %q", entry.Name(), status)
+					}
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no published schema constrains a task status")
+	}
+}
+
+// taskStatusEnums collects every enum of a property named "status" that also
+// lists "todo". That marker separates a task-status enum from the request,
+// recovery, and attempt-summary status enums published beside it.
+func taskStatusEnums(doc any) [][]string {
+	var out [][]string
+	var walk func(node any)
+	walk = func(node any) {
+		obj, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		if status, ok := obj["status"].(map[string]any); ok {
+			var enum []string
+			hasTodo := false
+			if raw, ok := status["enum"].([]any); ok {
+				for _, v := range raw {
+					if s, ok := v.(string); ok {
+						enum = append(enum, s)
+						if s == "todo" {
+							hasTodo = true
+						}
+					}
+				}
+			}
+			if hasTodo {
+				out = append(out, enum)
+			}
+		}
+		for _, value := range obj {
+			walk(value)
+		}
+	}
+	walk(doc)
+	return out
 }

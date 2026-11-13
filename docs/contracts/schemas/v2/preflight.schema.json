@@ -1,0 +1,570 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/preflight.schema.json",
+  "title": "Looper execution preflight (contract version 2)",
+  "description": "The one document `looper preflight --contract v2 --json` returns. It is read-only: it resolves the execution configuration a controller start would use \u2014 executable paths, coding and review agents, models and effort with their sources, launch mode, verification and setup, and once semantics \u2014 without starting a controller, spawning an agent, or changing saved state. Credentials, environment values, and raw agent arguments never enter the document; services Looper did not verify stay in `unchecked`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema_version",
+    "kind",
+    "generated_at",
+    "project",
+    "agents",
+    "settings",
+    "execution",
+    "commands",
+    "environment",
+    "findings",
+    "unchecked",
+    "limits",
+    "detail"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": 2
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "kind": {
+      "const": "looper.preflight"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "todo_path",
+        "runtime_dir",
+        "profile"
+      ],
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "todo_path": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "runtime_dir": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "present"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/boundedString"
+            },
+            "present": {
+              "type": "boolean",
+              "description": "A saved profile exists and contributed its layer to the resolved settings."
+            }
+          }
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coding",
+        "review"
+      ],
+      "properties": {
+        "coding": {
+          "$ref": "#/$defs/agent"
+        },
+        "review": {
+          "$ref": "#/$defs/agent"
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobs",
+        "checks",
+        "codex_model",
+        "claude_model",
+        "effort",
+        "review_every"
+      ],
+      "properties": {
+        "jobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "auto",
+            "source"
+          ],
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "Auto mode resolved the worker count from CPU and memory."
+            },
+            "source": {
+              "$ref": "#/$defs/settingSource"
+            },
+            "note": {
+              "$ref": "#/$defs/boundedString"
+            }
+          }
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "note"
+          ],
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "note": {
+              "$ref": "#/$defs/boundedString"
+            }
+          }
+        },
+        "codex_model": {
+          "$ref": "#/$defs/modelSetting"
+        },
+        "claude_model": {
+          "$ref": "#/$defs/modelSetting"
+        },
+        "effort": {
+          "$ref": "#/$defs/modelSetting"
+        },
+        "review_every": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "source"
+          ],
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "source": {
+              "$ref": "#/$defs/settingSource"
+            }
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "mode_note",
+        "once",
+        "dispatch_limit",
+        "poll_seconds",
+        "worker_timeout_seconds",
+        "git_timeout_seconds",
+        "retry",
+        "plans",
+        "plan_total"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "foreground"
+          ]
+        },
+        "mode_note": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "once": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "note"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Once semantics: the run exits after the current goal is checked or all remaining work is blocked."
+            },
+            "note": {
+              "$ref": "#/$defs/boundedString"
+            }
+          }
+        },
+        "dispatch_limit": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum dispatches; 0 is unlimited."
+        },
+        "poll_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "worker_timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-worker timeout; 0 waits without a limit."
+        },
+        "git_timeout_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "limit",
+            "delay_seconds"
+          ],
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "delay_seconds": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "plans": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/boundedString"
+          }
+        },
+        "plan_total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verify",
+        "setup"
+      ],
+      "properties": {
+        "verify": {
+          "$ref": "#/$defs/projectCommand"
+        },
+        "setup": {
+          "$ref": "#/$defs/projectCommand"
+        }
+      }
+    },
+    "environment": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "present",
+          "affects"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "present": {
+            "type": "boolean",
+            "description": "The variable is set in this environment. The value is never reported: an environment value can carry a credential."
+          },
+          "affects": {
+            "$ref": "#/$defs/boundedString"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "severity",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/$defs/boundedString"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ]
+          },
+          "message": {
+            "$ref": "#/$defs/boundedString"
+          },
+          "action": {
+            "$ref": "#/$defs/boundedString"
+          }
+        }
+      }
+    },
+    "unchecked": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "note"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/$defs/boundedString"
+          },
+          "note": {
+            "$ref": "#/$defs/boundedString"
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes_budget",
+        "string_max",
+        "findings_max"
+      ],
+      "properties": {
+        "bytes_budget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "string_max": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "findings_max": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "health": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/boundedString"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "boundedString": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "settingSource": {
+      "enum": [
+        "flag",
+        "environment",
+        "profile",
+        "default",
+        "machine"
+      ]
+    },
+    "agentSource": {
+      "enum": [
+        "flag",
+        "environment",
+        "profile",
+        "default",
+        "derived",
+        "machine"
+      ]
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "source",
+        "binary",
+        "sandbox",
+        "sandbox_note"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "source": {
+          "$ref": "#/$defs/agentSource"
+        },
+        "follows_coding": {
+          "type": "boolean",
+          "description": "The review agent was not chosen for its role; it follows the coding agent because no review value exists."
+        },
+        "binary": {
+          "$ref": "#/$defs/executable"
+        },
+        "sandbox": {
+          "enum": [
+            "approvals-and-sandbox-bypassed",
+            "workspace-write",
+            "permissions-skipped",
+            "yolo-full-access"
+          ],
+          "description": "The named launch posture of a worker of this agent kind. Raw agent arguments are never included."
+        },
+        "sandbox_note": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "adapter": {
+          "enum": [
+            "claude",
+            "codex",
+            "zcode"
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "effort": {
+          "$ref": "#/$defs/boundedString"
+        }
+      }
+    },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool",
+        "requested",
+        "state"
+      ],
+      "properties": {
+        "tool": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "requested": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "source": {
+          "enum": [
+            "environment",
+            "default",
+            "machine"
+          ]
+        },
+        "state": {
+          "enum": [
+            "found",
+            "missing",
+            "builtin",
+            "unchecked"
+          ],
+          "description": "What PATH resolution proved: found carries the resolved path, missing names a tool a start cannot launch, builtin and unchecked state that PATH resolution does not apply."
+        },
+        "resolved": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "note": {
+          "$ref": "#/$defs/boundedString"
+        }
+      }
+    },
+    "modelSetting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "source",
+        "resolution"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "source": {
+          "$ref": "#/$defs/settingSource"
+        },
+        "resolution": {
+          "enum": [
+            "configured",
+            "provider_default",
+            "not_applicable"
+          ],
+          "description": "provider_default means the value is unset and the agent binary decides at launch; Looper does not resolve the provider default. not_applicable means no agent of this kind is configured."
+        },
+        "note": {
+          "$ref": "#/$defs/boundedString"
+        }
+      }
+    },
+    "projectCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "source"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "source": {
+          "enum": [
+            "flag",
+            "environment",
+            "profile",
+            "plan",
+            "recovered",
+            "planner"
+          ]
+        },
+        "note": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "executable": {
+          "$ref": "#/$defs/executable"
+        }
+      }
+    }
+  }
+}

@@ -92,7 +92,11 @@ func conflictingResultsEngine(t *testing.T, verify string) (*Engine, Config) {
 func TestConflictingHeadPreparesOncePerCompletedCheck(t *testing.T) {
 	clearSettingEnv(t)
 	e, _ := conflictingResultsEngine(t, "sleep 1")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// The window must stay long enough for the first check to complete and
+	// the deferred head to reach its decision; both are fsync-bound, so it
+	// scales with host pressure. Once the retried head is blocked it stays
+	// decided, so a longer window cannot add defers.
+	ctx, cancel := context.WithTimeout(context.Background(), testBudget(10*time.Second))
 	defer cancel()
 	code, err := e.Run(ctx)
 	if code != 130 || err != context.DeadlineExceeded {

@@ -10,9 +10,21 @@ __pycache__/
 
 # Looper runtime artifacts (if run inside this repo)
 to-do.json
-to-do.schema.json
+/to-do.schema.json
 to-do.json.context/
+# to-do.schema.json is runtime output the engine writes when missing and the
+# controller injects into assembled trees; the shipped reference copy of the
+# backlogSchema constant is tracked at docs/to-do.schema.json, byte-pinned by
+# TestShippedSchemaMatchesDefault
 *.jsonl
+# Recorded byte fixtures are versioned contract artifacts, not runtime output
+!docs/contracts/fixtures/legacy/*.bytes.jsonl
+# Fresh-agent evaluation measurement logs (AX-028); the recorded results
+# document is tracked, the per-session shim logs are not
+docs/research/agent-evaluation/**/*.jsonl
+
+# Operation resource prefixes (private generated output)
+looper_*/
 
 # OS
 .DS_Store

@@ -1,0 +1,11 @@
+{
+  "conflicts": [
+    "string"
+  ],
+  "controller_session": "string",
+  "error": "string",
+  "id": "string",
+  "status": "string",
+  "type": "string",
+  "version": "integer"
+}

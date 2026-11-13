@@ -18,11 +18,27 @@ Options:
   --with-workflow-skills  Also install git-commit and github-release
   --dry-run            Print actions without making changes
   -h, --help           Show help
+
+Environment:
+  LOOPER_USER_PREFIX   Default prefix instead of ~/.local; an explicit
+                       --prefix still wins. Test fixtures bind this so
+                       they can never write to the user's real prefix.
 USAGE
 }
 
+require_value() {
+    [ -n "$2" ] || {
+        echo "Error: $1 requires a value." >&2
+        usage >&2
+        return 1
+    }
+}
+
 DEFAULT_PREFIX="$HOME/.local"
-PREFIX="${PREFIX:-$DEFAULT_PREFIX}"
+# Precedence: --prefix, then PREFIX, then LOOPER_USER_PREFIX, then ~/.local.
+# A LOOPER_USER_PREFIX different from ~/.local selects prefix mode below, so
+# skills also land inside it.
+PREFIX="${PREFIX:-${LOOPER_USER_PREFIX:-$DEFAULT_PREFIX}}"
 TARGET_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
 PREFIX_OVERRIDE=""
@@ -38,19 +54,23 @@ PREFIX_MODE=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --prefix)
+            require_value "$1" "${2:-}" || exit 1
             PREFIX_OVERRIDE="$2"
             PREFIX_MODE=1
             shift 2
             ;;
         --bin-dir)
+            require_value "$1" "${2:-}" || exit 1
             BIN_DIR_OVERRIDE="$2"
             shift 2
             ;;
         --skills-dir)
+            require_value "$1" "${2:-}" || exit 1
             SKILLS_DIR_OVERRIDE="$2"
             shift 2
             ;;
         --codex-home)
+            require_value "$1" "${2:-}" || exit 1
             CODEX_HOME_OVERRIDE="$2"
             shift 2
             ;;
@@ -148,6 +168,35 @@ warn_missing() {
     fi
 }
 
+# Replacing a binary cannot reach processes that already run it: they keep
+# their mapped executable. Warn before an install replaces a destination in
+# live use, so an operator knows a running controller keeps its own build.
+warn_live_destination() {
+    local dest="$1" target pid exe pids proc noun
+    [ -f "$dest" ] || return 0
+    [ -d /proc ] || return 0
+    target=$(readlink -f -- "$dest" 2>/dev/null) || target="$dest"
+    pids=""
+    for proc in /proc/[0-9]*; do
+        exe=$(readlink -- "$proc/exe" 2>/dev/null) || continue
+        exe=${exe% (deleted)}
+        if [ "$exe" = "$target" ]; then
+            pid=${proc#/proc/}
+            pids="${pids:+$pids }$pid"
+        fi
+    done
+    if [ -n "$pids" ]; then
+        noun="processes"
+        set -- $pids
+        if [ "$#" -eq 1 ]; then
+            noun="process"
+        fi
+        echo "Warning: $target is in use by running $noun $pids." >&2
+        echo "Installing replaces the file on disk; running controllers keep their original build until they restart." >&2
+    fi
+    return 0
+}
+
 SKILLS_RECEIPT="$SKILLS_DIR/.looper-installed-skills"
 if [ "$INSTALL_SKILLS" -eq 1 ] && { [ -e "$SKILLS_RECEIPT" ] || [ -L "$SKILLS_RECEIPT" ]; }; then
     if [ ! -f "$SKILLS_RECEIPT" ] || [ -L "$SKILLS_RECEIPT" ]; then
@@ -177,6 +226,7 @@ if [ "$INSTALL_BIN" -eq 1 ]; then
         BUILD_FLAGS=$(bash "$ROOT_DIR/scripts/build-ldflags.sh")
         run go -C "$ROOT_DIR" build -trimpath -ldflags "$BUILD_FLAGS" -o "$SRC_PROGRAM" ./cmd/looper
     fi
+    warn_live_destination "$BIN_DIR/looper"
     run install -d "$BIN_DIR"
     run install -m 0755 "$SRC_PROGRAM" "$BIN_DIR/looper"
 fi

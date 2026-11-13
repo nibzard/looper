@@ -168,8 +168,14 @@ func TestObserverEvents(t *testing.T) {
 	if len(events) != 1 || events[0].Message != "begin" {
 		t.Fatalf("observer paging broken: %+v", events)
 	}
-	if fresh := obs.events(99, 10); len(fresh) != 0 {
+	if fresh := obs.events(events[0].ID, 10); len(fresh) != 0 {
 		t.Fatalf("observer must return no events after the cursor: %d", len(fresh))
+	}
+	// A cursor beyond the retained store means the store was reset or
+	// replaced. The observer restarts from the newest tail instead of
+	// freezing on the dead position.
+	if fresh := obs.events(99, 10); len(fresh) != 1 || fresh[0].Message != "begin" {
+		t.Fatalf("observer must recover from an invalid cursor: %+v", fresh)
 	}
 }
 

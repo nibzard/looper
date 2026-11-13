@@ -1,6 +1,7 @@
 package looper
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -236,7 +237,7 @@ func requeueTask(dir, session, id, revision string) error {
 
 func (e *Engine) processRequeueRequests() {
 	for {
-		req, err := claimNextRequest(e.Dir, RequestTypeRequeue)
+		req, err := e.claimRequest(RequestTypeRequeue)
 		if err != nil {
 			e.event("request-error", err.Error())
 			return
@@ -250,53 +251,91 @@ func (e *Engine) processRequeueRequests() {
 			return
 		}
 		os.Remove(filepath.Join(processingDir(e.Dir), req.ID+".json"))
+		// A poisoned engine exits at the next loop check; this request is
+		// answered and consumed, so the pass stops here.
+		if e.err != nil {
+			return
+		}
 	}
 }
 
 // Requeue changes only status after explicit user confirmation. Task contracts
-// and retained attempts stay intact. The controller is the sole writer.
+// and retained attempts stay intact. The controller is the sole writer. The
+// application and its receipt stage together until the saved state/export
+// protocol commits them, exactly as add-task does (AX-009).
 func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
-	ack = SettingsAck{Version: SettingsRequestVersion, ID: req.ID, Session: e.controller.Session, Status: AckError}
+	ack = SettingsAck{Version: SettingsRequestVersion, ID: req.ID, Session: e.controllerSessionID(), Status: AckError}
 	if previous, ok := e.acks[req.ID]; ok {
 		return previous
 	}
-	defer func() { e.acks[req.ID] = ack }()
-	if req.Session != e.controller.Session {
+	if replayed, ok := e.replayedAck(req); ok {
+		// A durable receipt already decided this identifier.
+		e.rememberAck(req.ID, replayed)
+		return replayed
+	}
+	// A caller key answers from the receipt that recorded it, before any
+	// session check, exactly like add-task and settings (AX-012).
+	if req.IdempotencyKey != "" {
+		if _, original, conflict := e.resolveIdempotencyKey(req, nil); original != nil {
+			ack = e.replayIdempotentAck(req, original)
+			return ack
+		} else if conflict != nil {
+			ack.Status = AckConflict
+			ack.Message = keyConflictMessage(req.IdempotencyKey, conflict, requestPayloadDigest(req, nil))
+			e.rejectRequestReceipt(req, ack)
+			return ack
+		}
+	}
+	refuse := func() SettingsAck {
+		e.rejectRequestReceipt(req, ack)
+		return ack
+	}
+	defer func() { e.rememberAck(req.ID, ack) }()
+	if req.Session != e.controllerSessionID() {
 		ack.Status = AckStale
 		ack.Message = "The controller session changed. Reload the task before requeuing."
-		return
+		return refuse()
 	}
 	t := e.State.Backlog.Task(req.TaskID)
 	if t == nil || t.Status != "blocked" || req.TaskRevision != hashJSON(t) {
 		ack.Status = AckConflict
 		ack.Message = "The task changed. Inspect its current state before requeuing."
-		return
+		return refuse()
 	}
 	for _, a := range e.State.Attempts {
 		if activeAttempt(a) {
 			ack.Status = AckConflict
 			ack.Message = "Wait until active work finishes before requeuing this task."
-			return
+			return refuse()
 		}
 	}
 	data, err := os.ReadFile(e.Config.Todo)
 	if err != nil {
 		ack.Message = err.Error()
-		return
+		return refuse()
 	}
-	if digest(data) != e.State.ExportHash {
+	// Equivalent formatting is not a change (AX-018): only an edit that
+	// changed content keeps the requeue waiting for its boundary import.
+	if edit := e.classifyBacklog(data); edit.Changed && !edit.Equivalent {
 		ack.Status = AckConflict
 		ack.Message = "The task file changed. Wait for Looper to import the edit."
 		if e.inputPending {
 			ack.Message = "The task file needs correction before Looper can apply changes. Correct it to continue."
 		}
-		return
+		return refuse()
 	}
 	if t.Deferred() {
 		ack.Status = AckConflict
 		ack.Message = "Task is deferred. Meet its resume condition, then remove looper:deferred and set todo in the task file."
-		return
+		return refuse()
 	}
+	staged := stagedBacklogRequest{
+		backlog: clone(e.State.Backlog), planSignature: e.State.PlanSignature,
+		finished: e.State.Finished, reviewedTip: e.State.ReviewedTip,
+		requests: append([]*RequestRecord{}, e.State.Requests...),
+	}
+	rec := e.beginRequestReceipt(req)
+	rec.AffectedTasks = []string{req.TaskID}
 	t.Status = "todo"
 	t.Blockers = nil
 	t.UnblockWhen = ""
@@ -306,13 +345,27 @@ func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
 	// above and this export, leaving a pending attempt that reads its scope.
 	// The cleared signature forces the next planning pass to rebuild.
 	e.State.PlanSignature = ""
-	if err = e.export(); err != nil {
-		e.err = err
-		ack.Message = err.Error()
-		return
-	}
 	ack.Status = AckApplied
 	ack.Message = "Task requeued. Retained work is available for reuse."
-	e.event("requeue", req.TaskID+" requeued after user confirmation")
+	rec.State = RequestApplied
+	rec.DecidedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	rec.Summary, rec.Ack = ack.Message, &ack
+	if err = e.export(); err != nil {
+		// Roll the staged requeue back and persist the rollback with a failed
+		// receipt before the poisoned engine exits, mirroring add-task.
+		staged.rollback(e)
+		ack.Status = AckError
+		ack.Message = err.Error()
+		e.failStagedRequest(rec, ack, err)
+		if saveErr := e.persistRequestReceipts(); saveErr != nil {
+			ack.Message = errors.Join(err, saveErr).Error()
+		}
+		e.err = err
+		return
+	}
+	requeue := e.identity()
+	requeue.TaskID = req.TaskID
+	requeue.RequestID = req.ID
+	e.eventData("requeue", req.TaskID+" requeued after user confirmation", requeue.merge(nil))
 	return
 }

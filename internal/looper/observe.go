@@ -50,7 +50,7 @@ type Observation struct {
 }
 
 func activeAttempt(a *Attempt) bool {
-	return a.Phase != "done" && a.Phase != "blocked"
+	return a.Phase != "done" && a.Phase != "blocked" && a.Phase != "cancelled"
 }
 
 // Restrict discovery to Looper-owned artifacts. Never inspect agent home files.
@@ -105,7 +105,7 @@ func observeWorker(a *Attempt) WorkerObservation {
 		w.OutputBytes = st.Size()
 		if st.Size() > 0 {
 			w.LastOutput = st.ModTime().UTC().Format(time.RFC3339Nano)
-			age := int64(max(0, time.Since(st.ModTime()).Seconds()))
+			age := int64(max(0, wallClock().Sub(st.ModTime()).Seconds()))
 			w.OutputAge = &age
 		}
 	}
@@ -118,16 +118,21 @@ func observeWorker(a *Attempt) WorkerObservation {
 	return w
 }
 
-func observe(c Config, s *State) Observation {
+func observe(c Config, s *State, snap *StoreSnapshot) Observation {
 	_, dir := projectPaths(c)
-	o := Observation{Version: observationVersion, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	o := Observation{Version: observationVersion, ObservedAt: wallClock().UTC().Format(time.RFC3339Nano),
 		ControllerOwned: repositoryOwned(c), View: LoadView(dir), Workers: []WorkerObservation{}}
 	o.Executable = currentBuild()
 	o.Controller, _ = readController(dir)
 	o.BuildMismatch = o.ControllerOwned && o.Controller != nil && o.Controller.Build != nil && *o.Controller.Build != o.Executable
 	o.ViewMatchesController = o.ControllerOwned && o.Controller != nil && o.View != nil && o.View.Session == o.Controller.Session
-	if o.View != nil {
-		o.EventCursor = o.View.EventCursor
+	// The cursor is the store's committed high-water mark from the same
+	// snapshot as the state (AX-003). The published view is presentation
+	// only: a stopped run has none, and a live view can lag or lead the
+	// state being reported. Without a snapshot there is no store, so zero
+	// honestly reports that no position exists.
+	if snap != nil {
+		o.EventCursor = snap.HighWater
 	}
 	if s != nil {
 		for _, a := range s.Attempts {
@@ -142,25 +147,43 @@ func observe(c Config, s *State) Observation {
 }
 
 // Preserve existing status fields; the observation is an additive contract.
-func statusReport(c Config, s *State, timing TimingReport, statistics ui.StatisticsView) any {
+func statusReport(c Config, snap *StoreSnapshot, timing TimingReport, statistics ui.StatisticsView) any {
+	// The legacy status document is shape-frozen (AX-001) and its schema
+	// admits no export_semantics, requests, cancellations, or startup_seed
+	// key. Those are saved-state machinery — the AX-018 fingerprint, the
+	// AX-009 request receipts, the AX-019 pending cancellations, and the
+	// AX-022 startup seed that marks the bootstrap window — so the
+	// projection reports a copy of the state without them; omitempty then
+	// leaves each key out. The copy is shallow and read-only, so the
+	// engine's state keeps every hidden field.
+	state := *snap.State
+	state.ExportSemantics = ""
+	state.Requests = nil
+	state.Cancellations = nil
+	state.StartupSeed = false
 	return struct {
 		*State
 		Observation Observation       `json:"observation"`
 		Timing      TimingReport      `json:"timing"`
 		Statistics  ui.StatisticsView `json:"statistics"`
-	}{s, observe(c, s), timing, statistics}
+	}{&state, observe(c, snap.State, snap), timing, statistics}
 }
 
 func inspectTask(c Config, store *Store, out io.Writer) error {
 	if c.InspectTask == "" {
-		return fmt.Errorf("usage: looper inspect <task-id> [--json]")
+		p := usageFailure("usage_invalid", "usage: looper inspect <task-id> [--json]")
+		// The legacy contract reported this from the read path, not parsing.
+		p.legacyExit = exitOperationFailed
+		return p
 	}
 	s, err := store.Load()
 	if err != nil {
 		return err
 	}
 	if s == nil {
-		return fmt.Errorf("no saved run")
+		p := runNotFoundForRun(c, "", "looper")
+		p.Message = "no saved run"
+		return p
 	}
 	for _, t := range s.Backlog.Tasks {
 		if t.ID != c.InspectTask {
@@ -182,7 +205,7 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		timing, err := store.Timing(time.Now().UTC())
+		timing, err := store.Timing(wallClock().UTC())
 		if err != nil {
 			return err
 		}
@@ -213,7 +236,7 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("unknown task %q", c.InspectTask)
+	return taskNotFoundError(c.InspectTask, len(s.Backlog.Tasks))
 }
 
 type HealthFinding struct {
@@ -261,25 +284,41 @@ func doctorJSON(c Config, out io.Writer) int {
 	_, dir := projectPaths(c)
 	findings := []HealthFinding{}
 	var s *State
-	store, err := OpenStoreReadonly(filepath.Join(dir, "state.db"))
+	var snap *StoreSnapshot
+	store, err := openObservedStore(dir)
 	if os.IsNotExist(err) {
 		findings = append(findings, HealthFinding{Code: "no_saved_run", Severity: "info", Message: "No saved run exists.", Action: "Start looper in this project."})
 	} else if err != nil {
 		findings = append(findings, HealthFinding{Code: "state_unreadable", Severity: "error", Message: err.Error(), Action: "Check the state database path and permissions."})
 	} else {
 		defer store.Close()
-		s, err = store.Load()
+		// One snapshot pairs the diagnosed state with its cursor (AX-003).
+		snap, err = store.Snapshot()
 		if err != nil {
 			findings = append(findings, HealthFinding{Code: "state_unreadable", Severity: "error", Message: err.Error(), Action: "Retain the database and inspect the failure before restarting."})
 		}
+		if snap != nil {
+			s = snap.State
+		}
 	}
-	o := observe(c, s)
+	o := observe(c, s, snap)
 	findings = append(findings, diagnose(o, s)...)
 	if !o.ControllerOwned && s != nil && retained(s) {
-		head, _ := gitText(c.Root, "rev-parse", "HEAD")
-		branch, _ := gitText(c.Root, "symbolic-ref", "-q", "HEAD")
+		head, branch, unborn := headDetail(c.Root)
 		if head != s.Head || branch != s.Branch {
-			findings = append(findings, HealthFinding{Code: "branch_moved", Severity: "warning", Message: "The project branch differs from the retained run baseline.", Action: "Resume accepts a descendant commit on the same branch only when committed and working files match the accepted or verified tree. Preserve other edits and reconcile them before resuming."})
+			// The finding names the concrete difference (AX-015): the saved
+			// and observed revisions, or an unborn HEAD stated as unborn
+			// rather than as a branch that moved.
+			if unborn {
+				findings = append(findings, HealthFinding{Code: "branch_moved", Severity: "warning",
+					Message: fmt.Sprintf("The project HEAD is unborn: branch %s has no commits, so the retained baseline %s on %s cannot be compared.", branchLabel(branch), s.Head, branchLabel(s.Branch)),
+					Action:  "Make a commit on the saved branch or restore it, then resume; the retained work and its results stay unchanged. Read the saved baseline with: looper status --json"})
+			} else {
+				findings = append(findings, HealthFinding{Code: "branch_moved", Severity: "warning",
+					Message: fmt.Sprintf("The project branch differs from the retained run baseline: expected %s on %s, observed %s on %s.", s.Head, branchLabel(s.Branch), head, branchLabel(branch)),
+					Action: "Resume accepts a descendant commit on the same branch when committed and working files match the accepted or verified tree, or when the committed changes touch no file inside a retained or published attempt's write scope. " +
+						"List the committed changes with: git diff --name-only " + s.Head + " " + head + ". Preserve other edits and reconcile them before resuming."})
+			}
 		}
 		if store != nil {
 			var id int64
@@ -291,6 +330,30 @@ func doctorJSON(c Config, out io.Writer) int {
 				}
 			}
 		}
+	}
+	if c.Contract == ContractVersionV2 {
+		// The version 2 document adds the bounded request summaries beside
+		// the same findings, and its exit code follows the transport
+		// registry: findings are observation content, so a command that
+		// completed exits 0 however unhealthy the run looks.
+		requests := collectDoctorRequestsSummary(dir, s, wallClock())
+		doc := &doctorCompactDocument{
+			ContractVersion:   ContractVersionV2,
+			SchemaVersion:     doctorCompactSchemaVersion,
+			Kind:              doctorCompactKind,
+			Observation:       o,
+			Findings:          findings,
+			Requests:          requests,
+			AutomaticRecovery: false,
+			Detail: doctorDetailRoutes{
+				Requests: "looper requests --contract v2 --json",
+				Status:   "looper status --contract v2 --json",
+			},
+		}
+		if json.NewEncoder(out).Encode(doc) != nil {
+			return 1
+		}
+		return exitOK
 	}
 	code := 0
 	for _, f := range findings {
@@ -310,15 +373,117 @@ func doctorJSON(c Config, out io.Writer) int {
 	return code
 }
 
-// Summaries omit arguments, tool output, and reasoning. Raw evidence stays local.
+// The version 2 doctor document contract,
+// docs/contracts/schemas/v2/doctor.schema.json (AX-010).
+const (
+	doctorCompactSchemaVersion = 2
+	doctorCompactKind          = "looper.doctor"
+	// doctorWaitingOnMax bounds the waiting-request entries the summary
+	// carries; the count of what was omitted rides beside them.
+	doctorWaitingOnMax = 8
+)
+
+// doctorCompactDocument is the doctor document under contract version 2:
+// the same observation and findings shape the legacy document carries, plus
+// the bounded pending-request summaries (AX-010) and their detail routes.
+type doctorCompactDocument struct {
+	ContractVersion   int                   `json:"contract_version"`
+	SchemaVersion     int                   `json:"schema_version"`
+	Kind              string                `json:"kind"`
+	Observation       Observation           `json:"observation"`
+	Findings          []HealthFinding       `json:"findings"`
+	Requests          doctorRequestsSummary `json:"requests"`
+	AutomaticRecovery bool                  `json:"automatic_recovery"`
+	Detail            doctorDetailRoutes    `json:"detail"`
+}
+
+// doctorRequestsSummary names the pending work the run owes an outcome to:
+// queued envelopes, waiting durable requests, the oldest of them, and one
+// bounded list of what each waits for.
+type doctorRequestsSummary struct {
+	Pending          int                    `json:"pending"`
+	Waiting          int                    `json:"waiting,omitempty"`
+	OldestAgeSeconds *int                   `json:"oldest_age_seconds,omitempty"`
+	WaitingOn        []doctorWaitingRequest `json:"waiting_on"`
+	WaitingOmitted   int                    `json:"waiting_omitted,omitempty"`
+}
+
+// doctorWaitingRequest is one non-terminal request's diagnosis line.
+type doctorWaitingRequest struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	State      string `json:"state"`
+	Reason     string `json:"reason"`
+	AgeSeconds *int   `json:"age_seconds,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+}
+
+type doctorDetailRoutes struct {
+	Requests string `json:"requests"`
+	Status   string `json:"status"`
+}
+
+// collectDoctorRequestsSummary collects the bounded pending-request summary
+// from the same durable evidence the request queries read. The oldest
+// entries come first: a bounded summary keeps exactly the requests a caller
+// must act on.
+func collectDoctorRequestsSummary(dir string, s *State, now time.Time) doctorRequestsSummary {
+	pending, waiting, oldest := pendingRequestSummary(dir, s, now)
+	summary := doctorRequestsSummary{Pending: pending, Waiting: waiting, OldestAgeSeconds: oldest, WaitingOn: []doctorWaitingRequest{}}
+	ev := collectRequestEvidence(dir, s, now)
+	var outstanding []*requestQueryRecord
+	for _, rec := range ev.records {
+		if !requestStateTerminal(rec.state) {
+			outstanding = append(outstanding, rec)
+		}
+	}
+	sort.SliceStable(outstanding, func(i, j int) bool {
+		return outstanding[i].ageBase().Before(outstanding[j].ageBase())
+	})
+	shown := 0
+	for _, rec := range outstanding {
+		if shown >= doctorWaitingOnMax {
+			break
+		}
+		reason, detail := rec.waitReason, rec.waitDetail
+		if reason == "" {
+			switch rec.state {
+			case RequestSubmitted:
+				reason = "submitted"
+			case RequestAccepted:
+				reason = "accepted"
+			default:
+				reason = "unknown"
+			}
+		}
+		entry := doctorWaitingRequest{
+			ID: clampJSONString(rec.id, maxErrorString), Type: clampJSONString(rec.typ, maxErrorString),
+			State: rec.state, Reason: clampJSONString(reason, maxErrorString), Detail: clampJSONString(detail, maxErrorString),
+		}
+		if age := rec.ageSeconds(); age > 0 || !rec.ageBase().IsZero() {
+			entry.AgeSeconds = &age
+		}
+		summary.WaitingOn = append(summary.WaitingOn, entry)
+		shown++
+	}
+	summary.WaitingOmitted = max(0, len(outstanding)-shown)
+	return summary
+}
+
+// Summaries omit arguments, tool inputs, and reasoning. Raw evidence stays
+// local. A failing tool's own error line rides beside the action (AX-021), so
+// a reader can judge severity from the journal without opening the raw
+// session log.
 func workerActivity(line []byte) []string {
 	var v struct {
 		Type    string `json:"type"`
 		IsError bool   `json:"is_error"`
 		Message struct {
 			Content []struct {
-				Type, Name string
-				IsError    bool `json:"is_error"`
+				Type    string          `json:"type"`
+				Name    string          `json:"name"`
+				IsError bool            `json:"is_error"`
+				Content json.RawMessage `json:"content"`
 			} `json:"content"`
 		} `json:"message"`
 		Item struct {
@@ -335,7 +500,11 @@ func workerActivity(line []byte) []string {
 			actions = append(actions, "Tool started: "+sanitize(b.Name))
 		}
 		if b.Type == "tool_result" && b.IsError {
-			actions = append(actions, "Tool reported an error")
+			action := "Tool reported an error"
+			if excerpt := toolErrorExcerpt(b.Content); excerpt != "" {
+				action += ": " + excerpt
+			}
+			actions = append(actions, action)
 		}
 	}
 	if v.Item.Type == "command_execution" {

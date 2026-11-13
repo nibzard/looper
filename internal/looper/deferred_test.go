@@ -8,7 +8,7 @@ import (
 
 func TestDeferredFindingPreservesRequiredWork(t *testing.T) {
 	e := snapshotEngine(t)
-	e.addFinding(Finding{Title: "Native checks", Details: "Pass native tests", Evidence: "Linux host", Owner: "agent", Key: "native", DeferUntil: "Native round and macOS host available"})
+	applyFinding(t, e, Finding{Title: "Native checks", Details: "Pass native tests", Evidence: "Linux host", Owner: "agent", Key: "native", DeferUntil: "Native round and macOS host available"})
 	task := &e.State.Backlog.Tasks[len(e.State.Backlog.Tasks)-1]
 	if !task.Deferred() || task.Status != "blocked" || task.OperatorOnly() || task.UnblockWhen == "" {
 		t.Fatalf("deferred task: %+v", task)
@@ -24,7 +24,7 @@ func TestDeferredFindingPreservesRequiredWork(t *testing.T) {
 		t.Fatal("deferral absent from view")
 	}
 	task.Status = "blocked"
-	e.addFinding(Finding{Title: "Native checks", Details: "Still required", Evidence: "Same host", Owner: "agent", Key: "native"})
+	applyFinding(t, e, Finding{Title: "Native checks", Details: "Still required", Evidence: "Same host", Owner: "agent", Key: "native"})
 	if !e.State.Backlog.Task(id).Deferred() || e.State.Backlog.Task(id).Status != "blocked" {
 		t.Fatal("review reopened deferred task")
 	}

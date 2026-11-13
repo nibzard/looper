@@ -93,11 +93,11 @@ func TestFirstRunDecisionGates(t *testing.T) {
 	}
 	t.Setenv("LOOPER_NO_PROMPT", "")
 	os.Unsetenv("LOOPER_NO_PROMPT")
-	// Setting flags and environment variables skip the form.
+	// Explicit settings prefill setup; they do not bypass interactive setup.
 	flagged := repoConfig(t, "--agent", "claude")
 	flagged.Command = "run"
 	d = firstRunDecision(flagged, os.Stdin, os.Stdout)
-	if d.Ask || !strings.Contains(d.Reason, "flags or environment") {
+	if d.Ask || !strings.Contains(d.Reason, "terminals") {
 		t.Fatalf("flag gate broken: %+v", d)
 	}
 	envConfig := repoConfig(t)
@@ -125,12 +125,31 @@ func TestFirstRunDecisionGates(t *testing.T) {
 	}
 }
 
+// The suppression flags apply to every eligible controller start, including
+// the unattached tui path (T011): --plain, --json, --yes, and
+// LOOPER_NO_PROMPT=1 keep the automatic form from appearing there too.
+func TestFirstRunDecisionSuppressesOnTUI(t *testing.T) {
+	for _, args := range [][]string{{"tui", "--plain"}, {"tui", "--json"}, {"tui", "--yes"}} {
+		c := repoConfig(t, args...)
+		d := firstRunDecision(c, os.Stdin, os.Stdout)
+		if d.Ask {
+			t.Fatalf("%v must suppress the first-run form: %+v", args, d)
+		}
+	}
+	c := repoConfig(t, "tui")
+	t.Setenv("LOOPER_NO_PROMPT", "1")
+	d := firstRunDecision(c, os.Stdin, os.Stdout)
+	if d.Ask || !strings.Contains(d.Reason, "LOOPER_NO_PROMPT") {
+		t.Fatalf("LOOPER_NO_PROMPT must suppress the tui form: %+v", d)
+	}
+}
+
 func TestMaybeFirstRunSkipsWithoutTerminal(t *testing.T) {
 	c := repoConfig(t)
 	args := []string{}
 	got, start, err := maybeFirstRun(args, c, os.Stdin, &bytes.Buffer{}, &bytes.Buffer{})
-	if err != nil || !start {
-		t.Fatalf("unexpected result: %v %v", start, err)
+	if err == nil || start || !strings.Contains(err.Error(), "Choose an agent") {
+		t.Fatalf("a fresh unattended project must require an agent: %v %v", start, err)
 	}
 	if got.Agent != c.Agent {
 		t.Fatal("config replaced without asking")
@@ -209,5 +228,54 @@ func TestProfileSettingsRoundTrip(t *testing.T) {
 	}
 	if err := back.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The form default for the coding agent is the shared defaultAgent, so a
+// missing or partial profile never prefills a different agent than a
+// defaulted run. Explicit saved agents stay untouched.
+func TestSettingsFromProfileAgentDefault(t *testing.T) {
+	if got := settingsFromProfile(nil).Agent; got != defaultAgent {
+		t.Fatalf("missing profile must default to %s, got %q", defaultAgent, got)
+	}
+	partial := settingsFromProfile(&Profile{Version: 1, Jobs: 2})
+	if partial.Agent != defaultAgent || partial.Jobs != 2 {
+		t.Fatalf("absent agent field must default to %s: %+v", defaultAgent, partial)
+	}
+	for _, agent := range []string{"codex", "claude", "zcode"} {
+		s := settingsFromProfile(&Profile{Version: 1, Agent: agent, ReviewAgent: agent})
+		if s.Agent != agent || s.ReviewAgent != agent {
+			t.Fatalf("explicit agent %s changed: %+v", agent, s)
+		}
+	}
+}
+
+// A fresh form prefilled from the default and edited only for parallel
+// sessions saves defaultAgent, not a hardcoded agent. The value survives a
+// profile save and reload.
+func TestFreshFormSavesDefaultAgent(t *testing.T) {
+	before := settingsFromProfile(nil)
+	after := before
+	after.Jobs = 3
+	saved := ProfileFromSettings(after)
+	if saved.Agent != defaultAgent {
+		t.Fatalf("saving a fresh form must pin %s, got %q", defaultAgent, saved.Agent)
+	}
+	if err := saved.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := SaveProfile(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadProfile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Agent != defaultAgent {
+		t.Fatalf("reload lost the agent: %+v", reloaded)
+	}
+	if s := settingsFromProfile(reloaded); s.Agent != defaultAgent || s.Jobs != 3 {
+		t.Fatalf("reloaded form values wrong: %+v", s)
 	}
 }

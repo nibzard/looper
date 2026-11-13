@@ -98,14 +98,21 @@ func (e *Engine) startupImportPlans() {
 		return
 	}
 	requestID := identifier("import")
-	plans, err := capturePlans(e.Dir, requestID, e.Config.Plans)
+	plans, err := readPlans(e.Config.Plans)
 	if err != nil {
 		e.event("import-error", err.Error())
 		e.err = err
 		return
 	}
 	if prior := e.matchingImport(plans, ImportApplied, ImportQueued, ImportWaiting, ImportPlanning); prior != nil {
-		e.event("import", fmt.Sprintf("Plans already recorded by import %s (%s).", prior.RequestID, prior.Status))
+		// The recorded import already owns the captured copy; a duplicate
+		// submission must not persist another unreferenced one.
+		e.requestEvent("import", fmt.Sprintf("Plans already recorded by import %s (%s).", prior.RequestID, prior.Status), prior.RequestID)
+		return
+	}
+	if err = persistPlans(e.Dir, requestID, plans); err != nil {
+		e.event("import-error", err.Error())
+		e.err = err
 		return
 	}
 	record := &ImportRecord{RequestID: requestID, Status: ImportQueued, Enqueued: time.Now().UTC().Format(time.RFC3339Nano)}
@@ -115,17 +122,19 @@ func (e *Engine) startupImportPlans() {
 		record.SourcePaths = append(record.SourcePaths, p.Path)
 	}
 	e.State.Imports = append(e.State.Imports, record)
+	// Durable acceptance commits with the receipt it owns (AX-009).
+	e.syncImportReceipt(record)
 	if err = e.save(); err != nil {
 		e.err = err
 		return
 	}
-	e.event("import", fmt.Sprintf("Queued startup plan import %s.", requestID))
+	e.requestEvent("import", fmt.Sprintf("Queued startup plan import %s.", requestID), requestID)
 }
 
 // analyzeImport runs the configured review agent in a private inspection
 // worktree over the current backlog, prior imported requirements, and the
 // new captured text. Analysis must not change code.
-func (e *Engine) analyzeImport(ctx context.Context, plans []capturedPlan) (*importProposal, error) {
+func (e *Engine) analyzeImport(ctx context.Context, requestID string, plans []capturedPlan) (*importProposal, error) {
 	name := identifier("import-analysis")
 	work, err := e.Repo.Workspace(name, e.State.Tip, e.State.Backlog)
 	if err != nil {
@@ -164,7 +173,7 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 		e.State.Tip, c.NewRequirements)
 	prompt += "\n" + taskClassificationInstructions
 	prompt += c.references()
-	raw, err := e.runImportAnalysis(ctx, op, work, dir, prompt, e.importHeartbeat)
+	raw, err := e.runImportAnalysis(ctx, op, work, dir, prompt, requestID, e.importHeartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +207,7 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 // agent stream path, readable action detail, and controller heartbeats. The
 // agent keeps its normal review tools and result contract; analysis of a
 // long run stays observable instead of presenting a silent planning label.
-func (e *Engine) runImportAnalysis(ctx context.Context, op operation, work, dir, prompt string, heartbeat time.Duration) (json.RawMessage, error) {
+func (e *Engine) runImportAnalysis(ctx context.Context, op operation, work, dir, prompt, requestID string, heartbeat time.Duration) (json.RawMessage, error) {
 	return e.runConsultation(ctx, op, work, dir, prompt, consultation{
 		state:       "planning",
 		startDetail: "Starting the import analysis agent",
@@ -207,6 +216,7 @@ func (e *Engine) runImportAnalysis(ctx context.Context, op operation, work, dir,
 		actionKind:  "import-activity",
 		waitKind:    "import",
 		waitLabel:   "import analysis",
+		identity:    eventIdentity{RequestID: requestID},
 		heartbeat:   heartbeat,
 	})
 }

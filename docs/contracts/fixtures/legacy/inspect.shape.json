@@ -1,0 +1,85 @@
+{
+  "attempts": [
+    {
+      "agent": "string",
+      "base": "string",
+      "diagnosed": "boolean",
+      "directory": "string",
+      "failure_hash": "string",
+      "feedback": "string",
+      "id": "string",
+      "phase": "string",
+      "ref": "string",
+      "repairs": "integer",
+      "repeats": "integer",
+      "task": {
+        "created_at": "string",
+        "depends_on": [
+          "string"
+        ],
+        "files": [
+          "string"
+        ],
+        "id": "string",
+        "priority": "integer",
+        "status": "string",
+        "title": "string"
+      },
+      "worktree": "string",
+      "worktrees": [
+        "string"
+      ]
+    }
+  ],
+  "checks": "empty array",
+  "logs": [
+    "string"
+  ],
+  "schema_version": "integer",
+  "task": {
+    "created_at": "string",
+    "depends_on": [
+      "string"
+    ],
+    "files": [
+      "string"
+    ],
+    "id": "string",
+    "priority": "integer",
+    "status": "string",
+    "title": "string"
+  },
+  "timing": {
+    "active_seconds": "null",
+    "attempts": "integer",
+    "available": "boolean",
+    "check_seconds": "null",
+    "elapsed_seconds": "null",
+    "history_complete": "boolean",
+    "other_seconds": "null",
+    "recorded_attempts": "integer",
+    "running_processes": "integer",
+    "task_id": "string",
+    "unknown_processes": "integer",
+    "worker_seconds": "null"
+  },
+  "workers": [
+    {
+      "attempt_id": "string",
+      "last_output_at": "string",
+      "log": "string",
+      "output_age_seconds": "integer",
+      "output_bytes": "integer",
+      "phase": "string",
+      "process": {
+        "identity": "string",
+        "pid": "integer",
+        "running": "boolean",
+        "started": "string"
+      },
+      "progress": "string",
+      "retained": "boolean",
+      "task_id": "string"
+    }
+  ]
+}

@@ -38,8 +38,12 @@ type Backlog struct {
 
 // backlogSchema must accept every field the engine itself writes, including
 // goal and unblock_when. Looper writes it beside the task file when no schema
-// exists so agents can validate its export. TestShippedSchemaMatchesDefault
-// keeps this copy and the repository's to-do.schema.json identical.
+// exists so agents can validate its export. That on-disk file is a control
+// file: Repository.Excluded always lists it, snapshots strip it, and Workspace
+// seeds each assembled tree from the run root's copy, so its bytes are runtime
+// state a candidate cannot transport. The shipped reference copy is tracked
+// content at docs/to-do.schema.json; TestShippedSchemaMatchesDefault keeps the
+// two identical.
 const backlogSchema = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Looper Todo",
@@ -71,7 +75,7 @@ const backlogSchema = `{
           "id": { "type": "string" },
           "title": { "type": "string", "minLength": 1 },
           "priority": { "type": "integer", "minimum": 1, "maximum": 5 },
-          "status": { "type": "string", "enum": ["todo", "doing", "blocked", "done"] },
+          "status": { "type": "string", "enum": ["todo", "doing", "blocked", "done", "cancelled"] },
           "details": { "type": "string" },
           "steps": { "type": "array", "items": { "type": "string" } },
           "blockers": { "type": "array", "items": { "type": "string" } },
@@ -104,7 +108,7 @@ func (b Backlog) Validate() error {
 			return fmt.Errorf("duplicate task %s", t.ID)
 		}
 		switch t.Status {
-		case "todo", "doing", "done", "blocked":
+		case "todo", "doing", "done", "blocked", "cancelled":
 		default:
 			return fmt.Errorf("invalid status for %s", t.ID)
 		}
@@ -277,6 +281,53 @@ type Plan struct {
 	Tasks  []Scope `json:"tasks"`
 }
 
+// writePathError reports the plan scope whose write path cannot scope
+// repository work. The task identity lets a caller quarantine that one task
+// instead of failing the whole controller.
+type writePathError struct {
+	TaskID string
+	Path   string
+}
+
+func (e *writePathError) Error() string { return fmt.Sprintf("invalid write path %q", e.Path) }
+
+// validWritePath normalizes one write path and reports whether it can scope
+// repository work: relative to the repository root, inside it, and literal.
+// Plan scopes and task files entries follow the same rule because a planner
+// copies a task's files list into its write paths.
+func validWritePath(path string) (string, bool) {
+	p := filepath.ToSlash(filepath.Clean(path))
+	return p, !(filepath.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") || strings.ContainsAny(p, "*?["))
+}
+
+// invalidFiles lists the normalized entries in t.Files that cannot scope
+// repository work.
+func (t Task) invalidFiles() []string {
+	var bad []string
+	for _, f := range t.Files {
+		if p, ok := validWritePath(f); !ok {
+			bad = append(bad, p)
+		}
+	}
+	return bad
+}
+
+// reportedFiles splits a summary's reported file entries into the entries a
+// plan scope can use and the normalized rejects. applyResult merges only the
+// usable entries, so a worker report cannot put an unscannable path into a
+// task's files list, where the next planning pass would copy it into its
+// write paths.
+func reportedFiles(files []string) (usable, rejected []string) {
+	for _, f := range files {
+		if p, ok := validWritePath(f); !ok {
+			rejected = append(rejected, p)
+			continue
+		}
+		usable = append(usable, f)
+	}
+	return usable, rejected
+}
+
 func (p *Plan) Validate(b Backlog, override string) error {
 	if override != "" {
 		p.Verify = override
@@ -295,15 +346,18 @@ func (p *Plan) Validate(b Backlog, override string) error {
 			s.Paths = []string{"."}
 		}
 		for j, path := range s.Paths {
-			path = filepath.ToSlash(filepath.Clean(path))
-			if filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, "../") || strings.ContainsAny(path, "*?[") {
-				return fmt.Errorf("invalid write path %q", path)
+			normalized, ok := validWritePath(path)
+			if !ok {
+				return &writePathError{TaskID: s.TaskID, Path: normalized}
 			}
-			s.Paths[j] = path
+			s.Paths[j] = normalized
 		}
 	}
 	for _, t := range b.Tasks {
-		if t.Status != "done" && !t.Marker() && !seen[t.ID] {
+		// Cancelled work never runs again, so it takes no write scope: a
+		// default whole-tree scope for it would veto every overlapping task
+		// in compatible() for work that no longer exists (AX-019).
+		if t.Status != "done" && t.Status != "cancelled" && !t.Marker() && !seen[t.ID] {
 			p.Tasks = append(p.Tasks, Scope{TaskID: t.ID, Paths: []string{"."}})
 		}
 	}
@@ -316,6 +370,19 @@ func (p Plan) Scope(id string) Scope {
 		}
 	}
 	return Scope{TaskID: id, Paths: []string{"."}}
+}
+
+// dropScope removes one task's scope so validation can reject that task
+// alone. The next Validate pass re-adds the repository default for an
+// unfinished task.
+func (p *Plan) dropScope(id string) {
+	kept := make([]Scope, 0, len(p.Tasks))
+	for _, s := range p.Tasks {
+		if s.TaskID != id {
+			kept = append(kept, s)
+		}
+	}
+	p.Tasks = kept
 }
 func overlaps(a, b Scope) bool {
 	for _, x := range a.Paths {
@@ -364,8 +431,9 @@ func (s Summary) Validate(id string) error {
 }
 
 // Attempt is one worker run of a task. Phase is its position in the engine
-// state machine: running, ready, verifying, integrated, done, blocked, or
-// resume. Recovery coerces any other loaded value to ready or resume.
+// state machine: running, ready, verifying, integrated, done, blocked,
+// resume, or cancelled (a resume attempt retired by task cancellation,
+// AX-019). Recovery coerces any other loaded value to ready or resume.
 type Attempt struct {
 	ID           string     `json:"id"`
 	Task         Task       `json:"task"`
@@ -403,6 +471,11 @@ type ImportRecord struct {
 	Error       string       `json:"error,omitempty"`
 	Enqueued    string       `json:"enqueued"`
 	Applied     string       `json:"applied,omitempty"`
+	// IdempotencyKey and PayloadDigest carry the caller key one import was
+	// submitted with, when it carried one (AX-012). Optional state fields,
+	// omitted when empty, exactly like the rest of the import record.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	PayloadDigest  string `json:"payload_digest,omitempty"`
 }
 
 // CoveredRef records a requirement already satisfied by existing work.
@@ -447,18 +520,53 @@ type State struct {
 	Published         string            `json:"published"`
 	Backlog           Backlog           `json:"backlog"`
 	ExportHash        string            `json:"export_hash"`
-	ExportBefore      string            `json:"export_before,omitempty"`
-	ExportPending     bool              `json:"export_pending,omitempty"`
-	Attempts          []*Attempt        `json:"attempts"`
-	Plan              *Plan             `json:"plan,omitempty"`
-	PlanSignature     string            `json:"plan_signature,omitempty"`
-	Publication       *Candidate        `json:"publication,omitempty"`
-	Imports           []*ImportRecord   `json:"imports,omitempty"`
-	Finished          bool              `json:"finished"`
-	Integrated        int               `json:"integrated"`
-	ReviewedAt        int               `json:"reviewed_at"`
-	ReviewedTip       string            `json:"reviewed_tip,omitempty"`
-	ReviewPending     bool              `json:"review_pending,omitempty"`
+	// ExportSemantics is the semantic fingerprint of the content ExportHash
+	// digests (AX-018). It decides whether changed task-file bytes differ
+	// only in formatting while an export is pending and the in-memory
+	// backlog already carries the pending mutation. States saved before it
+	// existed load with it empty and fall back to the saved backlog.
+	ExportSemantics string          `json:"export_semantics,omitempty"`
+	ExportBefore    string          `json:"export_before,omitempty"`
+	ExportPending   bool            `json:"export_pending,omitempty"`
+	Attempts        []*Attempt      `json:"attempts"`
+	Plan            *Plan           `json:"plan,omitempty"`
+	PlanSignature   string          `json:"plan_signature,omitempty"`
+	Publication     *Candidate      `json:"publication,omitempty"`
+	Imports         []*ImportRecord `json:"imports,omitempty"`
+	// Requests holds the durable request receipts (AX-009). Each commits in
+	// the same save as the mutation it records, so a receipt and its outcome
+	// never disagree across a restart.
+	Requests []*RequestRecord `json:"requests,omitempty"`
+	// Cancellations holds decided task cancellations whose target work has
+	// not reached a safe boundary (AX-019). Each survives a restart and the
+	// loop drives it at every boundary until the work drains; the receipt
+	// with the same request identity stays waiting until then. Optional
+	// state field: states saved before AX-019 load with none.
+	Cancellations []*PendingCancellation `json:"cancellations,omitempty"`
+	Finished      bool                   `json:"finished"`
+	Integrated    int                    `json:"integrated"`
+	ReviewedAt    int                    `json:"reviewed_at"`
+	ReviewedTip   string                 `json:"reviewed_tip,omitempty"`
+	ReviewPending bool                   `json:"review_pending,omitempty"`
+	// StartupSeed marks a state written only so a starting controller's run
+	// is publicly queryable before readiness is reported (AX-022). It is not
+	// a baseline to resume: initialization treats it as absent and seeds the
+	// real baseline itself, adopting the startup snapshot when the project
+	// did not move under it. Only the bootstrap window keeps the marker
+	// saved; every completed initialization overwrites the state without it.
+	StartupSeed bool `json:"startup_seed,omitempty"`
+}
+
+// PendingCancellation is one decided cancellation waiting for its target
+// work to drain (AX-019). TaskIDs is the decided set — the target and every
+// live dependent a cascade took along — fixed at decision time against the
+// revision the caller read. The drive applies it at the first boundary where
+// no task in the set holds an active attempt; a task that completed before
+// that boundary keeps its accepted result and is named in the outcome.
+type PendingCancellation struct {
+	RequestID string   `json:"request_id"`
+	TaskIDs   []string `json:"task_ids"`
+	DecidedAt string   `json:"decided_at"`
 }
 
 // Reject unknown plan fields instead of silently dropping user requirements.

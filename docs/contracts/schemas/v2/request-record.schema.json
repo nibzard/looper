@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/request-record.schema.json",
+  "title": "Looper request record (contract version 2)",
+  "description": "The document `looper requests` returns under contract version 2: one record for `looper requests <id>`, or one bounded page for `looper requests [--after <id>] [--limit N]`. It comes from durable receipts and the public envelope directories, so it stays queryable after a controller restart and answers without reading the acknowledgement directory or the state database. Exactly one of request or requests carries the content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "continuation"],
+  "oneOf": [
+    { "required": ["request"] },
+    { "required": ["requests"] }
+  ],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.request.record" },
+    "request": { "$ref": "#/$defs/request" },
+    "requests": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/request" },
+      "description": "The bounded page of request records the list form returns."
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "list": { "type": "string", "description": "Command for the next bounded page of request records." }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["returned"],
+      "properties": {
+        "returned": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 },
+        "has_more": { "type": "boolean" },
+        "omitted": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+      }
+    }
+  },
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "state", "age_seconds"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["submitted", "accepted", "waiting", "applied", "rejected", "failed", "cancelled"] },
+        "age_seconds": { "type": "integer", "minimum": 0 },
+        "controller_session": { "type": "string" },
+        "idempotency_key": { "type": "string" },
+        "submitted_at": { "type": "string", "format": "date-time" },
+        "decided_at": { "type": "string", "format": "date-time" },
+        "waiting_on": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1, "description": "For example active_work, planning, backlog_hold, or startup." },
+            "age_seconds": { "type": "integer", "minimum": 0 },
+            "detail": { "type": "string" }
+          }
+        },
+        "affected_tasks": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+        "plan_coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "added_tasks": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+            "covered": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["requirement"],
+                "properties": {
+                  "requirement": { "type": "string", "minLength": 1 },
+                  "task_id": { "type": "string" },
+                  "evidence": { "type": "string" }
+                }
+              }
+            },
+            "conflicts": { "type": "array", "maxItems": 16, "items": { "type": "string" } },
+            "adjustments": { "type": "array", "maxItems": 16, "items": { "type": "string" } },
+            "gates": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task_id", "depends_on"],
+                "properties": {
+                  "task_id": { "type": "string", "minLength": 1 },
+                  "depends_on": { "type": "array", "maxItems": 64, "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "summary": { "type": "string" },
+            "added_task_ids": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+            "applied_fields": { "type": "array", "items": { "type": "string" } },
+            "restart_required_fields": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "error": { "$ref": "#/$defs/public_error" }
+      }
+    },
+    "public_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retry"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "retry": { "enum": ["yes", "no", "after-change"] },
+        "paths": { "type": "array", "maxItems": 32, "items": { "type": "string" } },
+        "expected": { "type": "object" },
+        "observed": { "type": "object" },
+        "evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reference"],
+            "properties": {
+              "kind": { "enum": ["event", "log", "file", "request"] },
+              "reference": { "type": "string", "minLength": 1 },
+              "command": { "type": "string" }
+            }
+          }
+        },
+        "next_actions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string", "minLength": 1 },
+              "command": { "type": "string" },
+              "operation": { "type": "string" }
+            }
+          }
+        },
+        "unknown_evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

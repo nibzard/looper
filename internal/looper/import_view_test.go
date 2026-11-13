@@ -50,7 +50,7 @@ func importViewByRequest(v *ui.ViewSnapshot, id string) *ui.ImportView {
 
 func waitForViewImport(t *testing.T, dir, id string) *ui.ImportView {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testBudget(5 * time.Second))
 	for time.Now().Before(deadline) {
 		if v := LoadView(dir); v != nil {
 			if imp := importViewByRequest(v, id); imp != nil {
@@ -68,7 +68,7 @@ func waitForViewImport(t *testing.T, dir, id string) *ui.ImportView {
 // records without parsing events, so a reconnecting dashboard retains access.
 func TestPublishedViewCarriesImportRecords(t *testing.T) {
 	e, _ := importEngine(t, additionProposal)
-	applied, err := submitPlanImport(e.Dir, e.controller.Session, []string{planFile(t, "Add telemetry.")})
+	applied, err := submitPlanImport(e.Dir, e.controller.Session, "", []string{planFile(t, "Add telemetry.")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestPublishedViewCarriesImportRecords(t *testing.T) {
 	bin, _ := fakeAgent(t, conflict)
 	e.Config.CodexBin, e.Config.ClaudeBin = bin, bin
 	e.Agent = Agent{e.Config}
-	failed, err := submitPlanImport(e.Dir, e.controller.Session, []string{planFile(t, "Replace storage.")})
+	failed, err := submitPlanImport(e.Dir, e.controller.Session, "", []string{planFile(t, "Replace storage.")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestPublishedViewCarriesImportRecords(t *testing.T) {
 // the dashboard reports the accepted request before analysis starts.
 func TestQueuedImportPublishesBeforeProcessing(t *testing.T) {
 	e, _ := importEngine(t, additionProposal)
-	id, err := submitPlanImport(e.Dir, e.controller.Session, []string{planFile(t, "Add telemetry.")})
+	id, err := submitPlanImport(e.Dir, e.controller.Session, "", []string{planFile(t, "Add telemetry.")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestImportPlanningStatePublishesDuringAnalysis(t *testing.T) {
 	if err = e.initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	id, err := submitPlanImport(e.Dir, e.controller.Session, []string{planFile(t, "Add telemetry.")})
+	id, err := submitPlanImport(e.Dir, e.controller.Session, "", []string{planFile(t, "Add telemetry.")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestImportPlanningStatePublishesDuringAnalysis(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("analysis did not finish after release")
 	}
 	if e.err != nil {
@@ -294,7 +294,7 @@ exit 0
 // the test. Tests use it to observe controller state while an agent still runs.
 func waitForActivityView(t *testing.T, dir string, want func(*ui.ViewSnapshot) bool) *ui.ViewSnapshot {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testBudget(5 * time.Second))
 	for time.Now().Before(deadline) {
 		if v := LoadView(dir); v != nil && want(v) {
 			return v
@@ -332,7 +332,7 @@ func TestImportAnalysisPublishesActivityEvidence(t *testing.T) {
 	if err = e.initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = submitPlanImport(e.Dir, e.controller.Session, []string{planFile(t, "Add telemetry.")}); err != nil {
+	if _, err = submitPlanImport(e.Dir, e.controller.Session, "", []string{planFile(t, "Add telemetry.")}); err != nil {
 		t.Fatal(err)
 	}
 	// One heartbeat per tick keeps the controller event observable in a
@@ -360,7 +360,7 @@ func TestImportAnalysisPublishesActivityEvidence(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("analysis did not finish after release")
 	}
 	if e.err != nil {

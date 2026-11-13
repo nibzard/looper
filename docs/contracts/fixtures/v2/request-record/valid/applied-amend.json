@@ -1,0 +1,19 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "amend-01h5e9",
+    "type": "amend-task",
+    "state": "applied",
+    "age_seconds": 41,
+    "controller_session": "run-4f39faa5451b464d",
+    "submitted_at": "2026-11-09T11:05:02Z",
+    "decided_at": "2026-11-09T11:05:04Z",
+    "affected_tasks": ["T020"],
+    "result": {
+      "summary": "Amended T020 (details, files)."
+    }
+  },
+  "continuation": { "command": "looper requests amend-01h5e9 --contract v2" }
+}

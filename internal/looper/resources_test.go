@@ -65,7 +65,7 @@ func TestCancelledCheckRetainsResourcesUntilRecovery(t *testing.T) {
 	// The database is the setup's last write, so waiting for it also proves
 	// the cleanup registration is complete: a cancellation can no longer tear
 	// the registered script between its creation and its content.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testBudget(10 * time.Second))
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "database")); err == nil {
 			break
@@ -78,7 +78,7 @@ func TestCancelledCheckRetainsResourcesUntilRecovery(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("cancelled check did not stop")
 	}
 	e.sweepResources()

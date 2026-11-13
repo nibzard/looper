@@ -1,0 +1,6 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "error": { "code": "Backlog Contract Changed!", "message": "The backlog changed.", "retry": "after-change" }
+}

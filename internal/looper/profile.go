@@ -176,8 +176,8 @@ func (p *Profile) Validate() error {
 		return fmt.Errorf("unsupported profile version %d; this Looper reads version %d", p.Version, ProfileVersion)
 	}
 	for _, agent := range []string{p.Agent, p.ReviewAgent} {
-		if agent != "" && agent != "codex" && agent != "claude" && agent != "zcode" {
-			return fmt.Errorf("invalid agent %q; use codex, claude, or zcode", agent)
+		if agent != "" && !agentProfileName.MatchString(agent) {
+			return fmt.Errorf("invalid agent profile name %q", agent)
 		}
 	}
 	if p.Jobs < 0 {
@@ -271,6 +271,9 @@ func (p *Profile) mergeInto(s *settingSources) {
 	}
 	if p.ReviewAgent != "" {
 		s.reviewAgent = inputValue{p.ReviewAgent, SourceProfile}
+	} else {
+		// A saved following reviewer overrides a machine's default reviewer.
+		s.reviewAgent = inputValue{"", SourceDefault}
 	}
 	if p.Jobs > 0 {
 		s.jobs = inputValue{strconv.Itoa(p.Jobs), SourceProfile}

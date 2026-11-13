@@ -1,0 +1,19 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "outcome": "satisfied",
+  "condition": {
+    "kind": "heartbeat",
+    "cursor": 12
+  },
+  "observed": { "at": "2026-11-09T12:02:31.418Z", "high_water": 20 },
+  "cursor": { "event_id": 20, "scope": "store" },
+  "wait": { "timeout_seconds": 30, "elapsed_seconds": 0 },
+  "detail": {
+    "command": "looper wait --contract v2 --cursor 20 --timeout 30s",
+    "events": "looper events --contract v2 --after 20",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json"
+  }
+}

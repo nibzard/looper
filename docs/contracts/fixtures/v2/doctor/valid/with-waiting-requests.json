@@ -1,0 +1,52 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.doctor",
+  "observation": {
+    "executable": { "release": "0.9.1", "revision": "5f2c9ab", "modified": false },
+    "build_mismatch": false,
+    "schema_version": 1,
+    "observed_at": "2026-11-05T10:41:02Z",
+    "controller_owned": true,
+    "view_matches_controller": true,
+    "workers": [],
+    "event_cursor": 1204
+  },
+  "findings": [
+    {
+      "code": "task_blocked",
+      "severity": "warning",
+      "task_id": "T015",
+      "message": "The task reports an unmet prerequisite.",
+      "suggested_action": "Read blockers with looper inspect T015 --json."
+    }
+  ],
+  "requests": {
+    "pending": 1,
+    "waiting": 2,
+    "oldest_age_seconds": 512,
+    "waiting_on": [
+      {
+        "id": "req-01h3ab",
+        "type": "settings",
+        "state": "accepted",
+        "reason": "accepted",
+        "age_seconds": 512
+      },
+      {
+        "id": "req-01h4x9",
+        "type": "add-plan",
+        "state": "waiting",
+        "reason": "active_work",
+        "age_seconds": 97,
+        "detail": "The import applies at the next boundary after T015 finishes."
+      }
+    ],
+    "waiting_omitted": 0
+  },
+  "automatic_recovery": false,
+  "detail": {
+    "requests": "looper requests --contract v2 --json",
+    "status": "looper status --contract v2 --json"
+  }
+}

@@ -57,7 +57,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		}
 		for _, a := range e.State.Attempts {
 			switch a.Phase {
-			case "done", "blocked":
+			case "done", "blocked", "cancelled":
 				continue
 			}
 			v.Attempts = append(v.Attempts, attemptView(a))
@@ -72,7 +72,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 		for _, t := range e.State.Backlog.Ready() {
 			claimed := false
 			for _, a := range e.State.Attempts {
-				if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" {
+				if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "cancelled" {
 					claimed = true
 				}
 			}
@@ -197,24 +197,87 @@ func LoadView(dir string) *ui.ViewSnapshot {
 // writes. The regular OpenStore creates tables and sets journal modes, which
 // observers must not do against a live controller.
 func OpenStoreReadonly(path string) (*Store, error) {
+	return openStoreURI(path, "mode=ro")
+}
+
+// OpenStoreImmutable attaches to a fully checkpointed store so the read
+// creates no file at all: a plain read-only attach to a WAL database
+// materializes the shared-memory sidecars beside it, which a reader that
+// must change nothing (AX-025 run discovery) cannot do. The caller promises
+// no live writer holds the store and no write-ahead log waits to be folded
+// in; a database with a pending log needs OpenStoreReadonly instead.
+func OpenStoreImmutable(path string) (*Store, error) {
+	return openStoreURI(path, "mode=ro&immutable=1")
+}
+
+func openStoreURI(path, options string) (*Store, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	db, err := sql.Open("sqlite", "file:"+path+"?"+options)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	// A read-only attach still meets the writer's locks: a controller's
+	// shutdown checkpoint holds the database briefly, and a status query that
+	// races it must wait the writer out (AX-022), not report the run missing.
+	if _, err = db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err = db.Ping(); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, dir: filepath.Dir(path)}, nil
+	s := &Store{db: db, dir: filepath.Dir(path)}
+	// A store that predates store_meta, still owned by an older controller,
+	// reports an unknown identity; cursors from it validate against the
+	// committed high-water mark alone.
+	s.identity, s.epoch = readStoreMeta(db)
+	return s, nil
+}
+
+// openRunStore attaches to one run's state database without writing a byte
+// of the run's records. A plain read-only attach to a WAL database
+// materializes the shared-memory sidecars beside it, so a run no live
+// controller owns opens immutable instead: its database is fully
+// checkpointed and the read creates nothing. A live controller, or a
+// write-ahead log a crashed controller left behind, needs the through-WAL
+// read — the sidecars then exist or belong to that run's own recovery
+// anyway.
+func openRunStore(statePath string, owning bool) (*Store, error) {
+	if owning {
+		return OpenStoreReadonly(statePath)
+	}
+	if _, err := os.Stat(statePath + "-wal"); err == nil {
+		return OpenStoreReadonly(statePath)
+	}
+	return OpenStoreImmutable(statePath)
+}
+
+// openObservedStore attaches a one-shot observer to the current project's
+// saved run: the status, inspect, events, tail, doctor, preflight, and
+// recovery-preview reads. It applies the same decision run discovery makes,
+// so observing a cleanly stopped run creates no state.db-wal or state.db-shm
+// beside the database (T105). Readers that hold their connection across the
+// controllers that may start later — a followed event stream, the dashboard —
+// keep OpenStoreReadonly instead: immutable ignores the log a later
+// controller appends and cannot survive its checkpoints.
+func openObservedStore(dir string) (*Store, error) {
+	statePath := filepath.Join(dir, "state.db")
+	owning := false
+	if info, err := readController(dir); err == nil {
+		owning = controllerAlive(info)
+	}
+	return openRunStore(statePath, owning)
 }
 
 // RecentEvents pages the journal by identifier with a bounded tail. after < 0
 // returns the newest bounded tail; otherwise it returns events after the
-// identifier.
+// exclusive identifier. A position beyond the retained store means the store
+// was reset or replaced: it returns an actionable cursor error instead of a
+// silently empty page.
 func (s *Store) RecentEvents(after int64, limit int) ([]Event, error) {
 	if limit <= 0 {
 		limit = 40
@@ -226,6 +289,9 @@ func (s *Store) RecentEvents(after int64, limit int) ([]Event, error) {
 		}
 		defer rows.Close()
 		return scanEvents(rows)
+	}
+	if err := s.ValidateCursor(EventCursor{EventID: after}); err != nil {
+		return nil, err
 	}
 	rows, err := s.db.Query("SELECT id,time,kind,message,data FROM events WHERE id>? ORDER BY id LIMIT ?", after, limit)
 	if err != nil {

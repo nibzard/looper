@@ -1,0 +1,32 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "command": "looper add-task tasks.json --contract v2",
+  "error": {
+    "code": "capability_unsupported",
+    "message": "the controller session run-old predates capability advertisement; it accepts add-task, add-plan, settings, requeue, and stop requests, and \"cancel-task\" is not among them. No request was queued.",
+    "retry": "after-change",
+    "expected": { "controller_request_types": "add-task, add-plan, settings, requeue, stop" },
+    "observed": { "requested_request_type": "cancel-task", "controller_session": "run-old" },
+    "evidence": [
+      {
+        "kind": "request",
+        "reference": "advertised capabilities of controller session run-old",
+        "command": "looper version --contract v2 --json"
+      }
+    ],
+    "next_actions": [
+      {
+        "description": "Read the capabilities this controller advertises before submitting.",
+        "command": "looper version --contract v2 --json"
+      },
+      {
+        "description": "Restart the controller from a build that supports this request type, then resubmit."
+      }
+    ],
+    "unknown_evidence": [
+      "the controller's full capabilities; its metadata predates capability advertisement"
+    ]
+  }
+}

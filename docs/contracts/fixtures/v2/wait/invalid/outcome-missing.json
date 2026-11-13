@@ -1,0 +1,22 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "condition": {
+    "kind": "request_outcome",
+    "request_id": "import-01h5f2"
+  },
+  "observed": {
+    "at": "2026-11-09T12:04:44.927Z",
+    "high_water": 1319,
+    "request": { "id": "import-01h5f2", "type": "add-plan", "state": "applied", "age_seconds": 12 }
+  },
+  "cursor": { "event_id": 1319, "scope": "store" },
+  "wait": { "timeout_seconds": 60, "elapsed_seconds": 12 },
+  "detail": {
+    "command": "looper wait --contract v2 --request import-01h5f2 --timeout 60s",
+    "events": "looper requests import-01h5f2 --contract v2",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json"
+  }
+}

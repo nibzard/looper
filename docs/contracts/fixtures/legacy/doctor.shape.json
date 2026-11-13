@@ -1,0 +1,51 @@
+{
+  "automatic_recovery": "boolean",
+  "findings": [
+    {
+      "code": "string",
+      "message": "string",
+      "severity": "string",
+      "suggested_action": "string",
+      "task_id": "string"
+    },
+    {
+      "code": "string",
+      "message": "string",
+      "severity": "string",
+      "suggested_action": "string"
+    }
+  ],
+  "observation": {
+    "build_mismatch": "boolean",
+    "controller_owned": "boolean",
+    "event_cursor": "integer",
+    "executable": {
+      "modified": "boolean",
+      "release": "string",
+      "revision": "string"
+    },
+    "observed_at": "string",
+    "schema_version": "integer",
+    "view_matches_controller": "boolean",
+    "workers": [
+      {
+        "attempt_id": "string",
+        "last_output_at": "string",
+        "log": "string",
+        "output_age_seconds": "integer",
+        "output_bytes": "integer",
+        "phase": "string",
+        "process": {
+          "identity": "string",
+          "pid": "integer",
+          "running": "boolean",
+          "started": "string"
+        },
+        "progress": "string",
+        "retained": "boolean",
+        "task_id": "string"
+      }
+    ]
+  },
+  "schema_version": "integer"
+}

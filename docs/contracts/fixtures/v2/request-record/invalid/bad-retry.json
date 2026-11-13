@@ -1,0 +1,13 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "req-01h3ef",
+    "type": "stop",
+    "state": "failed",
+    "age_seconds": 8,
+    "error": { "code": "write_failed", "message": "The acknowledgement could not be written.", "retry": "maybe" }
+  },
+  "continuation": { "command": "looper requests req-01h3ef --contract v2" }
+}

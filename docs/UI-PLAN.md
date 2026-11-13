@@ -663,6 +663,13 @@ Keep shared contracts free of engine dependencies.
 - [ ] The dashboard distinguishes success, blocked work, idle waiting, drain, and error.
 - [ ] Diff previews handle removed worktrees and bounded output.
 
+The byte-compatibility promise above is resolved by the versioned contracts in
+`docs/AGENT-CONTRACTS.md`: the legacy `--json` documents are frozen and guarded
+by executable schema and shape fixtures under `docs/contracts/`, and any new or
+bounded response ships as contract version 2 behind an explicit `--contract`
+selection. The default changes only through the transition documented in
+`docs/AGENT-CONTRACT-MIGRATION.md`, never as a silent shape change.
+
 ### Lifecycle
 
 - [ ] A detached controller survives parent exit and still manages worker cleanup.

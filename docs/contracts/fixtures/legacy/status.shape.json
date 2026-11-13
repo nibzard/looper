@@ -1,0 +1,297 @@
+{
+  "attempts": [
+    {
+      "agent": "string",
+      "base": "string",
+      "diagnosed": "boolean",
+      "directory": "string",
+      "failure_hash": "string",
+      "feedback": "string",
+      "id": "string",
+      "phase": "string",
+      "ref": "string",
+      "repairs": "integer",
+      "repeats": "integer",
+      "task": {
+        "created_at": "string",
+        "depends_on": [
+          "string"
+        ],
+        "files": [
+          "string"
+        ],
+        "id": "string",
+        "priority": "integer",
+        "status": "string",
+        "title": "string"
+      },
+      "worktree": "string",
+      "worktrees": [
+        "string"
+      ]
+    },
+    {
+      "agent": "string",
+      "base": "string",
+      "directory": "string",
+      "id": "string",
+      "phase": "string",
+      "ref": "string",
+      "repairs": "integer",
+      "result_commit": "string",
+      "summary": {
+        "blockers": [
+          "string"
+        ],
+        "files": "empty array",
+        "status": "string",
+        "summary": "string",
+        "task_id": "string",
+        "unblock_when": "string"
+      },
+      "task": {
+        "blockers": [
+          "string"
+        ],
+        "created_at": "string",
+        "id": "string",
+        "priority": "integer",
+        "status": "string",
+        "tags": [
+          "string"
+        ],
+        "title": "string",
+        "unblock_when": "string",
+        "updated_at": "string"
+      },
+      "verification": {
+        "attempt_id": "string",
+        "base": "string",
+        "commit": "string",
+        "feedback": "string",
+        "ok": "boolean",
+        "tree": "string"
+      },
+      "worktree": "string",
+      "worktrees": "empty array"
+    }
+  ],
+  "backlog": {
+    "goal": "string",
+    "schema_version": "integer",
+    "source_files": [
+      "string"
+    ],
+    "tasks": [
+      {
+        "blockers": [
+          "string"
+        ],
+        "created_at": "string",
+        "id": "string",
+        "priority": "integer",
+        "status": "string",
+        "tags": [
+          "string"
+        ],
+        "title": "string",
+        "unblock_when": "string",
+        "updated_at": "string"
+      },
+      {
+        "created_at": "string",
+        "depends_on": [
+          "string"
+        ],
+        "files": [
+          "string"
+        ],
+        "id": "string",
+        "priority": "integer",
+        "status": "string",
+        "title": "string"
+      }
+    ]
+  },
+  "branch": "string",
+  "export_before": "string",
+  "export_hash": "string",
+  "export_pending": "boolean",
+  "finished": "boolean",
+  "head": "string",
+  "imports": [
+    {
+      "added_tasks": [
+        "string"
+      ],
+      "applied": "string",
+      "artifacts": [
+        "string"
+      ],
+      "digests": [
+        "string"
+      ],
+      "enqueued": "string",
+      "request_id": "string",
+      "source_paths": [
+        "string"
+      ],
+      "status": "string"
+    }
+  ],
+  "integrated": "integer",
+  "observation": {
+    "build_mismatch": "boolean",
+    "controller_owned": "boolean",
+    "event_cursor": "integer",
+    "executable": {
+      "modified": "boolean",
+      "release": "string",
+      "revision": "string"
+    },
+    "observed_at": "string",
+    "schema_version": "integer",
+    "view_matches_controller": "boolean",
+    "workers": [
+      {
+        "attempt_id": "string",
+        "last_output_at": "string",
+        "log": "string",
+        "output_age_seconds": "integer",
+        "output_bytes": "integer",
+        "phase": "string",
+        "process": {
+          "identity": "string",
+          "pid": "integer",
+          "running": "boolean",
+          "started": "string"
+        },
+        "progress": "string",
+        "retained": "boolean",
+        "task_id": "string"
+      }
+    ]
+  },
+  "plan": {
+    "setup": "string",
+    "tasks": [
+      {
+        "resources": "empty array",
+        "task_id": "string",
+        "write_paths": [
+          "string"
+        ]
+      }
+    ],
+    "verify": "string"
+  },
+  "plan_signature": "string",
+  "publication": {
+    "attempt_id": "string",
+    "base": "string",
+    "before": "string",
+    "commit": "string",
+    "feedback": "string",
+    "ok": "boolean",
+    "tree": "string",
+    "worktree": "string"
+  },
+  "published": "string",
+  "recovered_commands": {
+    "before_setup": "string",
+    "before_verify": "string",
+    "previous_setup": "string",
+    "previous_verify": "string",
+    "setup": "string",
+    "verify": "string"
+  },
+  "recoveries": [
+    {
+      "identity": "string",
+      "integrated": "integer",
+      "outcome": "string",
+      "tasks": [
+        "string"
+      ]
+    }
+  ],
+  "ref": "string",
+  "review_pending": "boolean",
+  "reviewed_at": "integer",
+  "reviewed_tip": "string",
+  "root": "string",
+  "statistics": {
+    "active_seconds": "integer",
+    "agent_runs": "integer",
+    "attempts": "integer",
+    "cache_read_tokens": "integer",
+    "checks_failed": "integer",
+    "checks_passed": "integer",
+    "controller_seconds": "integer",
+    "days": [
+      {
+        "date": "string",
+        "estimated_usd": "null",
+        "integrations": "integer",
+        "tokens": "integer",
+        "usage_reports": "integer",
+        "worker_seconds": "integer"
+      }
+    ],
+    "elapsed_seconds": "number",
+    "estimated_usd": "null",
+    "first_recorded_at": "string",
+    "history_complete": "boolean",
+    "input_tokens": "integer",
+    "integrations": "integer",
+    "models": "null",
+    "output_tokens": "integer",
+    "priced_reports": "integer",
+    "repairs": "integer",
+    "reported_usd": "null",
+    "schema_version": "integer",
+    "sessions": "integer",
+    "tasks_done": "integer",
+    "tasks_total": "integer",
+    "tokens": "integer",
+    "unknown_ends": "integer",
+    "updated_at": "string",
+    "usage_reports": "integer",
+    "worker_seconds": "integer"
+  },
+  "timing": {
+    "active_seconds": "integer",
+    "available": "boolean",
+    "controller_seconds": "integer",
+    "elapsed_seconds": "number",
+    "first_recorded_at": "string",
+    "history_complete": "boolean",
+    "imported_processes": "integer",
+    "last_recorded_at": "string",
+    "recorded_since": "string",
+    "running_processes": "integer",
+    "schema_version": "integer",
+    "tasks": [
+      {
+        "active_seconds": "null",
+        "attempts": "integer",
+        "available": "boolean",
+        "check_seconds": "null",
+        "elapsed_seconds": "null",
+        "history_complete": "boolean",
+        "other_seconds": "null",
+        "recorded_attempts": "integer",
+        "running_processes": "integer",
+        "task_id": "string",
+        "unknown_processes": "integer",
+        "worker_seconds": "null"
+      }
+    ],
+    "unknown_processes": "integer",
+    "unknown_sessions": "integer",
+    "worker_seconds": "integer"
+  },
+  "tip": "string",
+  "todo": "string",
+  "version": "integer"
+}

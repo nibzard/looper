@@ -1,5 +1,11 @@
 # Migrate from earlier versions
 
+**Machine contracts are versioned.** The JSON documents the CLI emits are
+frozen under contract version 1 and guarded by executable fixtures. New
+bounded responses ship as contract version 2 behind `--contract v2` or
+`LOOPER_CONTRACT=v2`. See `AGENT-CONTRACT-MIGRATION.md` for the selection
+rules and the default transition.
+
 **Go is the only implementation.** The Bash runner and its `looper.sh`
 compatibility launcher are gone; scripts must call the `looper` binary.
 

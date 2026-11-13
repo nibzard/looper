@@ -17,7 +17,9 @@ type BuildInfo struct {
 	Modified bool   `json:"modified"`
 }
 
-func currentBuild() BuildInfo {
+// currentBuild is a variable so the byte-fixture test can pin the identity;
+// production code never reassigns it.
+var currentBuild = func() BuildInfo {
 	build := BuildInfo{Release: Version, Revision: "unknown"}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {

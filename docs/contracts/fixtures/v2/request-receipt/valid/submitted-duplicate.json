@@ -1,0 +1,15 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.receipt",
+  "request": {
+    "id": "req-01h4ya",
+    "type": "add-task",
+    "state": "submitted",
+    "created_at": "2026-11-05T10:14:58Z",
+    "idempotency_key": "add-helper-task-1",
+    "payload_digest": "sha256:1aa7",
+    "duplicate": true
+  },
+  "query": { "command": "looper requests req-01h4ya --contract v2" }
+}

@@ -1,0 +1,13 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.capabilities",
+  "client": { "build": { "release": "0.10.0", "revision": "297e7ee1", "modified": false }, "contract_versions": [2] },
+  "controller": {
+    "session": "run-4f39faa5451b464d",
+    "build": { "release": "0.10.0", "revision": "297e7ee1", "modified": false },
+    "contract_versions": [2],
+    "request_types": ["add-task", "delete-everything"]
+  },
+  "compatibility": { "default_contract_version": 2, "oldest_supported_contract_version": 1 }
+}

@@ -1,0 +1,21 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "req-01h3ab",
+    "type": "settings",
+    "state": "applied",
+    "age_seconds": 512,
+    "controller_session": "run-4f39faa5451b464d",
+    "submitted_at": "2026-11-05T10:06:30Z",
+    "decided_at": "2026-11-05T10:06:32Z",
+    "result": {
+      "summary": "Saved the profile and applied live settings.",
+      "applied_fields": ["agent", "jobs"],
+      "restart_required_fields": ["verify_command", "setup_command"]
+    }
+  },
+  "continuation": { "command": "looper requests req-01h3ab --contract v2" },
+  "list": { "returned": 1, "limit": 20, "has_more": false, "omitted": { "records": 4 } }
+}

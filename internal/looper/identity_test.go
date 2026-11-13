@@ -53,7 +53,10 @@ func agentCalls(t *testing.T) string {
 }
 
 func TestStartupRejectsTaskFileMismatchBeforeBootstrap(t *testing.T) {
-	c, bootstraps := savedStateEngine(t, "init")
+	// The saved run used a task file with a different name; the mismatch is
+	// the point, and the name carries a .json suffix so the positional is a
+	// task file rather than an unknown command (AX-026).
+	c, bootstraps := savedStateEngine(t, "init.json")
 	agentCalls(t)
 	selected := c
 	selected.Todo = filepath.Join(c.Root, "to-do.json")
@@ -64,7 +67,7 @@ func TestStartupRejectsTaskFileMismatchBeforeBootstrap(t *testing.T) {
 	defer lock.Close()
 	defer e.Store.Close()
 	err = e.initialize(context.Background())
-	if err == nil || !strings.Contains(err.Error(), `init"`) || !strings.Contains(err.Error(), `to-do.json"`) {
+	if err == nil || !strings.Contains(err.Error(), `init.json"`) || !strings.Contains(err.Error(), `to-do.json"`) {
 		t.Fatalf("expected a task-file identity error naming both paths, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "rerun with the saved task file") || strings.Contains(err.Error(), "move it") {

@@ -18,6 +18,9 @@ type Agent struct{ Config Config }
 type AgentError struct {
 	Kind   string
 	Detail string
+	// Summary is the bounded public evidence this failure carries (AX-021).
+	// Error() keeps its historical text; the summary rides beside it.
+	Summary *FailureSummary
 }
 
 func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
@@ -101,55 +104,25 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			return nil, err
 		}
 	}
-	var args []string
-	if kind == "codex" {
-		args = []string{a.Config.CodexBin, "exec", "--cd", cwd, "--json", "--output-last-message", resultPath}
-		if a.Config.Model != "" {
-			args = append(args, "--model", a.Config.Model)
+	profileName := kind
+	toolName := agentToolOf(a.Config, profileName)
+	profile, err := a.Config.effectiveAgent(profileName)
+	if err != nil {
+		evidence := filepath.Join(dir, "invocation.json")
+		if saveErr := writeJSON(evidence, map[string]any{"agent_profile": profileName, "configuration_error": err.Error()}); saveErr != nil {
+			return nil, saveErr
 		}
-		if a.Config.Effort != "" {
-			args = append(args, "-c", "model_reasoning_effort="+fmt.Sprintf("%q", a.Config.Effort))
-		}
-		if progress != nil {
-			args = append(args, "--sandbox", "read-only")
-		} else if env("CODEX_YOLO", "1") != "0" {
-			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
-		} else {
-			args = append(args, "--sandbox", "workspace-write")
-		}
-		if outputSchema != "" {
-			args = append(args, "--output-schema", schema)
-		}
-		args = append(args, "-")
-	} else if kind == "zcode" {
-		// zcode ships no schema flag; the prompt states the output shape and
-		// the response text is parsed below. Headless already defaults to
-		// full access, so the mode is explicit for the invocation record.
-		// stream-json, not json: the json summary prints pretty and spans
-		// lines, while the stream result terminator is one line. Planning
-		// stays in yolo with the inspection-only prompt as its restriction:
-		// zcode's plan mode answers with a prose summary and drops the JSON
-		// (verified against a live binary).
-		args = []string{a.Config.ZcodeBin, "--cwd", cwd, "--output-format", "stream-json", "--mode", "yolo", "-p", prompt}
-	} else {
-		args = []string{a.Config.ClaudeBin, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--add-dir", cwd}
-		if progress != nil {
-			// Planning can inspect files but cannot invoke a shell or delegate work.
-			args = []string{a.Config.ClaudeBin, "-p", "--output-format", "stream-json", "--verbose",
-				"--dangerously-skip-permissions", "--add-dir", cwd, "--tools", "Read,Glob,Grep",
-				"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--disable-slash-commands"}
-		}
-		if a.Config.ClaudeModel != "" {
-			args = append(args, "--model", a.Config.ClaudeModel)
-		}
-		if outputSchema != "" {
-			args = append(args, "--json-schema", outputSchema)
-		}
+		return nil, &AgentError{Kind: "configuration", Detail: err.Error(), Summary: (&FailureSummary{Operation: opLaunch, Tool: profileName, Outcome: outcomeLaunch, Cause: err.Error(), Evidence: []FailureEvidence{{Kind: "file", Reference: evidence}}}).bound()}
 	}
-	transport := "stdin"
-	if kind == "zcode" {
-		transport = "argv"
-	}
+	resolved, resolveErr := resolvedAgentCommand(profile)
+	if resolveErr != nil {
+		resolved = profile.Command
+	} // launch errors retain invocation evidence
+	kind = profile.Adapter
+	adapter := agentAdapters[kind]
+	invocation := agentInvocation{profile: profile, executable: resolved, cwd: cwd, resultPath: resultPath, schemaPath: schema, schema: outputSchema, prompt: prompt, planning: progress != nil}
+	args := adapter.protocol.arguments(invocation)
+	transport := adapter.protocol.transport()
 	role, target := promptBudget(prompt, summary, progress != nil)
 	var files []contextFile
 	_ = readJSON(filepath.Join(dir, "context.json"), &files)
@@ -157,24 +130,43 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 	for _, file := range files {
 		contextBytes += file.Bytes
 	}
-	if err := writeJSON(filepath.Join(dir, "invocation.json"), map[string]any{"agent": kind, "model": map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], "effort": a.Config.Effort, "cwd": cwd, "prompt_bytes": len(prompt), "prompt_transport": transport, "context_role": role, "context_bytes": contextBytes, "prompt_target_bytes": target, "prompt_target_exceeded": len(prompt) > target}); err != nil {
+	if err := writeJSON(filepath.Join(dir, "invocation.json"), map[string]any{"agent": kind, "agent_profile": profileName, "adapter": kind, "adapter_version": agentAdapters[kind].Version, "executable": resolved, "model": profile.Model, "effort": profile.Effort, "cwd": cwd, "prompt_bytes": len(prompt), "prompt_transport": transport, "context_role": role, "context_bytes": contextBytes, "prompt_target_bytes": target, "prompt_target_exceeded": len(prompt) > target}); err != nil {
 		return nil, err
 	}
 	for retry := 0; retry < a.Config.RetryLimit; retry++ {
 		os.Remove(resultPath)
 		log := filepath.Join(dir, fmt.Sprintf("events-%02d.jsonl", retry))
 		if progress != nil {
-			progress(fmt.Sprintf("%s attempt %d/%d", kind, retry+1, a.Config.RetryLimit), log)
+			progress(fmt.Sprintf("%s attempt %d/%d", profileName, retry+1, a.Config.RetryLimit), log)
 		}
 		input := strings.NewReader(prompt)
 		err := runProcess(ctx, cwd, log, args, input, resourceEnv(dir))
+		// Every failure below carries its bounded summary (AX-021): the
+		// operation role, the agent identity, the exit status, the agent's own
+		// reported cause, and the Looper-owned records beside the run. The
+		// raw event log is evidence, never context: a session stream carries
+		// private reasoning.
+		operation := operationOf(role)
+		tool := toolName
+		agentEvidence := []FailureEvidence{
+			{Kind: "log", Reference: log},
+			{Kind: "file", Reference: filepath.Join(dir, "invocation.json")},
+		}
 		var launchErr *LaunchError
 		if errors.As(err, &launchErr) {
-			return nil, &AgentError{"invalid_request", fmt.Sprintf("%v; see %s and %s", err, filepath.Join(dir, "prompt.txt"), filepath.Join(dir, "invocation.json"))}
+			return nil, &AgentError{"invalid_request", fmt.Sprintf("%v; see %s and %s", err, filepath.Join(dir, "prompt.txt"), filepath.Join(dir, "invocation.json")),
+				(&FailureSummary{
+					Operation: opLaunch, Tool: tool + " [" + launchErr.Stage + "]", Outcome: outcomeLaunch,
+					Cause: launchErr.Err.Error(),
+					Evidence: []FailureEvidence{
+						{Kind: "file", Reference: filepath.Join(dir, "prompt.txt")},
+						{Kind: "file", Reference: filepath.Join(dir, "invocation.json")},
+					},
+				}).bound()}
 		}
 		raw, readErr := readAgentLog(log, 64<<20)
 		if readErr == nil {
-			recordAgentUsage(ctx, log, kind, map[string]string{"codex": a.Config.Model, "claude": a.Config.ClaudeModel}[kind], raw)
+			recordAgentUsage(ctx, log, kind, profile.Model, raw)
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -182,33 +174,26 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		if readErr != nil {
 			return nil, readErr
 		}
-		var wrapper map[string]json.RawMessage
-		if kind == "claude" || kind == "zcode" {
-			// Only the zcode result terminator carries the final response.
-			// Claude can return either text or structured output.
-			for _, line := range bytes.Split(raw, []byte{'\n'}) {
-				var o map[string]json.RawMessage
-				if json.Unmarshal(line, &o) != nil {
-					continue
-				}
-				if kind == "zcode" {
-					if string(o["type"]) == `"result"` {
-						wrapper = o
-					}
-				} else if o["result"] != nil || o["structured_output"] != nil {
-					wrapper = o
-				}
-			}
-			if string(wrapper["is_error"]) == "true" && err == nil {
-				err = errors.New("agent returned an execution error")
-			}
+		wrapper := adapter.protocol.envelope(raw)
+		reportedError := false
+		if string(wrapper["is_error"]) == "true" && err == nil {
+			reportedError = true
+			err = errors.New("agent returned an execution error")
 		}
+
 		if err != nil {
-			failure := classifyFailure(err.Error() + "\n" + string(tail(raw, 8<<10)))
+			// Classification reads the process error and the agent's own
+			// error text, never raw log bytes. The session log echoes tool
+			// output and project files: ordinary text that mentions billing
+			// or quotas would end the run as a configuration failure, and a
+			// status number printed by a test would buy a full round of
+			// retries.
+			message := streamErrorMessage(raw)
+			failure := classifyFailure(err.Error() + "\n" + message)
 			if failure == "transient" && retry+1 < a.Config.RetryLimit {
 				delay := min(10*time.Minute, a.Config.RetryDelay*time.Duration(1<<min(retry, 8)))
 				if progress != nil {
-					progress(fmt.Sprintf("%s retry in %s after a transient failure", kind, delay), log)
+					progress(fmt.Sprintf("%s retry in %s after a transient failure", profileName, delay), log)
 				}
 				select {
 				case <-ctx.Done():
@@ -218,42 +203,48 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 				}
 			}
 			detail := fmt.Sprintf("%v; see %s", err, log)
-			if message := streamErrorMessage(raw); message != "" {
+			cause := shortText(err.Error(), maxFailureCause)
+			if message != "" {
 				// The agent's own failure text names account, model, and
 				// request errors that the exit code alone hides.
 				detail = fmt.Sprintf("%v; agent reported: %s; see %s", err, message, log)
+				cause = message
 			}
-			return nil, &AgentError{failure, detail}
+			code, signal := exitDetail(err)
+			outcome := outcomeFor(err, code, signal)
+			if reportedError {
+				outcome = outcomeReported
+			}
+			return nil, &AgentError{failure, detail, (&FailureSummary{
+				Operation: operation, Tool: tool, ExitStatus: exitOf(code), Signal: signal,
+				Outcome: outcome, Cause: cause, Evidence: agentEvidence,
+			}).bound()}
 		}
-		if kind == "codex" {
-			raw, err = readBounded(resultPath, 8<<20)
-			if err != nil {
-				return nil, &AgentError{"invalid_result", "missing final result; see " + dir}
-			}
-		} else if kind == "zcode" {
-			var s string
-			if json.Unmarshal(wrapper["response"], &s) != nil || strings.TrimSpace(s) == "" {
-				return nil, &AgentError{"invalid_result", "missing response in summary; see " + dir}
-			}
-			raw = []byte(s)
-		} else if v := wrapper["structured_output"]; len(v) > 0 && string(v) != "null" {
-			raw = v
-		} else {
-			var s string
-			if json.Unmarshal(wrapper["result"], &s) == nil {
-				raw = []byte(s)
-			}
+		invalidResult := func(detail string) *AgentError {
+			zero := 0
+			return &AgentError{"invalid_result", detail, (&FailureSummary{
+				Operation: operation, Tool: tool, ExitStatus: &zero, Outcome: outcomeInvalidResult,
+				Cause: detail, Evidence: agentEvidence,
+			}).bound()}
+		}
+		raw, err = adapter.protocol.result(invocation, wrapper)
+		if err != nil {
+			return nil, invalidResult(fmt.Sprintf("%v; see %s", err, dir))
 		}
 		data, err := extractObject(raw)
 		if err != nil {
-			return nil, &AgentError{"invalid_result", fmt.Sprintf("%v; see %s", err, dir)}
+			return nil, invalidResult(fmt.Sprintf("%v; see %s", err, dir))
 		}
 		if err = atomicWrite(resultPath, append(data, '\n'), 0600); err != nil {
 			return nil, err
 		}
 		return data, nil
 	}
-	return nil, &AgentError{"transient", "retry limit reached"}
+	return nil, &AgentError{"transient", "retry limit reached", (&FailureSummary{
+		Operation: operationOf(role), Tool: toolName, Outcome: outcomeRetryLimit,
+		Cause:    "every attempt failed transiently; the last error decided nothing new",
+		Evidence: []FailureEvidence{{Kind: "file", Reference: filepath.Join(dir, "invocation.json")}},
+	}).bound()}
 }
 
 // These byte targets are observations, not model context limits. Exceeding
@@ -365,14 +356,21 @@ func extractObject(b []byte) (json.RawMessage, error) {
 	return nil, fmt.Errorf("final output must contain one JSON object")
 }
 
-// Classification reads only the process error and the tail of the event log.
-// The whole session log cannot be trusted here: a timed-out test the agent was
-// fixing, a matching file name, or a bare number in echoed output would turn a
-// deterministic failure into hours of retries. Configuration covers account
-// and entitlement failures (expired credit, unsupported model for the account
-// tier) that repeat identically until an operator intervenes.
-var transientFailure = regexp.MustCompile(`(?i)\b(?:429|500|502|503|504|529)\b|rate.?limit|too many requests|bad gateway|service unavailable|gateway timeout|overloaded|connection (?:reset|refused|dropped)|network (?:error|unreachable|timeout)|temporarily unavailable|econnreset|econnrefused|etimedout|socket hang up`)
-var configurationFailure = regexp.MustCompile(`(?i)\b(?:401|403)\b|unauthorized|authentication|permission denied|invalid api key|credit balance|billing|quota|usage limit|not supported when using|model .{0,60} not supported`)
+// Classification reads only the process error and the extracted stream
+// error. The whole session log cannot be trusted here: a timed-out test the
+// agent was fixing, a matching file name, or a bare number in echoed output
+// would turn a deterministic failure into hours of retries, and ordinary
+// project text that mentions billing or quotas would end the run as a
+// configuration failure. Bare status numbers need context even in the
+// trusted inputs: a status word (http, status, error, code) must stand
+// before the code with no digit between, because a digit run alone can be a
+// count, a line number, or a duration. That guard also keeps the process
+// error's own "exit status 1" from pairing with a code in the stream error.
+// Configuration covers account and entitlement failures (expired credit,
+// unsupported model for the account tier) that repeat identically until an
+// operator intervenes.
+var transientFailure = regexp.MustCompile(`(?i)\b(?:http|status|error|code)\b[^0-9\n]{0,16}\b(?:429|500|502|503|504|529)\b|rate.?limit|too many requests|bad gateway|service unavailable|gateway timeout|overloaded|connection (?:reset|refused|dropped)|network (?:error|unreachable|timeout)|temporarily unavailable|econnreset|econnrefused|etimedout|socket hang up`)
+var configurationFailure = regexp.MustCompile(`(?i)\b(?:http|status|error|code)\b[^0-9\n]{0,16}\b(?:401|403)\b|unauthorized|authentication|permission denied|invalid api key|credit balance|billing|quota|usage limit|not supported when using|model .{0,60} not supported`)
 
 func classifyFailure(s string) string {
 	if transientFailure.MatchString(s) {

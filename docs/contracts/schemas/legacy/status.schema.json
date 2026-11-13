@@ -1,0 +1,510 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/status.schema.json",
+  "title": "Looper status --json (legacy contract, frozen)",
+  "description": "The document `looper status --json` emits today: the complete saved state embedded inline, plus observation, timing, and statistics sections. This shape is frozen. Additions, removals, renames, and type changes require a migration entry in docs/AGENT-CONTRACT-MIGRATION.md and a conscious update of this schema and the recorded shape fixture. New bounded responses ship beside it under contract version 2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "root",
+    "todo",
+    "head",
+    "branch",
+    "ref",
+    "tip",
+    "published",
+    "backlog",
+    "export_hash",
+    "attempts",
+    "finished",
+    "integrated",
+    "reviewed_at",
+    "observation",
+    "timing",
+    "statistics"
+  ],
+  "properties": {
+    "version": { "type": "integer" },
+    "root": { "type": "string" },
+    "todo": { "type": "string" },
+    "head": { "type": "string" },
+    "branch": { "type": "string" },
+    "ref": { "type": "string" },
+    "tip": { "type": "string" },
+    "published": { "type": "string" },
+    "pending_run_repair": { "type": "object" },
+    "recoveries": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["identity", "outcome", "integrated"],
+        "properties": {
+          "identity": { "type": "string" },
+          "outcome": { "type": "string" },
+          "tasks": { "type": ["array", "null"], "items": { "type": "string" } },
+          "integrated": { "type": "integer" }
+        }
+      }
+    },
+    "recovered_commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous_setup", "previous_verify", "before_setup", "before_verify", "setup", "verify"],
+      "properties": {
+        "previous_setup": { "type": "string" },
+        "previous_verify": { "type": "string" },
+        "before_setup": { "type": "string" },
+        "before_verify": { "type": "string" },
+        "setup": { "type": "string" },
+        "verify": { "type": "string" }
+      }
+    },
+    "backlog": { "$ref": "#/$defs/backlog" },
+    "export_hash": { "type": "string" },
+    "export_before": { "type": "string" },
+    "export_pending": { "type": "boolean" },
+    "attempts": { "type": ["array", "null"], "items": { "$ref": "#/$defs/attempt" } },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setup", "verify", "tasks"],
+      "properties": {
+        "setup": { "type": "string" },
+        "verify": { "type": "string" },
+        "tasks": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "write_paths", "resources"],
+            "properties": {
+              "task_id": { "type": "string" },
+              "write_paths": { "type": ["array", "null"], "items": { "type": "string" } },
+              "resources": { "type": ["array", "null"], "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "plan_signature": { "type": "string" },
+    "publication": { "$ref": "#/$defs/candidate" },
+    "imports": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["request_id", "digests", "artifacts", "status", "enqueued"],
+        "properties": {
+          "request_id": { "type": "string" },
+          "digests": { "type": ["array", "null"], "items": { "type": "string" } },
+          "artifacts": { "type": ["array", "null"], "items": { "type": "string" } },
+          "source_paths": { "type": ["array", "null"], "items": { "type": "string" } },
+          "status": { "enum": ["queued", "waiting", "planning", "applied", "failed"] },
+          "added_tasks": { "type": ["array", "null"], "items": { "type": "string" } },
+          "covered": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["requirement"],
+              "properties": {
+                "requirement": { "type": "string" },
+                "task_id": { "type": "string" },
+                "evidence": { "type": "string" }
+              }
+            }
+          },
+          "conflicts": { "type": ["array", "null"], "items": { "type": "string" } },
+          "adjustments": { "type": ["array", "null"], "items": { "type": "string" } },
+          "gates": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["task_id", "depends_on"],
+              "properties": {
+                "task_id": { "type": "string" },
+                "depends_on": { "type": ["array", "null"], "items": { "type": "string" } }
+              }
+            }
+          },
+          "error": { "type": "string" },
+          "enqueued": { "type": "string" },
+          "applied": { "type": "string" }
+        }
+      }
+    },
+    "finished": { "type": "boolean" },
+    "integrated": { "type": "integer" },
+    "reviewed_at": { "type": "integer" },
+    "reviewed_tip": { "type": "string" },
+    "review_pending": { "type": "boolean" },
+    "observation": { "$ref": "#/$defs/observation" },
+    "timing": { "$ref": "#/$defs/timing" },
+    "statistics": { "$ref": "#/$defs/statistics" }
+  },
+  "$defs": {
+    "backlog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "source_files", "tasks"],
+      "properties": {
+        "project": { "type": "object" },
+        "schema_version": { "type": "integer" },
+        "source_files": { "type": ["array", "null"], "items": { "type": "string" } },
+        "goal": { "type": "string" },
+        "tasks": { "type": ["array", "null"], "items": { "$ref": "#/$defs/task" } }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "priority", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "priority": { "type": "integer" },
+        "status": { "enum": ["todo", "doing", "blocked", "done", "cancelled"] },
+        "details": { "type": "string" },
+        "steps": { "type": ["array", "null"], "items": { "type": "string" } },
+        "depends_on": { "type": ["array", "null"], "items": { "type": "string" } },
+        "files": { "type": ["array", "null"], "items": { "type": "string" } },
+        "blockers": { "type": ["array", "null"], "items": { "type": "string" } },
+        "tags": { "type": ["array", "null"], "items": { "type": "string" } },
+        "updated_at": { "type": "string" },
+        "created_at": { "type": "string" },
+        "unblock_when": { "type": "string" }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "task", "agent", "base", "worktree", "directory", "ref", "phase", "repairs", "worktrees"],
+      "properties": {
+        "id": { "type": "string" },
+        "task": { "$ref": "#/$defs/task" },
+        "agent": { "type": "string" },
+        "base": { "type": "string" },
+        "worktree": { "type": "string" },
+        "directory": { "type": "string" },
+        "ref": { "type": "string" },
+        "phase": { "type": "string" },
+        "result_commit": { "type": "string" },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "status", "summary", "files", "blockers"],
+          "properties": {
+            "task_id": { "type": "string" },
+            "status": { "enum": ["done", "blocked"] },
+            "summary": { "type": "string" },
+            "files": { "type": ["array", "null"], "items": { "type": "string" } },
+            "blockers": { "type": ["array", "null"], "items": { "type": "string" } },
+            "followups": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["title", "details", "evidence", "priority"],
+                "properties": {
+                  "defer_until": { "type": "string" },
+                  "owner": { "type": "string" },
+                  "key": { "type": "string" },
+                  "existing_task_id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "details": { "type": "string" },
+                  "evidence": { "type": "string" },
+                  "depends_on": { "type": ["array", "null"], "items": { "type": "string" } },
+                  "priority": { "type": "integer" }
+                }
+              }
+            },
+            "unblock_when": { "type": "string" }
+          }
+        },
+        "verification": { "$ref": "#/$defs/candidate" },
+        "repairs": { "type": "integer" },
+        "feedback": { "type": "string" },
+        "failure_hash": { "type": "string" },
+        "repeats": { "type": "integer" },
+        "diagnosed": { "type": "boolean" },
+        "worktrees": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "commit", "tree", "ok"],
+      "properties": {
+        "base": { "type": "string" },
+        "commit": { "type": "string" },
+        "tree": { "type": "string" },
+        "worktree": { "type": "string" },
+        "before": { "type": "string" },
+        "attempt_id": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "feedback": { "type": "string" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "build_mismatch",
+        "schema_version",
+        "observed_at",
+        "controller_owned",
+        "view_matches_controller",
+        "workers",
+        "event_cursor"
+      ],
+      "properties": {
+        "executable": { "$ref": "#/$defs/build" },
+        "build_mismatch": { "type": "boolean" },
+        "schema_version": { "type": "integer" },
+        "observed_at": { "type": "string" },
+        "controller_owned": { "type": "boolean" },
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "session", "pid", "root", "mode", "started"],
+          "properties": {
+            "version": { "type": "integer" },
+            "session": { "type": "string" },
+            "pid": { "type": "integer" },
+            "root": { "type": "string" },
+            "mode": { "type": "string" },
+            "started": { "type": "string" },
+            "build": { "$ref": "#/$defs/build" },
+            "bootstrap_agent": { "type": "string" }
+          }
+        },
+        "view": { "type": "object", "description": "The presentation snapshot published to runtime/view.json. Its full shape is pinned by the recorded shape fixture rather than enumerated here." },
+        "view_matches_controller": { "type": "boolean" },
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt_id", "task_id", "phase", "retained", "output_bytes", "progress"],
+            "properties": {
+              "attempt_id": { "type": "string" },
+              "task_id": { "type": "string" },
+              "phase": { "type": "string" },
+              "retained": { "type": "boolean" },
+              "log": { "type": "string" },
+              "last_output_at": { "type": "string" },
+              "output_age_seconds": { "type": "integer" },
+              "output_bytes": { "type": "integer" },
+              "process": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["pid", "started", "running"],
+                "properties": {
+                  "pid": { "type": "integer" },
+                  "identity": { "type": "string" },
+                  "started": { "type": "string" },
+                  "ended": { "type": "string" },
+                  "running": { "type": "boolean" }
+                }
+              },
+              "progress": { "type": "string" }
+            }
+          }
+        },
+        "event_cursor": { "type": "integer" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "revision", "modified"],
+      "properties": {
+        "release": { "type": "string" },
+        "revision": { "type": "string" },
+        "modified": { "type": "boolean" }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tasks",
+        "schema_version",
+        "available",
+        "history_complete",
+        "elapsed_seconds",
+        "active_seconds",
+        "worker_seconds",
+        "controller_seconds",
+        "unknown_sessions",
+        "unknown_processes",
+        "running_processes",
+        "imported_processes"
+      ],
+      "properties": {
+        "tasks": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task_id",
+              "available",
+              "history_complete",
+              "attempts",
+              "recorded_attempts",
+              "worker_seconds",
+              "check_seconds",
+              "other_seconds",
+              "active_seconds",
+              "elapsed_seconds",
+              "unknown_processes",
+              "running_processes"
+            ],
+            "properties": {
+              "task_id": { "type": "string" },
+              "available": { "type": "boolean" },
+              "history_complete": { "type": "boolean" },
+              "attempts": { "type": "integer" },
+              "recorded_attempts": { "type": "integer" },
+              "worker_seconds": { "type": ["number", "null"] },
+              "check_seconds": { "type": ["number", "null"] },
+              "other_seconds": { "type": ["number", "null"] },
+              "active_seconds": { "type": ["number", "null"] },
+              "elapsed_seconds": { "type": ["number", "null"] },
+              "unknown_processes": { "type": "integer" },
+              "running_processes": { "type": "integer" }
+            }
+          }
+        },
+        "schema_version": { "type": "integer" },
+        "available": { "type": "boolean" },
+        "recorded_since": { "type": "string" },
+        "first_recorded_at": { "type": "string" },
+        "last_recorded_at": { "type": "string" },
+        "history_complete": { "type": "boolean" },
+        "elapsed_seconds": { "type": ["number", "null"] },
+        "active_seconds": { "type": ["number", "null"] },
+        "worker_seconds": { "type": ["number", "null"] },
+        "controller_seconds": { "type": ["number", "null"] },
+        "unknown_sessions": { "type": "integer" },
+        "unknown_processes": { "type": "integer" },
+        "running_processes": { "type": "integer" },
+        "imported_processes": { "type": "integer" }
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "updated_at",
+        "elapsed_seconds",
+        "active_seconds",
+        "worker_seconds",
+        "controller_seconds",
+        "history_complete",
+        "unknown_ends",
+        "tasks_done",
+        "tasks_total",
+        "integrations",
+        "attempts",
+        "repairs",
+        "checks_passed",
+        "checks_failed",
+        "sessions",
+        "usage_reports",
+        "agent_runs",
+        "priced_reports",
+        "tokens",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "estimated_usd",
+        "reported_usd",
+        "models",
+        "days"
+      ],
+      "properties": {
+        "schema_version": { "type": "integer" },
+        "updated_at": { "type": "string" },
+        "first_recorded_at": { "type": "string" },
+        "elapsed_seconds": { "type": ["number", "null"] },
+        "active_seconds": { "type": ["number", "null"] },
+        "worker_seconds": { "type": ["number", "null"] },
+        "controller_seconds": { "type": ["number", "null"] },
+        "history_complete": { "type": "boolean" },
+        "unknown_ends": { "type": "integer" },
+        "tasks_done": { "type": "integer" },
+        "tasks_total": { "type": "integer" },
+        "integrations": { "type": "integer" },
+        "attempts": { "type": "integer" },
+        "repairs": { "type": "integer" },
+        "checks_passed": { "type": "integer" },
+        "checks_failed": { "type": "integer" },
+        "sessions": { "type": "integer" },
+        "usage_reports": { "type": "integer" },
+        "agent_runs": { "type": "integer" },
+        "priced_reports": { "type": "integer" },
+        "tokens": { "type": "integer" },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "cache_read_tokens": { "type": "integer" },
+        "estimated_usd": { "type": ["number", "null"] },
+        "reported_usd": { "type": ["number", "null"] },
+        "reported_cost_basis": { "type": "string" },
+        "pricing_date": { "type": "string" },
+        "models": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "model",
+              "input_tokens",
+              "output_tokens",
+              "cache_read_tokens",
+              "cache_write_tokens",
+              "estimated_usd",
+              "reported_usd",
+              "reports",
+              "priced_reports"
+            ],
+            "properties": {
+              "model": { "type": "string" },
+              "input_tokens": { "type": "integer" },
+              "output_tokens": { "type": "integer" },
+              "cache_read_tokens": { "type": "integer" },
+              "cache_write_tokens": { "type": "integer" },
+              "estimated_usd": { "type": ["number", "null"] },
+              "reported_usd": { "type": ["number", "null"] },
+              "reported_cost_basis": { "type": "string" },
+              "reports": { "type": "integer" },
+              "priced_reports": { "type": "integer" }
+            }
+          }
+        },
+        "days": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "worker_seconds", "integrations", "tokens", "usage_reports", "estimated_usd"],
+            "properties": {
+              "date": { "type": "string" },
+              "worker_seconds": { "type": "number" },
+              "integrations": { "type": "integer" },
+              "tokens": { "type": "integer" },
+              "usage_reports": { "type": "integer" },
+              "estimated_usd": { "type": ["number", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/status-compact.schema.json",
+  "title": "Looper compact status (contract version 2)",
+  "description": "One JSON document answering: which project, run, controller, and build; whether the controller is running, starting, draining, stopped, or unknown; which tasks and phases are active; what prevents scheduling; what changed last; and where observation continues. Bounded to 8 KiB by AX-004.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema_version",
+    "kind",
+    "generated_at",
+    "project",
+    "run",
+    "builds",
+    "controller",
+    "work",
+    "waiting",
+    "requests",
+    "findings",
+    "cursor",
+    "limits",
+    "detail"
+  ],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.status.compact" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "todo_path": { "type": "string" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "controller_session": { "type": "string" },
+        "mode": { "enum": ["foreground", "detached", "unknown"] },
+        "started_at": { "type": "string" }
+      }
+    },
+    "builds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client"],
+      "properties": {
+        "client": { "$ref": "#/$defs/build" },
+        "controller": { "$ref": "#/$defs/build" },
+        "match": { "type": "boolean" },
+        "note": {
+          "type": "string",
+          "description": "Explains a difference, for example that a running controller keeps its original build until restart."
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "owned"],
+      "properties": {
+        "state": { "enum": ["starting", "controlling", "draining", "stopped", "unknown"] },
+        "owned": { "type": "boolean" },
+        "ownership_evidence": { "enum": ["lock", "metadata", "none"] },
+        "ownership_age_seconds": { "type": "integer", "minimum": 0 },
+        "view_matches": { "type": "boolean" },
+        "view_age_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "work": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts", "active"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "required": ["done", "todo", "blocked", "ready"],
+          "properties": {
+            "done": { "type": "integer", "minimum": 0 },
+            "todo": { "type": "integer", "minimum": 0 },
+            "blocked": { "type": "integer", "minimum": 0 },
+            "ready": { "type": "integer", "minimum": 0 },
+            "in_flight": { "type": "integer", "minimum": 0 },
+            "integrated": { "type": "integer", "minimum": 0 },
+            "cancelled": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "active": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt_id", "task_id", "phase", "progress"],
+            "properties": {
+              "attempt_id": { "type": "string", "minLength": 1 },
+              "task_id": { "type": "string", "minLength": 1 },
+              "phase": { "type": "string", "minLength": 1 },
+              "agent": { "type": "string" },
+              "progress": { "enum": ["unknown", "advancing", "quiet"] },
+              "output_age_seconds": { "type": "integer", "minimum": 0 },
+              "output_bytes": { "type": "integer", "minimum": 0 },
+              "retained": { "type": "boolean" }
+            }
+          }
+        },
+        "phases": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["phase"],
+            "properties": {
+              "phase": { "type": "string", "minLength": 1 },
+              "age_seconds": { "type": "integer", "minimum": 0 },
+              "detail": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "waiting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Machine-stable reason code, for example review_pending, backlog_hold, no_ready_task, draining, or dispatch_limit."
+        },
+        "detail": { "type": "string" },
+        "age_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "requests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pending"],
+      "properties": {
+        "pending": { "type": "integer", "minimum": 0 },
+        "waiting": { "type": "integer", "minimum": 0 },
+        "oldest_age_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "findings": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/finding" } },
+    "last_transition": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event_id", "kind", "time"],
+          "properties": {
+            "event_id": { "type": "integer", "minimum": 1 },
+            "kind": { "type": "string", "minLength": 1 },
+            "time": { "type": "string" },
+            "task_id": { "type": "string" },
+            "message": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "cursor": { "$ref": "#/$defs/cursor" },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes_budget", "omitted"],
+      "properties": {
+        "bytes_budget": { "type": "integer", "minimum": 1 },
+        "active_max": { "type": "integer", "minimum": 0 },
+        "findings_max": { "type": "integer", "minimum": 0 },
+        "string_max": { "type": "integer", "minimum": 1 },
+        "omitted": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Counts of entries left out of a bounded collection, for example omitted findings or active work."
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "full": { "type": "string", "description": "Command returning the complete state, for example looper status --contract v2 --full." },
+        "events": { "type": "string" },
+        "wait": { "type": "string", "description": "The finite wait that observes the next change from this document's cursor instead of repeated status calls (AX-013)." },
+        "inspect": { "type": "string" },
+        "requests": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "revision", "modified"],
+      "properties": {
+        "release": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "description": "A commit, a development stamp, or the literal unknown." },
+        "modified": { "type": "boolean" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "task_id": { "type": "string" },
+        "message": { "type": "string" },
+        "action": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/evidence_reference" }
+      }
+    },
+    "evidence_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": { "enum": ["event", "log", "file", "request"] },
+        "reference": { "type": "string", "minLength": 1 },
+        "command": { "type": "string" }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "scope"],
+      "properties": {
+        "event_id": { "type": "integer", "minimum": 0 },
+        "scope": { "const": "store" },
+        "store_id": { "type": "string", "description": "Identifies the retained event store the cursor belongs to." },
+        "store_epoch": { "type": "integer", "minimum": 1, "description": "Increments when the event store is reset; a cursor from another epoch is invalid." },
+        "controller_session": { "type": "string", "description": "Present when the position is scoped to one controller session rather than the store." }
+      }
+    }
+  }
+}

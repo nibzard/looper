@@ -188,6 +188,7 @@ func (e *Engine) sweepResources() {
 		}
 		if err := cleanResourceLease(&lease); err != nil {
 			e.event("resource-cleanup-error", fmt.Sprintf("Temporary resources remain in %s: %v. Cleanup retries at the next completion or restart.", lease.Directory, err))
+			e.cleanupFailureEvent(lease, err)
 		}
 		return nil
 	})

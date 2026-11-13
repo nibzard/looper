@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/settings-ack.schema.json",
+  "title": "Looper controller request acknowledgement (legacy contract, frozen)",
+  "description": "The acknowledgement document the typed request transport writes to runtime/acks/<id>.json and that `looper add-task --json` prints after its bounded wait. This is the envelope AX-009 extends into durable, restart-surviving receipts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "status", "controller_session"],
+  "properties": {
+    "version": { "type": "integer" },
+    "id": { "type": "string" },
+    "status": { "enum": ["applied", "reset", "conflict", "error", "stale-session"] },
+    "controller_session": { "type": "string" },
+    "profile_digest": { "type": "string" },
+    "outcomes": { "type": "object", "additionalProperties": { "type": "string" } },
+    "message": { "type": "string" }
+  }
+}

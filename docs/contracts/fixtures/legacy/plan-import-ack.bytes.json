@@ -1,0 +1,1 @@
+{"version":1,"type":"plan-import","id":"import-01","status":"applied","controller_session":"run-f7803453a9ce5f6b","added_task_ids":["T070"],"coverage":[{"requirement":"keep plain status readable","task_id":"T012","evidence":"docs/UI-PLAN.md"}],"adjustments":["T071 now depends on T070"],"gates":[{"task_id":"T071","depends_on":["T070"]}]}

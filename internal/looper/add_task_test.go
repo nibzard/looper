@@ -136,7 +136,7 @@ func TestParseAddTask(t *testing.T) {
 // running controller without polling shared engine fields.
 func waitForAddTaskPath(t *testing.T, path, what string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(testBudget(20 * time.Second))
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
@@ -214,7 +214,7 @@ exit 0
 	}
 	defer lock.Close()
 	defer e.Store.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testBudget(30*time.Second))
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -233,7 +233,7 @@ exit 0
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testBudget(5 * time.Second)):
 			t.Error("run did not stop")
 		}
 	}()

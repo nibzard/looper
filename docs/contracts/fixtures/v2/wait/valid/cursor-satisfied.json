@@ -1,0 +1,24 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "outcome": "satisfied",
+  "condition": {
+    "kind": "cursor_change",
+    "cursor": 1202
+  },
+  "observed": {
+    "at": "2026-11-09T12:02:31.418Z",
+    "high_water": 1210
+  },
+  "cursor": { "event_id": 1210, "scope": "store", "store_id": "store-3f9c1a2b", "store_epoch": 1 },
+  "store": { "id": "store-3f9c1a2b", "epoch": 1 },
+  "controller": { "state": "owning", "session": "run-4f39faa5451b464d" },
+  "wait": { "timeout_seconds": 30, "elapsed_seconds": 0 },
+  "detail": {
+    "command": "looper wait --contract v2 --cursor 1210 --timeout 30s",
+    "events": "looper events --contract v2 --after 1210",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json"
+  }
+}

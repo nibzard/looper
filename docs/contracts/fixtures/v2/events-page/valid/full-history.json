@@ -1,0 +1,18 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.events.page",
+  "items": [
+    { "id": 1, "time": "2026-11-05T09:41:02Z", "kind": "start", "message": "Session started" },
+    { "id": 2, "time": "2026-11-05T09:44:10Z", "kind": "worker_activity", "message": "T002 wrote output", "task_id": "T002", "attempt_id": "task-b0c31e9d7a2f4e65", "controller_session": "run-4f39faa5451b464d", "phase": "running", "data": { "log": "history/task-b0c31e9d7a2f4e65/events-00.jsonl", "action": "wrote" } },
+    { "id": 3, "time": "2026-11-05T09:45:00Z", "kind": "shutdown", "message": "Stopped after draining active work", "data": { "reason": "drained" } }
+  ],
+  "page": { "after": 0, "high_water": 3, "returned": 3, "order": "ascending", "has_more": false },
+  "filters": { "full_history": true },
+  "continuation": {
+    "cursor": { "event_id": 3, "scope": "store", "store_id": "demo-3f2a/state.db", "store_epoch": 1 },
+    "command": "looper events --contract v2 --after 3",
+    "has_more": false
+  },
+  "store": { "id": "demo-3f2a/state.db", "epoch": 1 }
+}

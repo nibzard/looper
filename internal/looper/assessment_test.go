@@ -148,7 +148,7 @@ func assessRunEngine(t *testing.T, assess string, deadline time.Duration) (*Engi
 
 func firstAssessmentArtifact(t *testing.T, dir, name string) string {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testBudget(10 * time.Second))
 	for time.Now().Before(deadline) {
 		matches, _ := filepath.Glob(filepath.Join(dir, "task-*", "checks", "*", name))
 		if len(matches) > 0 {
@@ -240,7 +240,7 @@ func TestCancelDuringAssessmentResumesVerification(t *testing.T) {
 		if code != 130 {
 			t.Fatalf("cancellation during the assessment must return 130, got %d", code)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("the run did not exit after cancellation")
 	}
 	shutdown()

@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/inspect-compact.schema.json",
+  "title": "Looper compact task inspection (contract version 2)",
+  "description": "One JSON document answering what one task needs: its contract and blockers, the current attempt with its feedback excerpt and output evidence, a bounded page of attempt and check history, the timing provenance, and the evidence references that keep every remaining byte reachable. Bounded to 8 KiB by AX-005; the complete unpaged document stays available through --full and remains the legacy default.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema_version",
+    "kind",
+    "generated_at",
+    "project",
+    "run",
+    "controller",
+    "task",
+    "attempts",
+    "checks",
+    "timing",
+    "limits",
+    "detail"
+  ],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.inspect.compact" },
+    "generated_at": { "type": "string" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "todo_path"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "todo_path": { "type": "string" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "controller_session": { "type": "string" },
+        "mode": { "enum": ["foreground", "detached", "unknown"] }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "owned"],
+      "properties": {
+        "state": { "enum": ["starting", "controlling", "draining", "stopped", "unknown"] },
+        "owned": { "type": "boolean" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "status", "priority", "contract_digest", "depends_on", "files", "blockers", "details"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["todo", "doing", "blocked", "done", "cancelled"] },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "contract_digest": {
+          "type": "string",
+          "description": "The task contract hash the engine's acceptance invariant compares, so a caller distinguishes a reopened task from a changed requirement."
+        },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "unblock_when": { "type": "string" },
+        "depends_on": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "files": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "steps": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "tags": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "blockers": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "details": { "$ref": "#/$defs/excerpt" }
+      }
+    },
+    "attempts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "current", "items", "page", "continuation"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0, "description": "Every attempt the saved run holds for this task." },
+        "current": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/attempt" }
+          ],
+          "description": "The newest attempt, whatever page the caller reads, so a bounded history read never hides the live state."
+        },
+        "items": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/attempt" } },
+        "page": { "$ref": "#/$defs/page" },
+        "continuation": { "$ref": "#/$defs/continuation" }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "items", "page", "continuation"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "items": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "time", "attempt_id", "revision", "kind", "result", "artifact"],
+            "properties": {
+              "id": { "type": "integer", "minimum": 1, "description": "The check row identifier; --checks-after continues strictly after it." },
+              "time": { "type": "string" },
+              "attempt_id": { "type": "string" },
+              "revision": { "type": "string" },
+              "kind": { "type": "string" },
+              "result": { "type": "string" },
+              "artifact": { "type": "string" }
+            }
+          }
+        },
+        "page": { "$ref": "#/$defs/page" },
+        "continuation": { "$ref": "#/$defs/continuation" }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "available",
+        "history_complete",
+        "attempts",
+        "recorded_attempts",
+        "worker_seconds",
+        "check_seconds",
+        "other_seconds",
+        "active_seconds",
+        "elapsed_seconds",
+        "unknown_processes",
+        "running_processes"
+      ],
+      "properties": {
+        "task_id": { "type": "string" },
+        "available": { "type": "boolean" },
+        "history_complete": { "type": "boolean" },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "recorded_attempts": { "type": "integer", "minimum": 0 },
+        "worker_seconds": { "type": ["number", "null"] },
+        "check_seconds": { "type": ["number", "null"] },
+        "other_seconds": { "type": ["number", "null"] },
+        "active_seconds": { "type": ["number", "null"] },
+        "elapsed_seconds": { "type": ["number", "null"] },
+        "unknown_processes": { "type": "integer", "minimum": 0 },
+        "running_processes": { "type": "integer", "minimum": 0 }
+      },
+      "description": "The provenance of the task's timing: coverage, recorded versus saved attempts, and unknown process ends, so a caller knows how much of the history the numbers cover."
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reference"],
+        "properties": {
+          "kind": { "enum": ["log", "commit", "event"] },
+          "reference": { "type": "string", "minLength": 1 },
+          "command": { "type": "string", "description": "A read-only command that retrieves the evidence." }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes_budget", "string_max", "excerpt_max", "attempts_max", "checks_max", "logs_max", "omitted"],
+      "properties": {
+        "bytes_budget": { "type": "integer", "minimum": 1 },
+        "string_max": { "type": "integer", "minimum": 1 },
+        "excerpt_max": { "type": "integer", "minimum": 1 },
+        "attempts_max": { "type": "integer", "minimum": 0 },
+        "checks_max": { "type": "integer", "minimum": 0 },
+        "logs_max": { "type": "integer", "minimum": 0 },
+        "omitted": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Counts of entries the bounds left out: attempts, checks, logs, blockers, steps, depends_on, files, tags."
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "full": { "type": "string", "description": "Command returning the complete unpaged document." },
+        "history": { "type": "string", "description": "Command that pages the attempt history from the beginning." },
+        "events": { "type": "string", "description": "Command that pages the task's journal events." }
+      }
+    }
+  },
+  "$defs": {
+    "excerpt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "bytes", "truncated"],
+      "properties": {
+        "text": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0, "description": "The complete recorded size; the text is only an excerpt when truncated is true." },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "attempt_id", "phase", "active", "retained", "repairs", "repeats", "logs", "logs_total"],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 1, "description": "The attempt's one-based position in the task's saved history; --after continues strictly after it, so a read after 0 covers every attempt." },
+        "attempt_id": { "type": "string", "minLength": 1 },
+        "phase": { "type": "string", "minLength": 1 },
+        "agent": { "type": "string" },
+        "active": { "type": "boolean", "description": "True while the attempt is neither done nor blocked." },
+        "retained": { "type": "boolean", "description": "True for an active attempt no controller owns: retained work for the next run, not work in flight." },
+        "repairs": { "type": "integer", "minimum": 0 },
+        "repeats": { "type": "integer", "minimum": 0 },
+        "diagnosed": { "type": "boolean" },
+        "base": { "type": "string" },
+        "directory": { "type": "string", "description": "The attempt's runtime directory; logs are relative to it." },
+        "result_commit": { "type": "string" },
+        "failure_hash": { "type": "string" },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "text"],
+          "properties": {
+            "status": { "type": "string" },
+            "text": { "type": "string" }
+          }
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ok", "feedback"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "feedback": { "$ref": "#/$defs/excerpt" }
+          }
+        },
+        "feedback": { "$ref": "#/$defs/excerpt" },
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["log", "bytes", "progress"],
+          "properties": {
+            "log": { "type": "string" },
+            "bytes": { "type": "integer", "minimum": 0 },
+            "age_seconds": { "type": "integer", "minimum": 0 },
+            "progress": {
+              "enum": ["unknown", "advancing", "quiet"],
+              "description": "Output activity, never task progress: unknown means no output at all."
+            }
+          }
+        },
+        "logs": { "type": "array", "maxItems": 8, "items": { "type": "string" }, "description": "The newest log paths, relative to directory." },
+        "logs_total": { "type": "integer", "minimum": 0, "description": "Every retained log of this attempt; --full lists them all." }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["after", "returned", "limit", "order", "has_more"],
+      "properties": {
+        "after": { "type": "integer", "minimum": 0, "description": "The exclusive lower bound the page was read after; 0 for a newest-tail read." },
+        "returned": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 },
+        "order": { "const": "ascending" },
+        "has_more": { "type": "boolean" }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "has_more"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1, "description": "The exact next call: the same contract and page size, continuing after the position this page reached." },
+        "has_more": { "type": "boolean" }
+      }
+    }
+  }
+}

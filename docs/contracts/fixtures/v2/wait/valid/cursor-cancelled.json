@@ -1,0 +1,25 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "outcome": "cancelled",
+  "condition": {
+    "kind": "cursor_change",
+    "cursor": 1420
+  },
+  "observed": {
+    "at": "2026-11-09T12:07:19.004Z",
+    "high_water": 1420,
+    "note": "no event was committed past 1420. No controller owns the repository, so nothing changes the saved records while this wait runs."
+  },
+  "cursor": { "event_id": 1420, "scope": "store", "store_id": "store-3f9c1a2b", "store_epoch": 1 },
+  "store": { "id": "store-3f9c1a2b", "epoch": 1 },
+  "controller": { "state": "stopped" },
+  "wait": { "timeout_seconds": 300, "elapsed_seconds": 77 },
+  "detail": {
+    "command": "looper wait --contract v2 --cursor 1420 --timeout 300s",
+    "events": "looper events --contract v2 --after 1420",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "controller_session": "string",
+  "id": "string",
+  "message": "string",
+  "outcomes": {
+    "agent": "string"
+  },
+  "profile_digest": "string",
+  "status": "string",
+  "version": "integer"
+}

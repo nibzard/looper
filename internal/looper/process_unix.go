@@ -45,6 +45,24 @@ func ownsRepository(common string) bool {
 	return false
 }
 
+// ownsRepositoryNoCreate reports whether a controller holds the repository
+// lock without creating the lock file. The recovery preview (AX-016) changes
+// no file: an absent lock file means no owner, an unreadable existing one
+// keeps the conservative answer, and a probe of an existing one takes a flock
+// that never writes.
+func ownsRepositoryNoCreate(path string) bool {
+	f, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	defer f.Close()
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
+}
+
 func cleanEnv(extra map[string]string) []string {
 	skip := map[string]bool{"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true, "GIT_INDEX_FILE": true, "CLAUDECODE": true}
 	var out []string

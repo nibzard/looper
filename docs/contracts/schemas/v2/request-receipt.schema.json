@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/request-receipt.schema.json",
+  "title": "Looper mutation receipt (contract version 2)",
+  "description": "The immediate document returned by looper add-task, add-plan, cancel, amend, config, requeue, and stop under contract version 2. It names the durable request, not the applied result; callers query or wait separately.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "request", "query"],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.request.receipt" },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "state", "created_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": {
+          "enum": ["add-task", "add-plan", "settings", "requeue", "stop", "cancel-task", "amend-task", "recovery"],
+          "description": "Request types a controller can advertise in its capabilities. A type absent from the controller advertisement is refused before queueing."
+        },
+        "state": {
+          "enum": ["submitted", "accepted", "waiting", "applied", "rejected", "failed", "cancelled"],
+          "description": "See docs/contracts/request-states.json. A receipt returned promptly reports submitted or accepted; applied results come from the request record."
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "controller_session": { "type": "string" },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Caller-supplied key scoped to the project and operation. Repeating a key with the same payload returns the original request; a changed payload is a conflict."
+        },
+        "payload_digest": { "type": "string", "minLength": 1 },
+        "duplicate": { "type": "boolean", "description": "True when this receipt returns an existing request for the same idempotency key and payload." }
+      }
+    },
+    "wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "timeout_seconds"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "note": { "type": "string", "description": "States that a wait timeout is an outcome of the wait, never a cancellation of the request." }
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

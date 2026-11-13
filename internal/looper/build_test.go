@@ -3,6 +3,7 @@ package looper
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,43 @@ func TestVersionJSONIdentifiesBuild(t *testing.T) {
 	}
 	if info["release"] != Version || info["revision"] == "" || info["revision"] == nil {
 		t.Fatalf("missing build identity: %v", info)
+	}
+}
+
+func TestExplicitStampsWinOverEmbeddedMetadata(t *testing.T) {
+	revision, modified := BuildRevision, BuildModified
+	t.Cleanup(func() { BuildRevision, BuildModified = revision, modified })
+
+	// An explicit unknown is a statement, not a gap for embedded VCS metadata
+	// to fill: an archive build keeps its unknown identity even when Go
+	// stamped a revision from an enclosing repository.
+	BuildRevision, BuildModified = "unknown", "false"
+	if build := currentBuild(); build.Revision != "unknown" || build.Modified {
+		t.Fatalf("explicit unknown stamp was overridden: %+v", build)
+	}
+
+	BuildRevision, BuildModified = "cafebabecafebabecafebabecafebabe", "true"
+	if build := currentBuild(); build.Revision != "cafebabecafebabecafebabecafebabe" || !build.Modified {
+		t.Fatalf("explicit stamps were overridden: %+v", build)
+	}
+
+	// Without stamps the embedded metadata, whatever this test binary
+	// carries, decides. The revision is always stated, never blank.
+	BuildRevision, BuildModified = "", ""
+	if build := currentBuild(); build.Revision == "" {
+		t.Fatalf("unstamped build hides its revision: %+v", build)
+	}
+}
+
+func TestBuildSummaryTruncatesRevision(t *testing.T) {
+	long := strings.Repeat("a", 40)
+	summary := BuildInfo{Release: "9.9.9", Revision: long}.String()
+	if summary != "looper 9.9.9 ("+long[:12]+")" {
+		t.Fatalf("the summary must abbreviate the revision: %q", summary)
+	}
+	summary = BuildInfo{Release: "9.9.9", Revision: long, Modified: true}.String()
+	if !strings.HasSuffix(summary, long[:12]+", modified)") {
+		t.Fatalf("the summary must keep the modified marker: %q", summary)
 	}
 }
 
