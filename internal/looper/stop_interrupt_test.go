@@ -1,14 +1,17 @@
 package looper
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // startStandInController starts a child process and records it as the
@@ -125,4 +128,95 @@ func TestDoctorNamesControllerAndWarnsOnOldBuild(t *testing.T) {
 	if !strings.Contains(out.String(), "Warning: the controller runs looper 0.10.0 (deadbeef)") || !strings.Contains(out.String(), "looper stop") {
 		t.Fatalf("doctor must warn about the controller build:\n%s", out.String())
 	}
+}
+
+// TestStopDuringReviewDrainsDespiteFileChange reproduces the 2026-11-13
+// incident: a stop arrived while a review ran, a tracked file changed, and
+// the controller started a second review instead of draining. A stop that
+// targets this controller must drain at the boundary after the review.
+func TestStopDuringReviewDrainsDespiteFileChange(t *testing.T) {
+	bin, _ := fakeAgent(t, "")
+	t.Setenv("LOOPER_FAKE_SLEEP", "2")
+	t.Setenv("LOOPER_FAKE_REVIEW", `{"status":"reviewed","summary":"checked","findings":[],"complete":false}`)
+	c := repoConfig(t, "run")
+	c.CodexBin, c.ClaudeBin, c.ReviewAgent, c.ReviewEvery = bin, bin, "codex", 5
+	b := Backlog{Version: 1, Sources: []string{}, Tasks: []Task{{ID: "T001", Title: "done work", Priority: 1, Status: "done"}}}
+	if err := writeJSON(c.Todo, b); err != nil {
+		t.Fatal(err)
+	}
+	e, lock, err := NewEngine(c, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	defer e.Store.Close()
+	if err = e.initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.State.Integrated, e.State.ReviewedAt, e.State.ReviewPending = 5, 0, true
+	if err = e.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testBudget(60*time.Second))
+	defer cancel()
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, err := e.Run(ctx)
+		done <- result{code, err}
+	}()
+
+	// Wait until the review agent runs, then stop and edit a tracked file.
+	deadline := time.Now().Add(testBudget(20 * time.Second))
+	for !reviewStarted(t, e) {
+		if time.Now().After(deadline) {
+			t.Fatal("the review never started")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err = writeStopRequest(e.Dir, stopRequest{Session: e.controller.Session}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(c.Root, "NOTES.md"), []byte("edited during the review\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := <-done
+	if r.code != 0 || r.err != nil {
+		t.Fatalf("the stop must drain with code 0: %d %v", r.code, r.err)
+	}
+	if exit := lastShutdown(t, e.Store); exit.Reason != "drained" {
+		t.Fatalf("the stop was not honored: %+v", exit)
+	}
+	events, err := e.Store.Events(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews := 0
+	for _, ev := range events {
+		if ev.Kind == "review" && strings.HasPrefix(ev.Message, "Checking") {
+			reviews++
+		}
+	}
+	if reviews > 1 {
+		t.Fatalf("a drained controller must not start another review: %d reviews", reviews)
+	}
+}
+
+func reviewStarted(t *testing.T, e *Engine) bool {
+	t.Helper()
+	events, err := e.Store.Events(0)
+	if err != nil {
+		return false
+	}
+	for _, ev := range events {
+		if ev.Kind == "review-activity" {
+			return true
+		}
+	}
+	return false
 }
