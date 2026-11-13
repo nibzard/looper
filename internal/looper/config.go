@@ -28,6 +28,9 @@ type Config struct {
 	// Interrupt makes looper stop signal the owning controller instead of
 	// requesting a drain.
 	Interrupt bool
+	// Foreground makes looper tui run the controller inside the dashboard
+	// process instead of starting a daemon and attaching to it.
+	Foreground bool
 	// AmendTask and AmendFile name the task one amendment targets and the
 	// file that carries the amended task (AX-020).
 	AmendTask string
@@ -475,6 +478,18 @@ func validateInterruptFlags(c Config) error {
 		return p
 	}
 	return nil
+}
+
+// validateForegroundFlags checks --foreground. Only looper tui chooses
+// between a daemon controller and one inside the dashboard process.
+func validateForegroundFlags(c Config) error {
+	if !c.Foreground || c.Command == "tui" {
+		return nil
+	}
+	p := usageFailure("option_command_mismatch", "--foreground is supported by looper tui")
+	p.Expected = map[string]any{"option": "--foreground", "command": "tui"}
+	p.Observed = map[string]any{"option": "--foreground", "command": c.Command}
+	return p
 }
 
 // afterOptionCommand reports whether a command accepts --after: the journal
@@ -933,6 +948,8 @@ func Parse(args []string) (Config, error) {
 			c.Cascade = true
 		case "--interrupt":
 			c.Interrupt = true
+		case "--foreground":
+			c.Foreground = true
 		case "--verbose", "-v":
 			c.Verbose = true
 		case "--smart", "-s":
@@ -1122,6 +1139,9 @@ func Parse(args []string) (Config, error) {
 		return c, err
 	}
 	if err = validateCancelFlags(c); err != nil {
+		return c, err
+	}
+	if err = validateForegroundFlags(c); err != nil {
 		return c, err
 	}
 	if err = validateInterruptFlags(c); err != nil {

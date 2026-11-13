@@ -68,13 +68,16 @@ var commandDocs = map[string]commandDoc{
 		},
 	},
 	"tui": {
-		usage:   "tui [--plan <path>...] [options]",
-		summary: "Open the dashboard for controlling and observing a run. It starts a controller when none owns the repository.",
+		usage:   "tui [--plan <path>...] [--foreground] [options]",
+		summary: "Open the dashboard for controlling and observing a run. It starts a detached controller when none owns the repository, then attaches to it.",
 		examples: []string{
 			"looper tui",
 			"looper tui --no-animation",
+			"looper tui --foreground",
 		},
 		notes: []string{
+			"`q` asks before it leaves: drain, interrupt with retained work, or detach while the run continues.",
+			"`--foreground` runs the controller inside the dashboard process, so the run stops when the dashboard exits.",
 			"While a controller owns the repository, `--plan` files submit through the add-plan request and the dashboard shows the receipt.",
 			"The non-interactive fallback prints that receipt on stderr, so its followed event stream stays one document per line.",
 		},

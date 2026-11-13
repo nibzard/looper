@@ -121,6 +121,26 @@ func TestAttachedQuitOffersDrain(t *testing.T) {
 	if m, cmd = key(m, "d"); cmd != nil || m.err != "controller changed" || m.dialog != "" {
 		t.Fatalf("failed drain detached: err=%q dialog=%q", m.err, m.dialog)
 	}
+	interrupts := 0
+	m = attached()
+	m.ctrl.Interrupt = func() error { interrupts++; return nil }
+	m, _ = key(m, "q")
+	if !strings.Contains(m.View(), "Interrupt; retain work") {
+		t.Fatalf("detach dialog hides the interrupt: %s", m.View())
+	}
+	if m, cmd = key(m, "c"); cmd == nil || !m.interruptAsked || interrupts != 1 {
+		t.Fatalf("c did not interrupt and detach: interrupts=%d", interrupts)
+	}
+	m = attached()
+	m.ctrl.Interrupt = func() error { return fmt.Errorf("controller changed") }
+	m, _ = key(m, "q")
+	if m, cmd = key(m, "c"); cmd != nil || m.err != "controller changed" || m.dialog != "" {
+		t.Fatalf("failed interrupt detached: err=%q dialog=%q", m.err, m.dialog)
+	}
+	m, _ = key(attached(), "q")
+	if m, cmd = key(m, "c"); cmd != nil || m.dialog != "detach" {
+		t.Fatal("c without an interrupt control left the dialog")
+	}
 	observer := model{ctrl: Controls{ReadOnly: true, Poll: func() *ViewSnapshot { return nil }}}
 	if m, cmd = key(observer, "q"); cmd == nil || m.dialog != "" {
 		t.Fatal("read-only observer did not detach at once")

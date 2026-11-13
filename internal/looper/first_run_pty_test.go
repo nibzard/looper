@@ -178,12 +178,15 @@ func TestTUIFirstRunFormSavesProfileAndStartsController(t *testing.T) {
 	t.Setenv("CODEX_BIN", "/bin/false")
 	t.Setenv("CLAUDE_BIN", "/bin/false")
 	c := preparedRepo(t, "tui")
+	// The controller runs in this process, so the test can drain it with
+	// its own SIGTERM.
+	c.Foreground = true
 	masterIn, screen := openFormTerminal(t)
 	_, dir := projectPaths(c)
 
 	var stderr strings.Builder
 	done := make(chan int, 1)
-	go func() { done <- runTUI([]string{"tui"}, c, os.Stdout, &stderr) }()
+	go func() { done <- runTUI([]string{"tui", "--foreground"}, c, os.Stdout, &stderr) }()
 	finished := false
 	t.Cleanup(func() {
 		if finished {

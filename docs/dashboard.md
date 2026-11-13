@@ -1,16 +1,26 @@
 # Dashboard
 
-Start the terminal user interface (TUI) with `looper tui`. It starts a
-controller or attaches to the active run. The overview shows the goal,
+Start the terminal user interface (TUI) with `looper tui`. If no run is
+active, it starts a detached controller, like `looper start`, and then
+attaches to it. Otherwise it attaches to the active run. The overview shows the goal,
 controller activity, snapshot age, progress, attention items, and active
 workers. Recent outcomes stay visible even when worker events fill the log.
 Integration counts cover the current session, the last hour, and the last
 24 hours. Looper reads these counts from the journal, so they survive the
 viewer's event buffer limit.
 
-For an unattended run, use `looper start`, then attach with `looper tui`.
-Keep the viewer in tmux or reconnect later. In attached mode, `q` detaches
-without stopping the controller. A missing snapshot shows `UNKNOWN` and
+Because the controller runs in the background, you can close the dashboard
+and reconnect later with `looper tui`. Press `q` to open the exit choices:
+
+- **[d] Drain, then detach**: finish current work, then stop the controller.
+- **[c] Interrupt; retain work**: stop at once, like `looper stop --interrupt`.
+- **[q] Detach; work continues**: close the dashboard and keep the run going.
+- **[esc] Stay**: return to the dashboard.
+
+A read-only observer (`looper attach`) detaches at once. To keep the
+controller inside the dashboard process, start with `looper tui --foreground`.
+Then the exit choices are drain and interrupt, because the run cannot
+continue without the dashboard. A missing snapshot shows `UNKNOWN` and
 retains the last known state. An attached dashboard reconnects when a replacement
 controller appears. Task details refresh with the new session. Actions wait until
 the dashboard displays that session. Quiet worker output does not prove a failure.
@@ -106,8 +116,8 @@ through a generic retry. When the condition is met, remove the tag and set
 | `d` | Show the selected task's diff. |
 | `a` / `s` | Add a plan / open settings when controls are available. |
 | `x` | Request a drain: stop new dispatch and finish current work. |
-| `q` | Detach an observer or open the controller exit choices. |
-| `ctrl+c` | Interrupt a controller and retain work, or detach an observer. |
+| `q` | Open the exit choices: drain, interrupt, or detach. An observer detaches at once. |
+| `ctrl+c` | Detach from a background controller. Under `--foreground`, interrupt and retain work. |
 | `?` | Show help. |
 
 Scrolling activity pauses the displayed text while new events arrive.
@@ -120,7 +130,7 @@ changed tasks and requests from earlier sessions. Retained work stays
 available for reuse. A read-only observer cannot requeue tasks.
 
 There is no command to pause execution. A drain waits for current planning
-or agent work to finish. To stop immediately, choose **interrupt; retain
+or agent work to finish. To stop immediately, choose **Interrupt; retain
 work** in the exit dialog. Restarting retains task progress, but unfinished
 planning runs again.
 

@@ -28,7 +28,7 @@ const (
 // ExitAction reports why the dashboard stopped. The wrapper may run a form
 // and restart the dashboard for form actions.
 type ExitAction struct {
-	Kind string // "", "settings", "add-plan", "drain"
+	Kind string // "", "settings", "add-plan", "drain", "interrupt"
 }
 
 // Controls connects the dashboard to a controller without importing the
@@ -49,9 +49,12 @@ type Controls struct {
 	// Done reports that the local controller exited (controlling mode).
 	Done func() bool
 	// Cancel stops the local controller with retained work (controlling mode).
-	Cancel   func()
-	ReadOnly bool
-	Session  string
+	Cancel func()
+	// Interrupt asks an attached controller to stop with retained work
+	// (attached mode). The controller runs in another process.
+	Interrupt func() error
+	ReadOnly  bool
+	Session   string
 	// Notice shows in the message area on start (for example a settings
 	// acknowledgement after the form flow).
 	Notice string
@@ -99,6 +102,7 @@ type model struct {
 	err               string
 	dialog            string // "", "drain", "exit", "detach", "add-plan"
 	drainAsked        bool
+	interruptAsked    bool
 	planPath          string
 	tailView          viewport.Model
 	logPath           string
@@ -148,8 +152,13 @@ func RunDashboard(c Controls) (ExitAction, error) {
 	}
 	// An attached client leaves a drain running in the controller it
 	// detached from, so the wrapper can say what continues after exit.
-	if finished.drainAsked && c.Snapshot == nil {
-		return ExitAction{Kind: "drain"}, nil
+	if c.Snapshot == nil {
+		switch {
+		case finished.interruptAsked:
+			return ExitAction{Kind: "interrupt"}, nil
+		case finished.drainAsked:
+			return ExitAction{Kind: "drain"}, nil
+		}
 	}
 	return ExitAction{}, nil
 }
@@ -561,6 +570,16 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.drainAsked = true
+			return m, tea.Quit
+		case "c":
+			if m.ctrl.Interrupt == nil {
+				return m, nil
+			}
+			if err := m.ctrl.Interrupt(); err != nil {
+				m.err, m.dialog = err.Error(), ""
+				return m, nil
+			}
+			m.interruptAsked = true
 			return m, tea.Quit
 		case "q", "enter":
 			return m, tea.Quit
@@ -1469,7 +1488,11 @@ func (m model) dialogView() string {
 	case "exit":
 		return m.dialogBox("Exit controller?\n\n [d] Drain, then exit\n [c] Interrupt; retain work\n [esc] Stay")
 	case "detach":
-		return m.dialogBox("Detach from controller?\n\n [d] Drain, then detach\n [q] Detach; work continues\n [esc] Stay")
+		interrupt := ""
+		if m.ctrl.Interrupt != nil {
+			interrupt = " [c] Interrupt; retain work\n"
+		}
+		return m.dialogBox("Detach from controller?\n\n [d] Drain, then detach\n" + interrupt + " [q] Detach; work continues\n [esc] Stay")
 	case "drain":
 		return m.dialogBox("Drain work?\n\n [y] Finish active work\n any other key  cancel")
 	case "add-plan":

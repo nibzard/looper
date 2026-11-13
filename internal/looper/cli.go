@@ -155,6 +155,8 @@ Options:
                     content is rejected; 1-128 bytes, no control characters
   --plain               Plain text only; no forms, color, or glyphs
   --no-animation        Dashboard without animated motion; status stays readable
+  --foreground          Run the controller inside the dashboard, so exiting
+                    the dashboard stops the run (looper tui)
   --yes                 Skip the first-run form and use defaults
   --json                Emit machine-readable progress
   --verbose             Show the run configuration at start

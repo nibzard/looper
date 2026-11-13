@@ -19,9 +19,11 @@ import (
 // runTUIONTerminal starts the real controlling dashboard on a pseudoterminal
 // pair and returns its exit channel plus the captured screen. The dashboard's
 // own output stream is the master side, so the wrapper's final messages are
-// observable like on a real terminal.
+// observable like on a real terminal. The controller runs in the foreground,
+// inside this process, so the signals under test reach it.
 func runTUIONTerminal(t *testing.T, c Config) (chan int, func() string, *strings.Builder) {
 	t.Helper()
+	c.Foreground = true
 	// A saved profile keeps the unattached start past the first-run form, so
 	// the dashboard under test is the controller this helper waits for.
 	writeProfileFile(t, c.ProfilePath, `{"version":1}`)

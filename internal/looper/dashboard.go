@@ -23,9 +23,11 @@ import (
 // following for an existing one; both fallbacks keep the invocation's parsed
 // flags. An owned repository receives the startup plans before the fallback
 // follows, with the receipt on stderr so the followed event stream stays one
-// document per line. An unattached start asks the first-run form before this
+// document per line. An unattached start asks the first-run form before the
 // controller takes the repository lock, under the same suppression and
-// cancellation rules as run and start.
+// cancellation rules as run and start. It then starts a daemon controller
+// and attaches to it, so the dashboard can detach while the run continues;
+// --foreground keeps the controller inside the dashboard process instead.
 func runTUI(args []string, c Config, out, stderr io.Writer) int {
 	if c.JSON || c.Plain || DetectMode(os.Stdin, out, false) != ModeInteractive {
 		if repositoryOwned(c) {
@@ -68,7 +70,27 @@ func runTUI(args []string, c Config, out, stderr io.Writer) int {
 	if !start {
 		return 0
 	}
-	return runDashboardController(c, out, stderr, ui.RunDashboard)
+	if c.Foreground {
+		return runDashboardController(c, out, stderr, ui.RunDashboard)
+	}
+	return startAndAttach(c, out, stderr)
+}
+
+// startAndAttach starts a daemon controller and attaches the dashboard to it
+// with controls. The start report is held back, because the dashboard would
+// cover it; it prints only when the start fails or the run already ended.
+func startAndAttach(c Config, out, stderr io.Writer) int {
+	var started bytes.Buffer
+	if code := StartDetached(c, &started, stderr); code != 0 {
+		out.Write(started.Bytes())
+		return code
+	}
+	if !repositoryOwned(c) {
+		// A short run, such as --once, can finish before the attach.
+		out.Write(started.Bytes())
+		return 0
+	}
+	return runAttach(c, out, stderr, true)
 }
 
 func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(ui.Controls) (ui.ExitAction, error)) int {
@@ -326,6 +348,7 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			return writeStopRequest(dir, stopRequest{Session: session})
 		}
 		controls.AddPlan = attachment.addPlan
+		controls.Interrupt = attachment.interrupt
 	}
 	for {
 		action, err := ui.RunDashboard(controls)
@@ -333,10 +356,8 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			fmt.Fprintln(stderr, "Error:", err)
 			return 1
 		}
-		if action.Kind == "drain" {
-			fmt.Fprintln(out, "Drain requested. The controller finishes active work, then stops. Check it with `looper status`.")
-		}
 		if action.Kind != "settings" {
+			printDetach(out, dir, attachment.lastSession(), action.Kind)
 			break
 		}
 		session, err := attachment.currentSession()
@@ -352,6 +373,20 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 		}
 	}
 	return 0
+}
+
+// printDetach tells the operator what continues after the dashboard exits.
+func printDetach(out io.Writer, dir, session, kind string) {
+	switch kind {
+	case "drain":
+		fmt.Fprintln(out, "Drain requested. The controller finishes active work, then stops. Check it with `looper status`.")
+	case "interrupt":
+		fmt.Fprintf(out, "Interrupt sent to session %s. Active work stops and is retained; run looper tui to resume.\n", session)
+	default:
+		if info, err := readController(dir); err == nil && info.Session == session && dashboardControllerAlive(info) {
+			fmt.Fprintf(out, "Looper keeps running in the background, session %s. Reattach with `looper tui`; drain it with `looper stop`.\n", session)
+		}
+	}
 }
 
 // followEvents runs the tail command with the parsed configuration. The tui
