@@ -16,13 +16,13 @@ the end of this file. The full text is available in three places:
 
 ## Current state, 2026-11-13
 
-- A detached controller has run since 2026-11-09: session
-  `run-b1b5da12326f7eb5`, run ref `refs/looper/run-da156c1fa2a7e8c0`,
-  tip `c27b369b`. The tip is one commit ahead of `main` (`3e52b5e`).
-  A tui has been attached since 2026-11-05.
-- The working tree holds substantial uncommitted work beyond this file:
-  about 99 modified files and 79 untracked paths. Reconcile it with the
-  run ref at an owner boundary.
+- No controller runs. The detached controller from 2026-11-09 (session
+  `run-b1b5da12326f7eb5`, build `0.9.1-dev.12`) was interrupted with
+  SIGINT on 2026-11-13 at about 20:20Z. Task state is retained. Its
+  run ref is `refs/looper/run-da156c1fa2a7e8c0`, tip `c27b369b`.
+- Commit `75bafc2` committed the run's published work, this file's
+  compression, and the agent profiles work. The quick wins below sit on
+  top of it.
 - The installed binary is `0.9.1-dev.12` from `3e52b5e`, built
   2026-11-04. It is older than this tree. Do not assume the binary
   matches the source.
@@ -47,8 +47,20 @@ the end of this file. The full text is available in three places:
 - Provider follow-up, 2026-11-13: add per-role provider selection if one
   run needs GLM workers and Anthropic Claude review. See the provider
   section below.
-- The agent configuration redesign at the end of this file is a
-  proposal. It awaits an owner decision and is not approved work.
+- The agent configuration redesign is implemented. See the last
+  section of this file.
+- Stop ignored by an old controller, 2026-11-13. `looper stop` (build
+  `0.9.1-dev.12`) wrote a request during a final review. The stop file
+  was gone a minute later, no stop or drain event was recorded, and
+  the controller imported new file changes and started a second review
+  at event 17810. It exited only on SIGINT. Reproduce against current
+  source: stop during a review while a tracked file changes.
+- Idle reviews on non-source edits. An idle, complete run started a full
+  final review (events 17736 and 17810) because agents edited NOTES.md
+  and source files. The review re-ran `make test` on a tree it had
+  already verified. Consider skipping or shortening a review when only
+  files outside `source_files` and the task file change, and an option
+  that exits an idle complete run.
 
 ## Standing cautions
 
@@ -59,6 +71,10 @@ the end of this file. The full text is available in three places:
   backup.
 - Workers run on Claude, not Codex. The default changed in commit
   `468284a` (2026-11-04).
+- Before you edit tracked files, run `looper status`. An idle
+  controller imports any tracked-file change and can start a new review.
+  The rule is also in `.agents/AGENTS.md`.
+
 ## Claude provider selection after subscription migration, 2026-11-13
 
 Local inspection only. No agent adapter or runtime configuration was changed.
@@ -359,3 +375,17 @@ catalog created, or existing controller restarted. Use `build/looper config`
 from the target project to configure the source build.
 
 User documentation: [agent profiles](docs/AGENT-PROFILES.md).
+
+## Quick wins after the leftover controller, 2026-11-13
+
+- The README is 235 lines. Reference text moved, unchanged, into seven
+  pages under `docs/`: install, dashboard, tasks and checks, agents,
+  recovery, runtime requests, and observability.
+- `.agents/AGENTS.md` tells agents to check for a live controller and
+  not to discard published, uncommitted work.
+- `looper stop --interrupt` sends SIGINT through `signalController`,
+  which checks the recorded session and process start time first.
+- Plain `looper doctor` names the live controller and warns when its
+  build differs from the executable.
+- Plain status labels the phase age as `last output … ago`. It is the
+  time since the agent's last output, not the phase duration.
