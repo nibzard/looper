@@ -20,12 +20,14 @@ the end of this file. The full text is available in three places:
   `run-b1b5da12326f7eb5`, build `0.9.1-dev.12`) was interrupted with
   SIGINT on 2026-11-13 at about 20:20Z. Task state is retained. Its
   run ref is `refs/looper/run-da156c1fa2a7e8c0`, tip `c27b369b`.
-- Commit `75bafc2` committed the run's published work, this file's
-  compression, and the agent profiles work. The quick wins below sit on
-  top of it.
-- The installed binary is `0.9.1-dev.12` from `3e52b5e`, built
-  2026-11-04. It is older than this tree. Do not assume the binary
-  matches the source.
+- Released `0.10.0`: tag `v0.10.0` at `1d7a614`, pushed with `main`,
+  GitHub release from `docs/release-notes/0.10.0.md`, formula updated
+  at `03a39be` with the verified archive checksum. `make test` passed
+  on the release tree and on the tree with the commit after it.
+- Commit `e8b2f65` (after the tag) makes an unattached `looper tui`
+  start a detached controller and attach to it; `--foreground` keeps
+  the controller in the dashboard process. Ships in the next release.
+- The installed binary is `0.10.0` from `1d7a614`.
 - Backlog in `to-do.json`: 113 tasks done, 9 blocked, 1 todo.
 
 ## Open items
@@ -74,6 +76,11 @@ the end of this file. The full text is available in three places:
 - Before you edit tracked files, run `looper status`. An idle
   controller imports any tracked-file change and can start a new review.
   The rule is also in `.agents/AGENTS.md`.
+- `maybeFirstRun` re-resolves the configuration by re-parsing the
+  argument list after the first-run form saves a profile. A Config
+  field set only on the struct in a test is dropped. Pass such flags in
+  the argument list (seen with `--foreground` in the first-run PTY
+  test, 2026-11-13).
 
 ## Claude provider selection after subscription migration, 2026-11-13
 
