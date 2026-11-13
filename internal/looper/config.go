@@ -25,6 +25,9 @@ type Config struct {
 	// dependents along (AX-019).
 	CancelTask string
 	Cascade    bool
+	// Interrupt makes looper stop signal the owning controller instead of
+	// requesting a drain.
+	Interrupt bool
 	// AmendTask and AmendFile name the task one amendment targets and the
 	// file that carries the amended task (AX-020).
 	AmendTask string
@@ -452,6 +455,26 @@ func validateCancelFlags(c Config) error {
 	p.Expected = map[string]any{"option": "--cascade", "command": "cancel"}
 	p.Observed = map[string]any{"option": "--cascade", "command": c.Command}
 	return p
+}
+
+// validateInterruptFlags checks --interrupt. It belongs to looper stop, and
+// an interrupt has no durable result to wait for.
+func validateInterruptFlags(c Config) error {
+	if !c.Interrupt {
+		return nil
+	}
+	if c.Command != "stop" {
+		p := usageFailure("option_command_mismatch", "--interrupt is supported by looper stop")
+		p.Expected = map[string]any{"option": "--interrupt", "command": "stop"}
+		p.Observed = map[string]any{"option": "--interrupt", "command": c.Command}
+		return p
+	}
+	if c.Wait {
+		p := usageFailure("option_conflict", "--interrupt does not combine with --wait; run looper status to observe the exit")
+		p.Observed = map[string]any{"--interrupt": true, "--wait": true}
+		return p
+	}
+	return nil
 }
 
 // afterOptionCommand reports whether a command accepts --after: the journal
@@ -908,6 +931,8 @@ func Parse(args []string) (Config, error) {
 			c.Reset = true
 		case "--cascade":
 			c.Cascade = true
+		case "--interrupt":
+			c.Interrupt = true
 		case "--verbose", "-v":
 			c.Verbose = true
 		case "--smart", "-s":
@@ -1097,6 +1122,9 @@ func Parse(args []string) (Config, error) {
 		return c, err
 	}
 	if err = validateCancelFlags(c); err != nil {
+		return c, err
+	}
+	if err = validateInterruptFlags(c); err != nil {
 		return c, err
 	}
 	// Resolution starts here. Layer 1 is the built-in defaults; automatic
