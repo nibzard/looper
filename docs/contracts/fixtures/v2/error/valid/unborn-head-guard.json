@@ -1,0 +1,39 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "command": "looper run --contract v2",
+  "error": {
+    "code": "branch_moved",
+    "message": "The project HEAD is unborn: branch main has no commits, so the retained baseline 1a2b3c4 cannot be compared; work is retained in /home/agent/.looper/demo-3f2a/runtime. Make a commit on the saved branch main or restore it before resuming.",
+    "retry": "after-change",
+    "paths": [
+      "/home/agent/demo",
+      "/home/agent/demo/to-do.json",
+      "/home/agent/.looper/demo-3f2a/runtime"
+    ],
+    "expected": {
+      "head": "1a2b3c4d5e6f",
+      "branch": "refs/heads/main",
+      "committed_changes": "1a2b3c4d5e6f"
+    },
+    "observed": {
+      "head": "unborn",
+      "unborn_head": true,
+      "branch": "refs/heads/main",
+      "committed_changes": "unknown",
+      "retained_tasks": ["T001"]
+    },
+    "evidence": [
+      { "kind": "file", "reference": "retained attempt directories under runtime/", "command": "looper status --json" }
+    ],
+    "next_actions": [
+      { "description": "Read the health findings and retained work for this project.", "command": "looper doctor" },
+      { "description": "Read the retained attempt, its checks, and its logs for T001.", "command": "looper inspect T001 --json" },
+      { "description": "Make a commit on refs/heads/main or restore it, then resume; verified work is never repeated.", "command": "looper" }
+    ],
+    "unknown_evidence": [
+      "the changed paths since the retained baseline: HEAD is unborn and no commit exists to compare against"
+    ]
+  }
+}

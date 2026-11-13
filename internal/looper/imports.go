@@ -28,59 +28,88 @@ type capturedPlan struct {
 func importsDir(dir string) string { return filepath.Join(dir, "imports") }
 
 // validatePlanFiles rejects unreadable files, directories, empty files,
-// invalid text, and oversized input before any work starts.
+// invalid text, and oversized input before any work starts. The rejections
+// are typed input errors so the CLI can report them without echoing file
+// contents; only the path and the reason become public.
 func validatePlanFiles(paths []string) error {
 	total := 0
 	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
-			return fmt.Errorf("cannot read plan %s: %w", path, err)
+			return &inputError{code: "input_unreadable", message: fmt.Sprintf("cannot read plan %s: %v", path, err), path: path}
 		}
 		if info.IsDir() {
-			return fmt.Errorf("plan %s is a directory", path)
+			return &inputError{code: "input_malformed", message: fmt.Sprintf("plan %s is a directory", path), path: path}
 		}
 		if info.Size() == 0 {
-			return fmt.Errorf("plan %s is empty", path)
+			return &inputError{code: "input_malformed", message: fmt.Sprintf("plan %s is empty", path), path: path}
 		}
 		total += int(info.Size())
 	}
 	if total > maxPlanBytes {
-		return fmt.Errorf("plans total %d bytes; the combined limit is %d bytes", total, maxPlanBytes)
+		return &inputError{
+			code: "input_malformed", path: paths[0],
+			message:  fmt.Sprintf("plans total %d bytes; the combined limit is %d bytes", total, maxPlanBytes),
+			expected: map[string]any{"combined_plan_bytes": maxPlanBytes}, observed: map[string]any{"combined_plan_bytes": total},
+		}
 	}
 	for _, path := range paths {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return &inputError{code: "input_unreadable", message: err.Error(), path: path}
 		}
 		if !utf8.Valid(b) {
-			return fmt.Errorf("plan %s is not valid UTF-8 text", path)
+			return &inputError{code: "input_malformed", message: fmt.Sprintf("plan %s is not valid UTF-8 text", path), path: path}
 		}
 		if len(strings.TrimSpace(string(b))) == 0 {
-			return fmt.Errorf("plan %s has no content", path)
+			return &inputError{code: "input_malformed", message: fmt.Sprintf("plan %s has no content", path), path: path}
 		}
 	}
 	return nil
 }
 
-// capturePlans copies submitted bytes into runtime artifacts and records the
-// original paths and digests. Capture happens before any acknowledgement of
-// acceptance.
-func capturePlans(dir, requestID string, paths []string) ([]capturedPlan, error) {
+// readPlans validates request files and computes their digests without
+// writing runtime artifacts. Callers decide from the digests whether a
+// captured copy is needed; deduplicated requests never persist one.
+func readPlans(paths []string) ([]capturedPlan, error) {
 	if err := validatePlanFiles(paths); err != nil {
 		return nil, err
 	}
-	base := filepath.Join(importsDir(dir), requestID)
 	plans := make([]capturedPlan, 0, len(paths))
-	for i, path := range paths {
+	for _, path := range paths {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
+		plans = append(plans, capturedPlan{Path: path, Digest: digest(b), Text: string(b)})
+	}
+	return plans, nil
+}
+
+// persistPlans copies the validated bytes into immutable runtime artifacts
+// and records each artifact path on the same plans slice.
+func persistPlans(dir, requestID string, plans []capturedPlan) error {
+	base := filepath.Join(importsDir(dir), requestID)
+	for i := range plans {
 		artifact := filepath.Join(base, fmt.Sprintf("plan-%02d.md", i+1))
-		if err = atomicWrite(artifact, b, 0600); err != nil {
-			return nil, err
+		if err := atomicWrite(artifact, []byte(plans[i].Text), 0600); err != nil {
+			return err
 		}
-		plans = append(plans, capturedPlan{Path: path, Digest: digest(b), Artifact: artifact, Text: string(b)})
+		plans[i].Artifact = artifact
+	}
+	return nil
+}
+
+// capturePlans reads and persists submitted bytes in one step, recording the
+// original paths and digests. Capture happens before any acknowledgement of
+// acceptance.
+func capturePlans(dir, requestID string, paths []string) ([]capturedPlan, error) {
+	plans, err := readPlans(paths)
+	if err != nil {
+		return nil, err
+	}
+	if err = persistPlans(dir, requestID, plans); err != nil {
+		return nil, err
 	}
 	return plans, nil
 }
@@ -108,27 +137,50 @@ func loadCapturedPlans(record *ImportRecord) ([]capturedPlan, error) {
 // planImportRequest is the durable transport for additional requirements.
 // It reuses the settings envelope with typed plan-import payloads.
 type planImportRequest struct {
-	Version   int      `json:"version"`
-	ID        string   `json:"id"`
-	Type      string   `json:"type"`
-	Session   string   `json:"session"`
-	Paths     []string `json:"paths"`
-	CreatedAt string   `json:"created_at,omitempty"`
+	Version        int      `json:"version"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Session        string   `json:"session"`
+	Paths          []string `json:"paths"`
+	CreatedAt      string   `json:"created_at,omitempty"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
 }
 
-// submitPlanImport writes a request for the active controller and returns the
-// request identifier. The request survives controller restarts with its
-// captured artifacts.
-func submitPlanImport(dir, session string, paths []string) (string, error) {
+// submitPlanImportRequest writes a request for the active controller and
+// returns it without waiting; the receipt names its identifier and creation
+// time. The request survives controller restarts with its captured
+// artifacts, so a session change is not a refusal; the advertised request
+// types are still validated before publication. A caller key rides the
+// envelope so the claiming controller resolves it against the retained
+// receipts (AX-012).
+func submitPlanImportRequest(dir, session, idempotencyKey string, paths []string) (*planImportRequest, error) {
 	if err := validatePlanFiles(paths); err != nil {
-		return "", err
+		return nil, err
 	}
-	req := planImportRequest{
+	if idempotencyKey != "" {
+		if err := validateIdempotencyKey(idempotencyKey); err != nil {
+			return nil, &inputError{code: "option_value_invalid", message: err.Error()}
+		}
+	}
+	if err := validateRequestPublication(dir, session, RequestTypePlanImport); err != nil {
+		return nil, err
+	}
+	req := &planImportRequest{
 		Version: SettingsRequestVersion, ID: identifier("import"),
 		Type: RequestTypePlanImport, Session: session, Paths: paths,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), IdempotencyKey: idempotencyKey,
 	}
 	if err := writeJSON(filepath.Join(requestDir(dir), req.ID+".json"), req); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+// submitPlanImport returns just the request identifier, for callers that
+// follow the import through its receipt instead of its creation time.
+func submitPlanImport(dir, session, idempotencyKey string, paths []string) (string, error) {
+	req, err := submitPlanImportRequest(dir, session, idempotencyKey, paths)
+	if err != nil {
 		return "", err
 	}
 	return req.ID, nil
@@ -139,7 +191,7 @@ func submitPlanImport(dir, session string, paths []string) (string, error) {
 // acceptance. A queued artifact without that receipt is unaccepted.
 func (e *Engine) claimPlanImports() {
 	for {
-		raw, err := claimNextRequest(e.Dir, RequestTypePlanImport)
+		raw, err := e.claimRequest(RequestTypePlanImport)
 		if err != nil {
 			e.event("import-error", err.Error())
 			return
@@ -147,7 +199,7 @@ func (e *Engine) claimPlanImports() {
 		if raw == nil {
 			return
 		}
-		e.acceptPlanImport(raw.ID, raw.Paths, raw.Session != e.controller.Session)
+		e.acceptPlanImport(raw, raw.Session != e.controller.Session)
 		if e.err != nil {
 			return
 		}
@@ -163,11 +215,20 @@ func (e *Engine) claimPlanImports() {
 // only when a claim has no receipt. Such a claim was never acknowledged.
 func (e *Engine) recoverPlanImports() error {
 	// Restore missing acknowledgements, including receipts written by older
-	// controllers whose session cleanup removed terminal acknowledgements.
+	// controllers whose session cleanup removed terminal acknowledgements, and
+	// mirror every saved import into the common receipt store.
 	for _, record := range e.State.Imports {
 		e.writePlanAck(record)
 		if e.err != nil {
 			return e.err
+		}
+	}
+	if len(e.State.Imports) > 0 {
+		for _, record := range e.State.Imports {
+			e.syncImportReceipt(record)
+		}
+		if err := e.save(); err != nil {
+			return err
 		}
 	}
 	entries, err := os.ReadDir(processingDir(e.Dir))
@@ -192,7 +253,7 @@ func (e *Engine) recoverPlanImports() error {
 		// A claim belongs to the interrupted controller. Recover it rather
 		// than rejecting its old session. Acceptance replays an existing
 		// receipt or compares fresh content with applied receipt digests.
-		e.acceptPlanImport(req.ID, req.Paths, false)
+		e.acceptPlanImport(req, false)
 		if e.err != nil {
 			return e.err
 		}
@@ -204,30 +265,83 @@ func (e *Engine) recoverPlanImports() error {
 }
 
 // acceptPlanImport validates, captures, and receipts one import. Imports for
-// an earlier session are rejected with a reload hint, mirroring settings.
-func (e *Engine) acceptPlanImport(requestID string, paths []string, staleSession bool) {
+// an earlier session are rejected with a reload hint, mirroring settings. A
+// caller key resolves against the retained receipts before any capture: the
+// same key and content returns the original request's result, and changed
+// content under the same key is refused (AX-012).
+func (e *Engine) acceptPlanImport(req *SettingsRequest, staleSession bool) {
+	requestID, key := req.ID, req.IdempotencyKey
 	if record := e.importReceipt(requestID); record != nil {
 		// Duplicate identifiers replay the recorded result.
+		e.syncImportReceipt(record)
 		e.writePlanAck(record)
 		return
 	}
 	if staleSession {
-		e.ackPlanImport(requestID, AckStale, "the request targets an earlier controller session; resubmit it after reloading state", nil)
+		message := "the request targets an earlier controller session; resubmit it after reloading state"
+		e.ackPlanImport(requestID, AckStale, message, nil)
+		e.rejectImportReceipt(requestID, key, requestPayloadDigest(req, nil), message)
 		return
 	}
-	plans, err := capturePlans(e.Dir, requestID, paths)
+	plans, err := readPlans(req.Paths)
 	if err != nil {
 		e.ackPlanImport(requestID, AckError, err.Error(), nil)
+		e.rejectImportReceipt(requestID, key, requestPayloadDigest(req, nil), err.Error())
 		return
 	}
+	if key != "" {
+		digest, original, conflict := e.resolveIdempotencyKey(req, planContentDigests(plans))
+		if conflict != nil {
+			message := keyConflictMessage(key, conflict, digest)
+			e.ackPlanImport(requestID, AckError, message, nil)
+			e.rejectImportReceipt(requestID, key, digest, message)
+			return
+		}
+		if original != nil {
+			// The key already recorded this content: answer with the original
+			// request's result. A terminal original replays its outcome — an
+			// applied one through the same content-dedup answer a fresh
+			// duplicate gets — while an original still in flight refuses,
+			// naming the request to poll. Neither re-analyzes the plans.
+			if record := e.importReceipt(original.ID); record != nil {
+				switch record.Status {
+				case ImportApplied:
+					e.ackPlanImport(requestID, ImportApplied, "", record)
+					e.dedupImportReceipt(requestID, record)
+					return
+				case ImportFailed:
+					e.ackPlanImport(requestID, AckError, record.Error, nil)
+					e.dedupImportReceipt(requestID, record)
+					return
+				}
+			}
+			message := keyInFlightMessage(key, original)
+			e.ackPlanImport(requestID, AckError, message, nil)
+			e.rejectImportReceipt(requestID, key, digest, message)
+			return
+		}
+	}
 	if applied := e.appliedByDigest(plans); applied != nil {
-		// Reply under the new request identifier while reusing the applied result.
+		// Reply under the new request identifier while reusing the applied
+		// result; the event names that recorded result. No import receipt
+		// references a new capture, so none is written; the common receipt
+		// records the deduplicated outcome under this identifier.
 		e.ackPlanImport(requestID, ImportApplied, "", applied)
+		e.dedupImportReceipt(requestID, applied)
+		return
+	}
+	if err = persistPlans(e.Dir, requestID, plans); err != nil {
+		e.ackPlanImport(requestID, AckError, err.Error(), nil)
+		e.failImportReceipt(requestID, key, requestPayloadDigest(req, nil), err)
 		return
 	}
 	record := &ImportRecord{
 		RequestID: requestID, Status: ImportQueued,
-		Enqueued: time.Now().UTC().Format(time.RFC3339Nano),
+		Enqueued:       time.Now().UTC().Format(time.RFC3339Nano),
+		IdempotencyKey: key,
+	}
+	if key != "" {
+		record.PayloadDigest = requestPayloadDigest(req, planContentDigests(plans))
 	}
 	for _, p := range plans {
 		record.Digests = append(record.Digests, p.Digest)
@@ -235,12 +349,88 @@ func (e *Engine) acceptPlanImport(requestID string, paths []string, staleSession
 		record.SourcePaths = append(record.SourcePaths, p.Path)
 	}
 	e.State.Imports = append(e.State.Imports, record)
+	// Durable acceptance commits with the receipt it owns: from this save on
+	// the request survives restarts or receives an explicit terminal result
+	// (AX-009).
+	e.syncImportReceipt(record)
 	if err = e.save(); err != nil {
 		e.err = err
 		return
 	}
-	e.event("import", fmt.Sprintf("Queued plan import %s (%d file(s)).", requestID, len(plans)))
+	e.requestEvent("import", fmt.Sprintf("Queued plan import %s (%d file(s)).", requestID, len(plans)), requestID)
 	e.writePlanAck(record)
+}
+
+// syncImportReceipt mirrors one import receipt into the common request
+// lifecycle store, so every import outcome stays queryable beside the
+// settings, add-task, requeue, and stop receipts. The ImportRecord stays
+// authoritative for the import; the mirror only restates its state.
+func (e *Engine) syncImportReceipt(record *ImportRecord) {
+	if e.State == nil || record == nil {
+		return
+	}
+	e.upsertRequest(requestReceiptForImport(record, e.controllerSessionID()))
+}
+
+// rejectImportReceipt records one refused plan-import request. A refusal
+// changed no saved work, so the receipt is the durable outcome the removed
+// envelope leaves behind. A keyed refusal records the key with the digest the
+// refusal could compute, so a later reuse of the key refuses against this
+// request instead of replaying it.
+func (e *Engine) rejectImportReceipt(requestID, key, payloadDigest, message string) {
+	if e.State == nil {
+		return
+	}
+	if rec := e.requestReceipt(requestID); rec != nil && requestStateTerminal(rec.State) {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	e.upsertRequest(&RequestRecord{
+		ID: requestID, Type: PublicRequestAddPlan, State: RequestRejected,
+		Session: e.controllerSessionID(), SubmittedAt: now, DecidedAt: now, Error: message,
+		IdempotencyKey: key, PayloadDigest: payloadDigest,
+	})
+	if err := e.Store.Save(e.State); err != nil && e.err == nil {
+		e.err = err
+	}
+}
+
+// failImportReceipt records one plan-import acceptance attempt that failed
+// before the request was ever queued.
+func (e *Engine) failImportReceipt(requestID, key, payloadDigest string, failure error) {
+	if e.State == nil {
+		return
+	}
+	if rec := e.requestReceipt(requestID); rec != nil && requestStateTerminal(rec.State) {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	e.upsertRequest(&RequestRecord{
+		ID: requestID, Type: PublicRequestAddPlan, State: RequestFailed,
+		Session: e.controllerSessionID(), SubmittedAt: now, DecidedAt: now, Error: failure.Error(),
+		IdempotencyKey: key, PayloadDigest: payloadDigest,
+	})
+	if err := e.Store.Save(e.State); err != nil && e.err == nil {
+		e.err = err
+	}
+}
+
+// dedupImportReceipt records the digest-deduplicated outcome under the
+// requesting identifier, naming the recorded result that owns the content.
+func (e *Engine) dedupImportReceipt(requestID string, applied *ImportRecord) {
+	if e.State == nil || applied == nil {
+		return
+	}
+	if rec := e.requestReceipt(requestID); rec != nil {
+		return
+	}
+	rec := requestReceiptForImport(applied, e.controllerSessionID())
+	rec.ID = requestID
+	rec.Summary = importOutcome(applied.AddedTasks, applied.Covered) + "; matches import " + applied.RequestID
+	e.upsertRequest(rec)
+	if err := e.Store.Save(e.State); err != nil && e.err == nil {
+		e.err = err
+	}
 }
 
 // importReceipt finds a receipt by request identifier.
@@ -297,6 +487,49 @@ func (e *Engine) writePlanAck(record *ImportRecord) {
 	}
 }
 
+// waitImportReceipt mirrors one import's wait reason into its common
+// receipt and reports whether the reason changed, so a held import records
+// why it waits without rewriting the wait start on every boundary.
+func (e *Engine) waitImportReceipt(record *ImportRecord, reason, detail string) bool {
+	if e.State == nil || record == nil {
+		return false
+	}
+	rec := e.requestReceipt(record.RequestID)
+	if rec == nil {
+		e.syncImportReceipt(record)
+		rec = e.requestReceipt(record.RequestID)
+	}
+	if rec == nil || requestStateTerminal(rec.State) {
+		return false
+	}
+	if rec.State == RequestWaiting && rec.WaitReason == reason {
+		return false
+	}
+	rec.State = RequestWaiting
+	rec.WaitReason, rec.WaitDetail = reason, detail
+	if rec.WaitSince == "" {
+		rec.WaitSince = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	e.upsertRequest(rec)
+	return true
+}
+
+// importOutcome names one import's recorded result: the added task count,
+// the coverage count, and the added task identifiers. Fresh applications and
+// deduplicated replays report it in the same shape.
+func importOutcome(added []string, covered []CoveredRef) string {
+	detail := fmt.Sprintf("%d task(s) added, %d covered", len(added), len(covered))
+	if len(added) > 0 {
+		detail += " (" + strings.Join(added, ", ") + ")"
+	}
+	return detail
+}
+
+// ackPlanImport acknowledges one request outcome and writes its event. The
+// message is a refusal or error reason; it rides in the acknowledgement error
+// field and in the event. A digest-deduplicated replay passes the applied
+// receipt without a message: its event then names the recorded result and the
+// request that owns it, while the acknowledgement keeps its error-free shape.
 func (e *Engine) ackPlanImport(id, status, message string, record *ImportRecord) {
 	ack := planImportAck{Version: SettingsRequestVersion, Type: RequestTypePlanImport, ID: id, Session: e.controller.Session, Status: status}
 	if message != "" {
@@ -312,7 +545,11 @@ func (e *Engine) ackPlanImport(id, status, message string, record *ImportRecord)
 	if err := writeJSON(filepath.Join(ackDir(e.Dir), id+".json"), ack); err != nil {
 		e.err = err
 	}
-	e.event("import", fmt.Sprintf("Plan import %s %s: %s", id, status, message))
+	detail := message
+	if detail == "" && record != nil {
+		detail = importOutcome(record.AddedTasks, record.Covered) + "; matches import " + record.RequestID
+	}
+	e.requestEvent("import", fmt.Sprintf("Plan import %s %s: %s", id, status, detail), id)
 }
 
 // planImportAck is the machine-readable request result.
@@ -355,11 +592,12 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 		if e.workRetained() {
 			if record.Status != ImportWaiting {
 				record.Status = ImportWaiting
+				e.syncImportReceipt(record)
 				if err := e.save(); err != nil {
 					e.err = err
 					return
 				}
-				e.event("import", "Plan import "+record.RequestID+" waits for active work to reach a boundary.")
+				e.requestEvent("import", "Plan import "+record.RequestID+" waits for active work to reach a boundary; new task dispatch is paused until the import applies.", record.RequestID)
 			}
 			continue
 		}
@@ -367,12 +605,19 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 			var bad *invalidBacklogError
 			if errors.As(err, &bad) {
 				// A corrected edit, not a new submission, unblocks this import.
-				e.event("import", "Plan import "+record.RequestID+" waits for a corrected task file.")
+				e.requestEvent("import", "Plan import "+record.RequestID+" waits for a corrected task file.", record.RequestID)
+				if e.waitImportReceipt(record, "task_file_correction", "the task file needs correction before the import can apply") {
+					if saveErr := e.save(); saveErr != nil {
+						e.err = saveErr
+						return
+					}
+				}
 				continue
 			}
-			e.event("import-error", fmt.Sprintf("Plan import %s failed: %v", record.RequestID, err))
+			e.requestEvent("import-error", fmt.Sprintf("Plan import %s failed: %v", record.RequestID, err), record.RequestID)
 			record.Status = ImportFailed
 			record.Error = err.Error()
+			e.syncImportReceipt(record)
 			if err = e.save(); err != nil {
 				e.err = err
 				return
@@ -383,9 +628,20 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 	}
 }
 
-func (e *Engine) drainingNow() bool {
-	_, err := os.Stat(filepath.Join(e.Dir, "stop"))
-	return err == nil
+// importDispatchHold reports whether an accepted import pauses new ordinary
+// task dispatch. Active attempts, repairs, checks, and publications keep
+// running to their safe boundary; the import applies there and releases the
+// pause. A failed analysis releases it the same way, because a terminal
+// receipt holds no dispatch. An import waiting for a corrected task file
+// keeps the pause, exactly as the input wait already holds dispatch.
+func (e *Engine) importDispatchHold() bool {
+	for _, r := range e.State.Imports {
+		switch r.Status {
+		case ImportQueued, ImportWaiting, ImportPlanning:
+			return true
+		}
+	}
+	return false
 }
 
 // workRetained reports whether unfinished attempts or pending publications
@@ -396,12 +652,33 @@ func (e *Engine) workRetained() bool {
 	}
 	for _, a := range e.State.Attempts {
 		switch a.Phase {
-		case "done", "blocked":
+		case "done", "blocked", "cancelled":
 		default:
 			return true
 		}
 	}
 	return false
+}
+
+// stagedImport snapshots one plan-import application: the receipt and the
+// backlog fields it mutates. Rollback restores them when the saved
+// state/export protocol fails before committing the application.
+type stagedImport struct {
+	record        ImportRecord
+	backlog       Backlog
+	planSignature string
+	finished      bool
+	reviewedTip   string
+	requests      []*RequestRecord
+}
+
+func (s stagedImport) rollback(e *Engine, record *ImportRecord) {
+	*record = s.record
+	e.State.Backlog = s.backlog
+	e.State.PlanSignature = s.planSignature
+	e.State.Finished = s.finished
+	e.State.ReviewedTip = s.reviewedTip
+	e.State.Requests = s.requests
 }
 
 // applyPlanImport refreshes the baseline, analyzes the captured plans, and
@@ -413,6 +690,7 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	}
 	if record.Status != ImportPlanning {
 		record.Status = ImportPlanning
+		e.syncImportReceipt(record)
 		if err = e.save(); err != nil {
 			return err
 		}
@@ -429,7 +707,7 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	// Compare analysis against the refreshed baseline.
 	backlogBefore := digestFile(e.Config.Todo)
 	tipBefore := e.State.Tip
-	proposal, err := e.analyzeImport(ctx, plans)
+	proposal, err := e.analyzeImport(ctx, record.RequestID, plans)
 	if err != nil {
 		return err
 	}
@@ -437,8 +715,25 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 		record.Conflicts = proposal.Conflicts
 		return fmt.Errorf("the plan conflicts with existing scope: %s", strings.Join(proposal.Conflicts, "; "))
 	}
-	if digestFile(e.Config.Todo) != backlogBefore || e.State.Tip != tipBefore {
+	if e.State.Tip != tipBefore {
 		return fmt.Errorf("the project changed during analysis; resubmit the import")
+	}
+	// Equivalent formatting during analysis changed no content (AX-018), so
+	// the analysis stays valid; a real edit still forces a resubmission.
+	if digestFile(e.Config.Todo) != backlogBefore {
+		if edit := e.classifyBacklogFile(); !edit.Equivalent {
+			return fmt.Errorf("the project changed during analysis; resubmit the import")
+		}
+	}
+	// The additive scope and the applied receipt stage until the saved
+	// state/export protocol commits them. A failure before that commit rolls
+	// both back, so a failed receipt never leaves tasks behind that only the
+	// in-memory backlog held, and a resubmission cannot duplicate them. The
+	// snapshot precedes applyProposal, which is the first mutating step.
+	staged := stagedImport{
+		record: clone(*record), backlog: clone(e.State.Backlog),
+		planSignature: e.State.PlanSignature, finished: e.State.Finished, reviewedTip: e.State.ReviewedTip,
+		requests: append([]*RequestRecord{}, e.State.Requests...),
 	}
 	added, covered, err := e.applyProposal(proposal)
 	if err != nil {
@@ -450,6 +745,7 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	record.Adjustments = proposal.Adjustments
 	record.Gates = proposal.Gates
 	record.Applied = time.Now().UTC().Format(time.RFC3339Nano)
+	e.syncImportReceipt(record)
 	// Scope expansion invalidates execution planning and satisfaction. Keep
 	// the live plan: the dispatch loop reads scopes from it while work runs,
 	// and the cleared signature forces the next planning pass to rebuild.
@@ -457,16 +753,23 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 	e.State.Finished = false
 	e.State.ReviewedTip = ""
 	if err = e.save(); err != nil {
+		staged.rollback(e, record)
 		return err
 	}
 	if err = e.export(); err != nil {
+		staged.rollback(e, record)
 		return err
 	}
-	detail := fmt.Sprintf("Applied plan import %s: %d task(s) added, %d covered", record.RequestID, len(added), len(covered))
+	detail := fmt.Sprintf("Applied plan import %s: %s", record.RequestID, importOutcome(added, covered))
+	// The added task identities ride beside the request identity: one import
+	// mutates many tasks, so the payload lists them instead of naming one.
+	applied := e.identity()
+	applied.RequestID = record.RequestID
+	data := map[string]any{}
 	if len(added) > 0 {
-		detail += " (" + strings.Join(added, ", ") + ")"
+		data["tasks"] = added
 	}
-	e.event("import", detail+".")
+	e.eventData("import", detail+".", applied.merge(data))
 	e.writePlanAck(record)
 	return nil
 }
@@ -601,7 +904,8 @@ func (e *Engine) appliedContext() ([]contextDocument, error) {
 }
 
 // waitForPlanImport polls a request's acknowledgement until it reaches a
-// terminal status or the timeout. A timeout reports a pending import.
+// terminal status or the timeout. A timeout reports a pending import; the
+// import itself keeps running and a later controller can still apply it.
 func waitForPlanImport(dir, id string, timeout time.Duration) (*planImportAck, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -614,7 +918,10 @@ func waitForPlanImport(dir, id string, timeout time.Duration) (*planImportAck, e
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	return nil, fmt.Errorf("import %s is still pending; watch it with looper tui", id)
+	return nil, &pendingError{
+		message: fmt.Sprintf("import %s is still pending; watch it with looper tui", id),
+		request: id, waitKind: "plan-import acknowledgement",
+	}
 }
 
 // sortStrings orders deterministically for output.

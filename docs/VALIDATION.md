@@ -2,6 +2,59 @@
 
 Validated on Linux on 2026-10-11.
 
+## Agent-experience benchmark (AX-027, 2026-11-09)
+
+`scripts/runtime-test.py` grew a `BenchmarkTests` suite that reproduces the
+verified 2026-11-05 CLI audit incidents with the stub agent and drives every
+recovery procedure through documented public commands. The suite covers large
+histories, submission receipts across a controller crash and restart,
+idempotent replay and conflicts, foreground and detached bootstrap, a
+pre-contract controller, the accepted-import dispatch pause, and stop/start
+overlap. Set `LOOPER_BENCHMARK_RECORD=<path>` to append one JSON line per
+public command with exit code, seconds, and output bytes.
+
+Recorded results live in `docs/research/AGENT-EXPERIENCE-RESULTS.md`; the
+gates are asserted on every run: compact status stays within 8 KiB, finite
+event pages respect their limit, continuation walks miss no committed event,
+idempotent keys apply once, accepted receipts stay queryable after restart,
+and every fixture finishes without private-state reads.
+
+The bootstrap fixture found and repaired one defect: the startup seed a
+detached start saves before readiness made compact status report the
+bootstrap window as `no_ready_task` with a spurious `view_unavailable`
+finding (`internal/looper/status_compact.go`).
+
+## Fresh-agent evaluation preparation (AX-028, 2026-11-09)
+
+The live evaluation of the agent experience is prepared, not run:
+`docs/research/AGENT-EXPERIENCE-EVALUATION.md` defines the protocol
+(two arms, four scenarios from the verified audit patterns, three
+repetitions each), and `docs/research/agent-evaluation/` holds the
+fixtures: the measurement shim, arm preambles, matched briefs, S2
+submission inputs, and the result templates. No real agent session,
+installation, publication, or controller restart happened. The live
+test needs its own requested scope; the protocol names exactly what to
+authorize.
+
+What was verified deterministically on this host, recorded in
+`docs/research/agent-evaluation/setup-verification.md`: the shim logs
+and passes through every call; all four scenario setup recipes build
+their intended state with the stub agent (mature run with a failure
+event; live gated controller applying both S2 submissions exactly once;
+the retained-work refusal with its read-only preview; two-run discovery
+with build drift); and the AX-027 `BenchmarkTests` suite passes (8
+tests, 85 s, focused run). One byte contrast was measured on the S1
+fixture: legacy `status --json` 66,723 bytes against 1,690 for the
+compact document. Everything else — command counts, latency, cost,
+rubric outcomes, any arm comparison — stays unmeasured until the
+authorized live run.
+
+`docs/release.md` gained the agent-experience release checks: the
+contract default transition steps, schema and command documentation,
+platform-gap disclosure (darwin identity, Linux-only PTY coverage,
+compile-only cross-build), the rule that installed controllers keep
+their build, and how to record the evaluation's status.
+
 ## Automated checks
 
 - `make test` passed Go unit tests, `go vet`, 39 integration cases, package tests,

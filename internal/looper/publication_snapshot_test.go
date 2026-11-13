@@ -161,7 +161,7 @@ exit 0
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(10 * time.Second):
+		case <-time.After(testBudget(10 * time.Second)):
 			t.Error("run did not stop")
 		}
 	}()
@@ -169,7 +169,7 @@ exit 0
 	// T001 reaches done only after publish() and applyResult() complete, so
 	// the exported task file marks the publication as finished. A run that
 	// ends before that point failed the publication itself.
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(testBudget(30 * time.Second))
 	for {
 		data, err := os.ReadFile(c.Todo)
 		if err == nil {

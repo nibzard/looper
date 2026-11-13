@@ -39,7 +39,7 @@ func TestDashboardControllerCompletion(t *testing.T) {
 					// Wait until initialization has published the first snapshot.
 					select {
 					case <-controls.Snapshot:
-					case <-time.After(5 * time.Second):
+					case <-time.After(testBudget(5 * time.Second)):
 						t.Error("no first snapshot")
 						controls.Cancel()
 					}
@@ -48,7 +48,7 @@ func TestDashboardControllerCompletion(t *testing.T) {
 						controls.Cancel()
 					}
 				}
-				deadline := time.Now().Add(5 * time.Second)
+				deadline := time.Now().Add(testBudget(5 * time.Second))
 				for !controls.Done() {
 					if time.Now().After(deadline) {
 						t.Error("controller did not finish")
@@ -79,7 +79,7 @@ func TestDashboardControllerCompletion(t *testing.T) {
 				if mode != "drain" && strings.Contains(stdout.String(), "Drain complete") {
 					t.Fatalf("incorrect drain claim for %s: %q", mode, stdout.String())
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(testBudget(10 * time.Second)):
 				t.Fatal("dashboard wrapper hung after controller completion")
 			}
 		})
@@ -115,7 +115,7 @@ func TestDashboardAddPlanPublishesImportRecord(t *testing.T) {
 	dashboard := func(controls ui.Controls) (ui.ExitAction, error) {
 		select {
 		case <-controls.Snapshot:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testBudget(5 * time.Second)):
 			t.Error("no first snapshot")
 			controls.Cancel()
 			return ui.ExitAction{}, nil
@@ -131,7 +131,7 @@ func TestDashboardAddPlanPublishesImportRecord(t *testing.T) {
 		}
 		_, dir := projectPaths(c)
 		var published *ui.ImportView
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(testBudget(5 * time.Second))
 		for time.Now().Before(deadline) {
 			if v := LoadView(dir); v != nil {
 				for i := range v.Imports {
@@ -160,7 +160,7 @@ func TestDashboardAddPlanPublishesImportRecord(t *testing.T) {
 		if code != 130 {
 			t.Fatalf("exit %d, want 130: %s", code, stderr.String())
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("dashboard wrapper hung")
 	}
 }

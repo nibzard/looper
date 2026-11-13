@@ -2,6 +2,7 @@ package looper
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -138,13 +139,21 @@ func TestRunResumesSecondAttemptAfterFirstCompletes(t *testing.T) {
 	result := `{"task_id":"T001","status":"done","summary":"finished","files":[],"blockers":[],"followups":[],"unblock_when":""}`
 	e, c := resumeEngine(t, result)
 	// Let the first worker finish. Keep the second worker running until
-	// cancellation, so the engine cannot enter final review.
+	// cancellation, so the engine cannot enter final review. The second
+	// worker announces itself through a file, so a loaded machine cannot
+	// fail the test by finishing the dispatch after an arbitrary deadline:
+	// the run cancels once the waited-for dispatch happened, and only a
+	// regression runs out the budget.
 	t.Setenv("LOOPER_TEST_FIRST_WORKTREE", e.State.Attempts[0].Worktree)
 	t.Setenv("LOOPER_TEST_AGENT", c.CodexBin)
+	signal := filepath.Join(t.TempDir(), "second-started")
+	t.Setenv("LOOPER_TEST_SECOND_SIGNAL", signal)
 	bin := filepath.Join(t.TempDir(), "resume-agent.sh")
 	script := `#!/bin/bash
 if [ "$PWD" = "$LOOPER_TEST_FIRST_WORKTREE" ]; then
   unset LOOPER_FAKE_SLEEP
+else
+  touch "$LOOPER_TEST_SECOND_SIGNAL"
 fi
 exec "$LOOPER_TEST_AGENT" "$@"
 `
@@ -152,10 +161,19 @@ exec "$LOOPER_TEST_AGENT" "$@"
 		t.Fatal(err)
 	}
 	e.Config.CodexBin, e.Config.ClaudeBin = bin, bin
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(signal); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
 	code, err := e.Run(ctx)
-	if code != 130 || err != context.DeadlineExceeded {
+	if code != 130 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("engine exited %d (%v); want cancellation with second worker running", code, err)
 	}
 	if e.State.Attempts[0].Phase != "done" || e.State.Attempts[1].Phase != "running" {

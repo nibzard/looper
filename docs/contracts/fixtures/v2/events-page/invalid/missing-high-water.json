@@ -1,0 +1,8 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.events.page",
+  "items": [],
+  "page": { "after": 0, "returned": 0, "order": "ascending", "has_more": false },
+  "continuation": { "cursor": { "event_id": 0, "scope": "store" }, "command": "looper events --contract v2" }
+}

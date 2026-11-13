@@ -112,7 +112,7 @@ func TestDashboardControllerThreadsNoAnimation(t *testing.T) {
 				if got != on {
 					t.Fatalf("controls.NoAnimation = %t, want %t", got, on)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(testBudget(10 * time.Second)):
 				t.Fatal("the dashboard never started")
 			}
 			select {
@@ -120,7 +120,7 @@ func TestDashboardControllerThreadsNoAnimation(t *testing.T) {
 				if code != 0 {
 					t.Fatalf("controller exited %d", code)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(testBudget(10 * time.Second)):
 				t.Fatal("dashboard wrapper hung after controller completion")
 			}
 		})

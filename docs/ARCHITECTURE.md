@@ -73,6 +73,20 @@ agent transcripts. Queries use durable records for project totals, model
 breakdowns, and daily buckets. Worker intervals split at UTC midnight; token
 reports belong to their completion day. Refresh errors retain the last view.
 
+## Public contracts
+
+The command line interface, the doctor command, and the dashboard share one
+set of query and operation contracts. `docs/AGENT-CONTRACTS.md` defines them,
+`docs/AGENT-CONTRACT-MIGRATION.md` defines how they change, and
+`docs/contracts/` holds the schemas, example documents, the transport exit
+code registry, and the request lifecycle registry. Two checks keep them
+honest: `internal/contractschema` validates the schemas and fixtures, and the
+legacy compatibility test in `internal/looper` fails when a document the CLI
+emits today changes structure. A finite query returns one JSON document;
+newline-delimited JSON is reserved for explicit streaming. The legacy
+documents are frozen and stay the default until a documented contract version
+transition.
+
 ## Acceptance invariant
 
 A task becomes done only after these conditions hold:
@@ -173,6 +187,12 @@ Identical failures trigger a fresh diagnosis, then hold the task if the failure
 persists. Blocked attempts retain their worktree. Explicit reopening reuses partial
 work, combining it with the current baseline when necessary. Other tasks continue.
 
+An accepted plan import pauses new ordinary dispatch. Retained attempts,
+repairs, checks, and publications keep running to their boundary; the import
+analyzes and applies at the first free one, and dispatch resumes against the
+expanded backlog only after that. A failed analysis releases the pause with the
+backlog unchanged.
+
 Milestone reviews drain existing work before examining complete product behavior.
 Final reviews report gaps as findings and set completion explicitly; the
 review response is the only path that adds work or finishes a goal. Findings
@@ -216,3 +236,19 @@ and every non-input failure keep their fatal behavior.
 The controller publishes the waiting snapshot before it sleeps and clears it
 as soon as the input is accepted. The dashboard shows the correction action
 and a scrollable diagnostic even when the accepted backlog has ready tasks.
+
+An external task-file edit that lands while work runs holds the loop the same
+way at the next free boundary: dispatch pauses, finished results requeue or
+buffer, and the edit imports once nothing is in flight. A stop request during
+that wait releases the hold to the drain path at the same boundary. The
+interrupted results stay retained and the edit stays unimported, so the stop
+file is consumed instead of outliving the controller.
+
+## Named agent profiles
+
+Machine agent profiles bind executable commands to protocol adapters. Project
+worker and reviewer roles select profile names independently. Controllers retain
+a snapshot of machine definitions; changing the catalog requires a controller
+restart. The adapter boundary owns argument construction, prompt transport, and
+result extraction. See [agent profiles](AGENT-PROFILES.md) for the configuration
+flow, migration rules, capabilities, and invocation evidence.

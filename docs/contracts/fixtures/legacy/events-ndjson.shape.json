@@ -1,0 +1,27 @@
+[
+  {
+    "id": "integer",
+    "kind": "string",
+    "message": "string",
+    "time": "string"
+  },
+  {
+    "data": {
+      "attempt_id": "string",
+      "task_id": "string"
+    },
+    "id": "integer",
+    "kind": "string",
+    "message": "string",
+    "time": "string"
+  },
+  {
+    "data": {
+      "reason": "string"
+    },
+    "id": "integer",
+    "kind": "string",
+    "message": "string",
+    "time": "string"
+  }
+]

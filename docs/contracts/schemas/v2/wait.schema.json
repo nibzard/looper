@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/wait.schema.json",
+  "title": "Looper finite wait outcome (contract version 2)",
+  "description": "The one document `looper wait --contract v2` returns for any of its four predicates: a changed cursor, a task state, a request outcome, or a run outcome. The outcome names the satisfied condition, a timeout, or a caller cancellation; the observed block carries the evidence the last observation read, always with the store's committed high-water mark so observation continues without a gap. A wait observes only: a timeout or cancellation never cancels the request, task, or controller underneath. The request definition mirrors request-record.schema.json's request definition, because the request predicate reports the same durable record `looper requests` serves.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "outcome", "condition", "observed", "cursor", "wait", "detail"],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.wait" },
+    "outcome": {
+      "enum": ["satisfied", "timeout", "cancelled"],
+      "description": "satisfied names the condition that held; timeout names the bound that expired while it did not; cancelled names a caller that interrupted the wait. Each keeps the same document, and none of them cancels the operation the wait observed."
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["cursor_change", "task_state", "request_outcome", "run_outcome"] },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "cursor_change: satisfied once the store's committed high-water mark passes this exclusive position."
+        },
+        "task_id": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": ["todo", "doing", "blocked", "done", "cancelled"],
+          "description": "task_state: the target status. Absent when the wait accepts any change."
+        },
+        "from": {
+          "type": "string",
+          "description": "task_state: the status observed when the wait began, or absent when the task was not in the saved backlog. A task an import adds satisfies a change wait by appearing."
+        },
+        "request_id": { "type": "string", "minLength": 1 },
+        "session": {
+          "type": "string",
+          "description": "run_outcome: the controller session the wait is bound to — the live owner when the wait began, else the newest recorded session. A replacement controller's session never answers for the bound one."
+        }
+      }
+    },
+    "observed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "high_water"],
+      "properties": {
+        "at": { "type": "string", "format": "date-time" },
+        "high_water": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The store's committed high-water mark at the last observation, read with the evidence beside it."
+        },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "status": { "type": "string", "description": "The saved status; omitted when the task is not in the backlog. The predicate samples the saved status, so a status that changes twice between two observations can pass unseen — done and cancelled are terminal and cannot be missed." },
+            "changed": { "type": "boolean", "description": "True when the observed status differs from the one recorded when the wait began." }
+          }
+        },
+        "request": { "$ref": "#/$defs/request" },
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome"],
+          "properties": {
+            "id": { "type": "string" },
+            "outcome": {
+              "enum": ["running", "stopped", "failed", "cancelled", "panicked", "interrupted", "unclean", "unknown"],
+              "description": "The store's recorded outcome for the bound session. running holds while the session holds; unclean means the controller process ended without recording an exit; unknown means no session record and no live controller name the run."
+            },
+            "reason": { "type": "string" },
+            "exit_code": { "type": "integer" },
+            "unclean": { "type": "boolean" },
+            "shutdown_event_id": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "What the last observation showed when the condition did not hold, including that no controller owns the repository and therefore nothing changes the saved records."
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "scope"],
+      "properties": {
+        "event_id": { "type": "integer", "minimum": 0 },
+        "scope": { "const": "store" },
+        "store_id": { "type": "string" },
+        "store_epoch": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "epoch"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "epoch": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["owning", "stale", "stopped", "unknown"] },
+        "session": { "type": "string" }
+      }
+    },
+    "wait": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeout_seconds", "elapsed_seconds"],
+      "properties": {
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "elapsed_seconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "events", "status", "follow"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1, "description": "The same wait from the position the observation reached." },
+        "events": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "follow": { "type": "string", "minLength": 1, "description": "The followed event stream a caller that can hold one uses instead of a finite wait." }
+      }
+    }
+  },
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "state", "age_seconds"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["submitted", "accepted", "waiting", "applied", "rejected", "failed", "cancelled"] },
+        "age_seconds": { "type": "integer", "minimum": 0 },
+        "controller_session": { "type": "string" },
+        "idempotency_key": { "type": "string" },
+        "submitted_at": { "type": "string", "format": "date-time" },
+        "decided_at": { "type": "string", "format": "date-time" },
+        "waiting_on": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1 },
+            "age_seconds": { "type": "integer", "minimum": 0 },
+            "detail": { "type": "string" }
+          }
+        },
+        "affected_tasks": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+        "plan_coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "added_tasks": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+            "covered": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["requirement"],
+                "properties": {
+                  "requirement": { "type": "string", "minLength": 1 },
+                  "task_id": { "type": "string" },
+                  "evidence": { "type": "string" }
+                }
+              }
+            },
+            "conflicts": { "type": "array", "maxItems": 16, "items": { "type": "string" } },
+            "adjustments": { "type": "array", "maxItems": 16, "items": { "type": "string" } },
+            "gates": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["task_id", "depends_on"],
+                "properties": {
+                  "task_id": { "type": "string", "minLength": 1 },
+                  "depends_on": { "type": "array", "maxItems": 64, "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "summary": { "type": "string" },
+            "added_task_ids": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+            "applied_fields": { "type": "array", "items": { "type": "string" } },
+            "restart_required_fields": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "error": { "$ref": "#/$defs/public_error" }
+      }
+    },
+    "public_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retry"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "retry": { "enum": ["yes", "no", "after-change"] },
+        "paths": { "type": "array", "maxItems": 32, "items": { "type": "string" } },
+        "expected": { "type": "object" },
+        "observed": { "type": "object" },
+        "evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reference"],
+            "properties": {
+              "kind": { "enum": ["event", "log", "file", "request"] },
+              "reference": { "type": "string", "minLength": 1 },
+              "command": { "type": "string" }
+            }
+          }
+        },
+        "next_actions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string", "minLength": 1 },
+              "command": { "type": "string" },
+              "operation": { "type": "string" }
+            }
+          }
+        },
+        "unknown_evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -170,8 +170,8 @@ func TestTUIAttachesToOwnedRepository(t *testing.T) {
 
 	var stderr strings.Builder
 	done := make(chan int, 1)
-	go func() { done <- runTUI(c, masterOut, &stderr) }()
-	deadline := time.Now().Add(20 * time.Second)
+	go func() { done <- runTUI([]string{"tui"}, c, masterOut, &stderr) }()
+	deadline := time.Now().Add(testBudget(20 * time.Second))
 	for time.Now().Before(deadline) {
 		select {
 		case code := <-done:
@@ -222,13 +222,13 @@ func TestTUIAttachReportsUnverifiableMetadata(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	var stderr strings.Builder
 	done := make(chan int, 1)
-	go func() { done <- runTUI(c, masterOut, &stderr) }()
+	go func() { done <- runTUI([]string{"tui"}, c, masterOut, &stderr) }()
 	select {
 	case code := <-done:
 		if code != 1 {
 			t.Fatalf("attach must fail on unreadable metadata, exit %d: %s", code, stderr.String())
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("runTUI never returned")
 	}
 	if !strings.Contains(stderr.String(), "metadata cannot be verified") {

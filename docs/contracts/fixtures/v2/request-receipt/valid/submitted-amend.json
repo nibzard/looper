@@ -1,0 +1,15 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.receipt",
+  "request": {
+    "id": "amend-01h5e7",
+    "type": "amend-task",
+    "state": "submitted",
+    "created_at": "2026-11-09T11:04:38Z",
+    "controller_session": "run-4f39faa5451b464d",
+    "idempotency_key": "amend-t20-once",
+    "payload_digest": "sha256:9a2d"
+  },
+  "query": { "command": "looper requests amend-01h5e7 --contract v2" }
+}

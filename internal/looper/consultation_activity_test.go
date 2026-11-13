@@ -15,7 +15,7 @@ import (
 // waitForEvents blocks until the journal holds an event satisfying want.
 func waitForEvents(t *testing.T, e *Engine, want func([]Event) bool) []Event {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testBudget(10 * time.Second))
 	for time.Now().Before(deadline) {
 		events, err := e.Store.Events(0)
 		if err != nil {
@@ -82,7 +82,7 @@ func TestDiagnosePublishesActivityEvidence(t *testing.T) {
 		if !ok {
 			t.Fatal("the gated consultation did not return its diagnosis")
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("consultation did not finish after release")
 	}
 	if e.err != nil {
@@ -169,7 +169,7 @@ func TestDiagnoseKeepsPublishingWorkerEvidence(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("consultation did not finish after release")
 	}
 	if e.err != nil {
@@ -215,7 +215,7 @@ func TestConsultRunRepairPublishesActivityEvidence(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("consultation did not finish after release")
 	}
 	if e.err != nil {

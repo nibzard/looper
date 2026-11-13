@@ -71,7 +71,7 @@ func runEngine(t *testing.T, reviewResult string) (*Engine, Config, chan int, co
 		cancel()
 		select {
 		case <-exited:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testBudget(5 * time.Second)):
 			t.Error("engine did not exit after cancel")
 		}
 		e.Store.Close()
@@ -80,10 +80,15 @@ func runEngine(t *testing.T, reviewResult string) (*Engine, Config, chan int, co
 }
 
 // waitEvent blocks until the journal holds at least count waiting events whose
-// message contains substr.
+// message contains substr. The deadline is a failure bound against a condition
+// that never arrives, not a budget the healthy path must outrun: reaching the
+// idle wait takes one worker, check, publication, and review round, which a
+// machine loaded by the rest of the suite (or the race detector) can easily
+// stretch past a few seconds. The bound grows with the host pressure
+// testBudget measures, because the same load stretches every fsync-bound step.
 func waitEvent(t *testing.T, dir, substr string, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testBudget(30 * time.Second))
 	for time.Now().Before(deadline) {
 		if countEvent(t, dir, substr) >= count {
 			return
@@ -261,7 +266,7 @@ func TestRunWaitsForCorrectedInputAndResumes(t *testing.T) {
 	}
 	waitEvent(t, e.Dir, "accepted again", 1)
 	// The completion banner returns once the input is accepted again.
-	bannerDeadline := time.Now().Add(5 * time.Second)
+	bannerDeadline := time.Now().Add(testBudget(5 * time.Second))
 	for time.Now().Before(bannerDeadline) {
 		if v := LoadView(e.Dir); v != nil && v.Finished {
 			break
@@ -279,7 +284,7 @@ func TestRunWaitsForCorrectedInputAndResumes(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("stop after correction must drain with code 0, got %d", code)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testBudget(5 * time.Second)):
 		t.Fatal("run did not drain after stop")
 	}
 	if !e.State.Finished {
@@ -305,7 +310,7 @@ func TestRunStopDuringInputWaitDrainsWithZero(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("stop during the input wait must drain with code 0, got %d", code)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testBudget(5 * time.Second)):
 		t.Fatal("run did not drain after stop")
 	}
 }
@@ -323,7 +328,7 @@ func TestRunInterruptDuringInputWaitReturns130(t *testing.T) {
 		if code != 130 {
 			t.Fatalf("interrupt during the input wait must return 130, got %d", code)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testBudget(5 * time.Second)):
 		t.Fatal("run did not exit after interrupt")
 	}
 }
@@ -379,7 +384,7 @@ func TestOnceInvalidIdleInputExitsOne(t *testing.T) {
 		code, err := e.Run(ctx)
 		done <- outcome{code, err}
 	}()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testBudget(10 * time.Second))
 	for time.Now().Before(deadline) {
 		s, openErr := OpenStoreReadonly(filepath.Join(e.Dir, "state.db"))
 		if openErr == nil {
@@ -399,7 +404,7 @@ func TestOnceInvalidIdleInputExitsOne(t *testing.T) {
 						if !errors.As(out.err, &bad) {
 							t.Fatalf("the exit must come from the input branch: %v", out.err)
 						}
-					case <-time.After(10 * time.Second):
+					case <-time.After(testBudget(10 * time.Second)):
 						t.Fatal("run did not exit on invalid idle input")
 					}
 					return
@@ -408,6 +413,9 @@ func TestOnceInvalidIdleInputExitsOne(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
+	// This bound is the T108 load-flake record: a 10 s fixed budget failed a
+	// healthy run at host load 8-10 while the same test passed in 0.6 s
+	// isolated, so it sizes itself to the host like every other engine wait.
 	t.Fatal("the worker result never landed")
 }
 
@@ -421,7 +429,7 @@ func TestPlanImportWaitsForCorrectedInput(t *testing.T) {
 	plan := planFile(t, "# New requirements\nAdd telemetry to the service.\n")
 	// The proposal covers no existing task; the backlog here uses id T1.
 	t.Setenv("LOOPER_FAKE_RESULT", `{"additions":[{"id":"P1","title":"Add telemetry","priority":2,"status":"todo","details":"Acceptance: telemetry endpoint returns counters.","depends_on":[]}],"covered":[],"conflicts":[]}`)
-	id, err := submitPlanImport(e.Dir, e.controller.Session, []string{plan})
+	id, err := submitPlanImport(e.Dir, e.controller.Session, "", []string{plan})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +520,7 @@ printf '%s' "$result" > "$out"
 		if !joined {
 			select {
 			case <-done:
-			case <-time.After(10 * time.Second):
+			case <-time.After(testBudget(10 * time.Second)):
 				t.Error("controller did not stop")
 			}
 		}
@@ -539,7 +547,7 @@ printf '%s' "$result" > "$out"
 		t.Fatal(err)
 	}
 	waitEvent(t, e.Dir, "accepted again", 1)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testBudget(10 * time.Second))
 	for {
 		var b Backlog
 		if err := readJSON(c.Todo, &b); err == nil && b.Task("T2") != nil && b.Task("T2").Status == "done" {
@@ -559,7 +567,7 @@ printf '%s' "$result" > "$out"
 		if code != 0 {
 			t.Fatalf("stop code %d", code)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(testBudget(10 * time.Second)):
 		t.Fatal("stop timed out")
 	}
 	workers, err := os.ReadFile(log)

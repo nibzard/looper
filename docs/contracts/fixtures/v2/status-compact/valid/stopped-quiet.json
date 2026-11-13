@@ -1,0 +1,25 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.status.compact",
+  "generated_at": "2026-11-05T10:15:04Z",
+  "project": { "root": "/home/agent/demo" },
+  "run": { "id": "run-4f39faa5451b464d", "mode": "unknown" },
+  "builds": { "client": { "release": "0.9.0", "revision": "unknown", "modified": false } },
+  "controller": { "state": "stopped", "owned": false, "ownership_evidence": "none" },
+  "work": {
+    "counts": { "done": 12, "todo": 28, "blocked": 4, "ready": 2 },
+    "active": [
+      { "attempt_id": "task-1249c40e5cfd6e43", "task_id": "T018", "phase": "verifying", "progress": "unknown", "retained": true }
+    ]
+  },
+  "waiting": { "reason": "controller_stopped", "detail": "No controller owns the repository; one attempt is retained." },
+  "requests": { "pending": 0 },
+  "findings": [
+    { "code": "retained_work", "severity": "info", "message": "Attempts are retained without an active controller.", "action": "Run looper to resume retained work." }
+  ],
+  "last_transition": null,
+  "cursor": { "event_id": 0, "scope": "store" },
+  "limits": { "bytes_budget": 8192, "omitted": {} },
+  "detail": { "events": "looper events --contract v2" }
+}

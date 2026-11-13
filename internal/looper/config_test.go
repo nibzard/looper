@@ -34,6 +34,9 @@ func parseAt(t *testing.T, args ...string) (Config, error) {
 
 func clearSettingEnv(t *testing.T) {
 	t.Helper()
+	// Every project fixture needs its own machine catalog. A setup form in
+	// another test must never redirect a stub invocation to an installed agent.
+	t.Setenv("LOOPER_AGENTS_FILE", filepath.Join(t.TempDir(), "agents.json"))
 	for _, k := range []string{
 		"LOOPER_ITER_SCHEDULE", "LOOPER_REVIEW_AGENT", "LOOPER_JOBS", "LOOPER_CHECK_JOBS",
 		"CODEX_MODEL", "CLAUDE_MODEL", "CODEX_REASONING_EFFORT", "CODEX_SMART_MODEL",
@@ -41,6 +44,7 @@ func clearSettingEnv(t *testing.T) {
 		"LOOPER_REVIEW_EVERY", "LOOPER_MAX_REPAIRS", "LOOPER_RATE_LIMIT_MAX",
 		"LOOPER_POLL_SECONDS", "LOOPER_RATE_LIMIT_DELAY", "LOOPER_TIMEOUT_SECONDS",
 		"LOOPER_ASSESS_COMMAND", "LOOPER_HOOK", "CODEX_BIN", "CLAUDE_BIN", "LOOPER_NO_PROMPT",
+		"LOOPER_CONTRACT",
 	} {
 		val, ok := os.LookupEnv(k)
 		os.Unsetenv(k)
@@ -235,7 +239,14 @@ func TestParseJobs(t *testing.T) {
 	if c.Jobs != 4 {
 		t.Fatalf("jobs precedence broken: %d", c.Jobs)
 	}
+	// Pin the memory bound so the host's free memory cannot decide the
+	// expected value: Parse clamps auto jobs by available memory, and two
+	// readings from a loaded host differ (the T054 flake class).
+	useMemoryFiles(t, memoryFiles{meminfo: fixtureMeminfo(t, 16*1024)})
 	auto := max(1, min(4, runtime.NumCPU()/2))
+	if m := availableMemory(); m > 0 {
+		auto = min(auto, max(1, int(m/(2<<30))))
+	}
 	c, err = parseAt(t, "--jobs", "auto")
 	if err != nil {
 		t.Fatal(err)

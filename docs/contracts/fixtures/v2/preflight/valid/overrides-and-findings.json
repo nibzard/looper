@@ -1,0 +1,163 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.preflight",
+  "generated_at": "2026-11-06T09:31:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json",
+    "runtime_dir": "/home/agent/.looper/stackfall-b17f/runtime",
+    "profile": {
+      "path": "/home/agent/.looper/stackfall-b17f/runtime/profile.json",
+      "present": true
+    }
+  },
+  "agents": {
+    "coding": {
+      "name": "codex",
+      "source": "environment",
+      "binary": {
+        "tool": "codex",
+        "requested": "/opt/tools/codex",
+        "source": "environment",
+        "state": "found",
+        "resolved": "/opt/tools/codex"
+      },
+      "sandbox": "approvals-and-sandbox-bypassed",
+      "sandbox_note": "planning and review run read-only"
+    },
+    "review": {
+      "name": "claude",
+      "source": "environment",
+      "follows_coding": false,
+      "binary": {
+        "tool": "claude",
+        "requested": "/nonexistent/claude-x",
+        "source": "environment",
+        "state": "missing"
+      },
+      "sandbox": "permissions-skipped",
+      "sandbox_note": "planning and review run with read, glob, and grep tools only"
+    }
+  },
+  "settings": {
+    "jobs": {
+      "value": 3,
+      "auto": false,
+      "source": "profile"
+    },
+    "checks": {
+      "value": 1,
+      "note": "--check-jobs or LOOPER_CHECK_JOBS; default 1"
+    },
+    "codex_model": {
+      "value": "gpt-6-astra",
+      "source": "environment",
+      "resolution": "configured"
+    },
+    "claude_model": {
+      "value": "sonnet-5",
+      "source": "environment",
+      "resolution": "configured"
+    },
+    "effort": {
+      "value": "",
+      "source": "default",
+      "resolution": "not_applicable",
+      "note": "no agent of this kind is configured, so the setting is unused"
+    },
+    "review_every": {
+      "value": 5,
+      "source": "default"
+    }
+  },
+  "execution": {
+    "mode": "foreground",
+    "mode_note": "looper start runs the same configuration detached through the daemon; looper tui runs it under the dashboard",
+    "once": {
+      "enabled": true,
+      "note": "the run exits after the current goal is checked or all remaining work is blocked"
+    },
+    "dispatch_limit": 0,
+    "poll_seconds": 30,
+    "worker_timeout_seconds": 0,
+    "git_timeout_seconds": 600,
+    "retry": {
+      "limit": 12,
+      "delay_seconds": 60
+    },
+    "plans": [
+      "/home/agent/stackfall/plan.md"
+    ],
+    "plan_total": 1
+  },
+  "commands": {
+    "verify": {
+      "value": "curl -H \"Authorization: [redacted]\" https://example.test/api",
+      "source": "environment",
+      "executable": {
+        "tool": "curl",
+        "requested": "curl",
+        "state": "missing"
+      }
+    },
+    "setup": {
+      "value": "cd vendor && make setup",
+      "source": "plan",
+      "note": "the saved execution plan runs this command until the plan is rebuilt",
+      "executable": {
+        "tool": "cd",
+        "requested": "cd",
+        "state": "builtin",
+        "note": "shell builtin; it runs inside the shell"
+      }
+    }
+  },
+  "environment": [
+    {
+      "name": "LOOPER_ITER_SCHEDULE",
+      "present": true,
+      "affects": "coding agent"
+    },
+    {
+      "name": "CODEX_BIN",
+      "present": true,
+      "affects": "codex executable"
+    },
+    {
+      "name": "CLAUDE_BIN",
+      "present": true,
+      "affects": "claude executable"
+    }
+  ],
+  "findings": [
+    {
+      "code": "executable_missing",
+      "severity": "error",
+      "message": "the review agent binary \"/nonexistent/claude-x\" was not found on PATH",
+      "action": "install claude or set CLAUDE_BIN"
+    },
+    {
+      "code": "command_executable_missing",
+      "severity": "warning",
+      "message": "the verify command's executable \"curl\" was not found on PATH",
+      "action": "install the executable or change the verify command"
+    }
+  ],
+  "unchecked": [
+    {
+      "code": "agent_authentication",
+      "note": "no credential, login, quota, or billing state was probed; the first real launch decides"
+    }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 256,
+    "findings_max": 16
+  },
+  "detail": {
+    "settings": "looper config",
+    "health": "looper doctor",
+    "capabilities": "looper version --contract v2 --json"
+  }
+}

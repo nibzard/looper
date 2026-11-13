@@ -158,6 +158,33 @@ func (r *Repository) Head() (string, string) {
 	b, _ := gitText(r.Root, "symbolic-ref", "-q", "HEAD")
 	return h, b
 }
+
+// HeadDetail reports the resolved HEAD commit, the symbolic branch, and
+// whether HEAD is unborn: a branch checked out with no commits. An unborn
+// HEAD is a distinct observed state, so a guard reports it as such instead of
+// presenting an empty revision as a branch that moved. A detached or
+// unreadable HEAD is not unborn; it keeps today's empty branch value.
+func (r *Repository) HeadDetail() (head, branch string, unborn bool) {
+	return headDetail(r.Root)
+}
+
+func headDetail(root string) (head, branch string, unborn bool) {
+	h, headErr := gitText(root, "rev-parse", "--verify", "HEAD")
+	b, branchErr := gitText(root, "symbolic-ref", "-q", "HEAD")
+	if branchErr != nil {
+		return h, "", false
+	}
+	if headErr == nil {
+		return h, b, false
+	}
+	// The symbolic branch resolves while HEAD does not: unborn only when the
+	// branch ref itself holds no commit. A branch that resolves while HEAD
+	// fails is a broken repository, not an unborn HEAD.
+	if _, refErr := gitText(root, "rev-parse", "--verify", "--quiet", b); refErr != nil {
+		return "", b, true
+	}
+	return h, b, false
+}
 func (r *Repository) Snapshot(cwd string) (string, error) {
 	return r.SnapshotFrom(cwd, "HEAD")
 }
@@ -296,12 +323,77 @@ func (r *Repository) Remove(p string) {
 		gitText(r.Root, "worktree", "remove", "--force", p)
 	}
 }
+
+// MergeError carries one failed merge with its verified classification. Only
+// repository evidence establishes a content conflict: unmerged entries that
+// the worktree index still holds after the failed merge. A timeout kill, a
+// disk failure, a missing object, and every other Git failure keep Unmerged
+// empty, so no caller directs the operator to resolve conflicts that the
+// repository does not show. The original error is always preserved.
+type MergeError struct {
+	// Unmerged lists the paths the worktree index holds in a conflicted
+	// state. Empty means no conflict was verified.
+	Unmerged []string
+	// Checked reports whether the index evidence query itself succeeded.
+	// False means the conflict status is unknown, not absent.
+	Checked bool
+	Err     error
+}
+
+func (m *MergeError) Error() string {
+	if len(m.Unmerged) > 0 {
+		return fmt.Sprintf("content conflicts in: %s\n%v", strings.Join(m.Unmerged, ", "), m.Err)
+	}
+	return m.Err.Error()
+}
+func (m *MergeError) Unwrap() error { return m.Err }
+
 func (r *Repository) Merge(work, commit string) error {
 	output, err := gitText(work, "-c", "user.name=Looper", "-c", "user.email=looper@localhost", "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", commit)
-	if err != nil && output != "" {
-		return fmt.Errorf("%w\n%s", err, output)
+	if err == nil {
+		return nil
 	}
-	return err
+	if output != "" {
+		err = fmt.Errorf("%w\n%s", err, output)
+	}
+	unmerged, checked := unmergedPaths(work)
+	return &MergeError{Unmerged: unmerged, Checked: checked, Err: err}
+}
+
+// unmergedPaths reads the paths the worktree index holds in a conflicted
+// state. A failed query returns nil paths with ok false, so a caller reports
+// an unverified failure instead of asserting a conflict or its absence.
+func unmergedPaths(work string) ([]string, bool) {
+	out, err := gitText(work, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, false
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\n") {
+		if p = strings.TrimSpace(p); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, true
+}
+
+// mergeFailureFeedback explains one failed merge for task feedback. A
+// verified content conflict names its unmerged paths. Every other failure
+// names the merge operation and keeps the underlying error, without
+// directing the operator to resolve conflicts that no repository evidence
+// shows.
+func mergeFailureFeedback(subject string, err error) string {
+	var m *MergeError
+	if !errors.As(err, &m) {
+		return fmt.Sprintf("Merging the %s into the integrated project failed.\n%v", subject, err)
+	}
+	if len(m.Unmerged) > 0 {
+		return fmt.Sprintf("The %s conflicts with the integrated project. Resolve the content conflicts in: %s.\n%v", subject, strings.Join(m.Unmerged, ", "), m.Err)
+	}
+	if !m.Checked {
+		return fmt.Sprintf("Merging the %s into the integrated project failed, and the repository could not be checked for content conflicts. Fix the underlying Git failure, then retry.\n%v", subject, m.Err)
+	}
+	return fmt.Sprintf("Merging the %s into the integrated project failed without a content conflict: the repository reports no unmerged paths. Fix the underlying Git failure; conflict resolution is not required.\n%v", subject, m.Err)
 }
 func (r *Repository) Changes(base, commit string) ([]string, error) {
 	b, err := gitCommand(r.Root, nil, nil, "diff", "--name-only", "-z", base, commit, "--")

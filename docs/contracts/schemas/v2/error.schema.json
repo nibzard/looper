@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/error.schema.json",
+  "title": "Looper structured error (contract version 2)",
+  "description": "The document every public CLI failure emits under contract version 2, replacing free-form stderr text for machine callers. Plain text errors render from the same fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "error"],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.error" },
+    "command": { "type": "string", "description": "The failing command, for example looper status." },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retry"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "Stable machine code, for example run_not_found, backlog_contract_changed, capability_unsupported, or cursor_invalid."
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "retry": {
+          "enum": ["yes", "no", "after-change"],
+          "description": "yes: the same call can succeed later. after-change: retry only after the named change. no: retry cannot help."
+        },
+        "paths": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string" },
+          "description": "Resolved absolute paths the error is about."
+        },
+        "expected": {
+          "type": "object",
+          "description": "Expected values as name-value pairs, for example the digest or revision a guard wanted."
+        },
+        "observed": {
+          "type": "object",
+          "description": "Observed values for the same names, or an explicit unknown marker."
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reference"],
+            "properties": {
+              "kind": { "enum": ["event", "log", "file", "request"] },
+              "reference": { "type": "string", "minLength": 1 },
+              "command": { "type": "string", "description": "A read-only command that retrieves the evidence." }
+            }
+          }
+        },
+        "next_actions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string", "minLength": 1 },
+              "command": { "type": "string" },
+              "operation": { "type": "string", "description": "A supported controller operation when no single command applies." }
+            }
+          }
+        },
+        "unknown_evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string" },
+          "description": "Names the evidence that is missing, so a caller can tell an unsupported recovery from an unavailable one."
+        }
+      }
+    }
+  }
+}

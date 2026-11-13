@@ -1,0 +1,24 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "req-01h3cd",
+    "type": "amend-task",
+    "state": "rejected",
+    "age_seconds": 33,
+    "submitted_at": "2026-11-05T10:14:25Z",
+    "decided_at": "2026-11-05T10:14:26Z",
+    "error": {
+      "code": "backlog_revision_stale",
+      "message": "The backlog changed since the amendment was prepared.",
+      "retry": "after-change",
+      "paths": ["/home/agent/demo/to-do.json"],
+      "expected": { "revision": "sha256:4d21" },
+      "observed": { "revision": "sha256:9f2c" },
+      "evidence": [ { "kind": "event", "reference": "event 1202 import applied", "command": "looper events --after 1200 --limit 5" } ],
+      "next_actions": [ { "description": "Read the preview again and resubmit with the new revision.", "command": "looper recovery --preview --contract v2" } ]
+    }
+  },
+  "continuation": { "command": "looper requests req-01h3cd --contract v2" }
+}

@@ -29,6 +29,10 @@ type consultation struct {
 	// waitKind journals the controller heartbeat. waitLabel names the
 	// consultation inside its message.
 	waitKind, waitLabel string
+	// identity carries the structured identity of the consultation's own
+	// events beyond the session, which runConsultation adds itself: the task
+	// and attempt a consultation diagnoses, or the request it serves.
+	identity eventIdentity
 	// heartbeat is the resolved cadence; zero keeps consultationHeartbeat.
 	heartbeat time.Duration
 }
@@ -52,7 +56,9 @@ func (e *Engine) runConsultation(ctx context.Context, op operation, work, dir, p
 	if e.controller != nil {
 		session = e.controller.Session
 	}
-	e.eventData(c.openKind, c.openMessage+". Log: "+e.activityLog, map[string]any{"session": session, "log": e.activityLog})
+	identity := c.identity
+	identity.Session = session
+	e.eventData(c.openKind, c.openMessage+". Log: "+e.activityLog, identity.merge(map[string]any{"log": e.activityLog}))
 	// The loop owns the drain flag; a consultation that blocks it keeps
 	// reporting the same request so a stop stays visible.
 	e.publishView(e.drainingNow())
@@ -81,7 +87,7 @@ func (e *Engine) runConsultation(ctx context.Context, op operation, work, dir, p
 		}
 		if reader.poll(e.activityLog, func(action string) {
 			e.activityDetail = action
-			e.event(c.actionKind, action)
+			e.eventData(c.actionKind, action, identity.merge(nil))
 		}) {
 			e.activityUpdated = time.Now().UTC().Format(time.RFC3339)
 		}
@@ -98,7 +104,7 @@ func (e *Engine) runConsultation(ctx context.Context, op operation, work, dir, p
 			e.pollWorkerActivity()
 			seconds++
 			if seconds%every == 0 {
-				e.eventData(c.waitKind, fmt.Sprintf("Controller waiting for %s (%s). Last activity: %s", c.waitLabel, time.Since(started).Round(time.Second), e.activityDetail), map[string]any{"session": session, "log": e.activityLog})
+				e.eventData(c.waitKind, fmt.Sprintf("Controller waiting for %s (%s). Last activity: %s", c.waitLabel, time.Since(started).Round(time.Second), e.activityDetail), identity.merge(map[string]any{"log": e.activityLog}))
 			}
 			e.publishView(e.drainingNow())
 		}

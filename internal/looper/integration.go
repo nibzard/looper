@@ -20,7 +20,7 @@ func (e *Engine) prepare(a *Attempt, base string) (Candidate, error) {
 	}
 	if err = e.Repo.Merge(work, a.ResultCommit); err != nil {
 		e.Repo.Remove(work)
-		c.Feedback = "The task conflicts with the integrated project.\n" + err.Error()
+		c.Feedback = mergeFailureFeedback("task", err)
 		return c, nil
 	}
 	tree, err := e.Repo.Snapshot(work)
@@ -62,6 +62,8 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 	if err := writeJSON(filepath.Join(dir, "verify-command.json"), map[string]string{"command": p.Verify}); err != nil {
 		c.OK = false
 		c.Feedback = "Cannot record verification command: " + err.Error()
+		writeFailureSummary(dir, (&FailureSummary{Operation: opVerify, Tool: "verify-command.json", Outcome: outcomeUnknown, Cause: err.Error(),
+			Evidence: []FailureEvidence{{Kind: "file", Reference: filepath.Join(dir, "verify-command.json")}}}).bound())
 		return c
 	}
 	if err := e.command(ctx, p.Setup, c.Worktree, dir, "setup"); err != nil {
@@ -71,6 +73,7 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 		if errors.As(err, &launch) {
 			c.LaunchFailure = err
 		}
+		writeFailureSummary(dir, commandFailureSummary(opSetup, err, filepath.Join(dir, "setup.log")))
 		return c
 	}
 	err = e.command(ctx, p.Verify, c.Worktree, dir, "verify")
@@ -81,12 +84,15 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 		if errors.As(err, &launch) {
 			c.LaunchFailure = err
 		}
+		writeFailureSummary(dir, commandFailureSummary(opVerify, err, filepath.Join(dir, "verify.log")))
 		return c
 	}
 	tree, err := e.Repo.Snapshot(c.Worktree)
 	if err != nil {
 		c.OK = false
 		c.Feedback = "Verification command passed, but snapshot capture failed: " + err.Error()
+		writeFailureSummary(dir, (&FailureSummary{Operation: opVerify, Outcome: outcomeUnknown, Cause: err.Error(),
+			Evidence: []FailureEvidence{{Kind: "log", Reference: filepath.Join(dir, "verify.log")}}}).bound())
 		return c
 	}
 	if tree != c.Tree {
@@ -106,6 +112,10 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 			}
 			c.Feedback += strings.Join(lines, "\n") + "\nArtifacts: " + path
 		}
+		writeFailureSummary(dir, (&FailureSummary{Operation: opVerify, ExitStatus: exitOf(0), Outcome: outcomeTreeChanged,
+			Cause:    "the verification command passed but changed project files",
+			Context:  boundedContextOf(comparison),
+			Evidence: []FailureEvidence{{Kind: "file", Reference: path}, {Kind: "log", Reference: filepath.Join(dir, "verify.log")}}}).bound())
 		return c
 	}
 	if strings.TrimSpace(op.config.Assess) != "" {
@@ -116,6 +126,9 @@ func (e *Engine) verify(ctx context.Context, op operation, a Attempt, c Candidat
 			// result without repeating implementation.
 			c.OK = false
 			c.Feedback = "Verification was cancelled during the advisory assessment."
+			writeFailureSummary(dir, (&FailureSummary{Operation: opVerify, Outcome: outcomeCancelled,
+				Cause:    "verification was cancelled during the advisory assessment",
+				Evidence: []FailureEvidence{{Kind: "log", Reference: filepath.Join(dir, "verify.log")}}}).bound())
 			return c
 		}
 		tree, err = e.Repo.Snapshot(c.Worktree)
@@ -248,7 +261,7 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 	if a.ResultCommit != "" {
 		if err = e.Repo.Merge(work, a.ResultCommit); err != nil {
 			e.Repo.Remove(work)
-			return e.hold(a, feedback+"\nThe retained result conflicts with the integrated project.\n"+err.Error())
+			return e.hold(a, feedback+"\n"+mergeFailureFeedback("retained result", err))
 		}
 	} else {
 		e.Repo.Remove(work)
@@ -264,7 +277,7 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 	if err = e.save(); err != nil {
 		return err
 	}
-	e.event("repair", "Repairing "+a.Task.ID+" with the recorded failure evidence.")
+	e.taskEvent("repair", "Repairing "+a.Task.ID+" with the recorded failure evidence.", a)
 	return e.launch(ctx, a, out)
 }
 
@@ -319,10 +332,11 @@ Return one JSON object: {"root_cause":"why the current approach keeps failing","
 		actionKind:  "diagnosis-activity",
 		waitKind:    "diagnosis-heartbeat",
 		waitLabel:   "the repair diagnosis",
+		identity:    eventIdentity{TaskID: a.Task.ID, AttemptID: a.ID},
 		heartbeat:   e.consultHeartbeat,
 	})
 	if err != nil {
-		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation failed; repairing with the recorded evidence.")
+		e.taskEvent("diagnosis-error", a.Task.ID+"  The diagnosis consultation failed; repairing with the recorded evidence.", a)
 		return diagnosis{}, false
 	}
 	if err = c.validate(); err != nil {
@@ -330,11 +344,11 @@ Return one JSON object: {"root_cause":"why the current approach keeps failing","
 	}
 	var d diagnosis
 	if decodeDiagnosis(raw, &d) != nil || strings.TrimSpace(d.RootCause) == "" || strings.TrimSpace(d.FixApproach) == "" {
-		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation returned no usable cause; repairing with the recorded evidence.")
+		e.taskEvent("diagnosis-error", a.Task.ID+"  The diagnosis consultation returned no usable cause; repairing with the recorded evidence.", a)
 		return diagnosis{}, false
 	}
 	if after, err := e.Repo.Snapshot(a.Worktree); err != nil || after != before {
-		e.event("diagnosis-error", a.Task.ID+"  The diagnosis consultation changed files; its result was discarded.")
+		e.taskEvent("diagnosis-error", a.Task.ID+"  The diagnosis consultation changed files; its result was discarded.", a)
 		return diagnosis{}, false
 	}
 	var inspected Backlog
@@ -344,9 +358,22 @@ Return one JSON object: {"root_cause":"why the current approach keeps failing","
 	if after, err := e.Repo.Snapshot(work); err != nil || after != before {
 		return diagnosis{}, false
 	}
-	e.event("diagnosis", fmt.Sprintf("%s  Independent diagnosis: %s", a.Task.ID, d.RootCause))
+	e.taskEvent("diagnosis", fmt.Sprintf("%s  Independent diagnosis: %s", a.Task.ID, d.RootCause), a)
 	return d, true
 }
+
+// errBacklogChanged marks an external task-file edit that reached the
+// publication guard while work was in flight. The run loop holds dispatch and
+// imports the edit at the next safe boundary instead of ending the session;
+// startup keeps its fatal behavior because no live boundary exists there.
+var errBacklogChanged = errors.New("the backlog changed outside Looper before integration")
+
+// errBaselineMoved marks an owner commit the publication boundary accepted
+// (T046): the head moved onto a descendant whose changes touch no retained
+// write scope, so the acceptance folded it into the run baseline. The fold
+// already requeued this publication; the caller re-prepares the verified
+// result against the folded base and verifies it again.
+var errBaselineMoved = errors.New("the project baseline moved while the result waited; the publication requeues against the accepted commit")
 
 // The journal is committed before applying files. Restart accepts only the
 // complete before or after tree. A partial apply is retained for inspection.
@@ -359,8 +386,14 @@ func (e *Engine) publish() error {
 	if a == nil {
 		return fmt.Errorf("publication references an unknown attempt")
 	}
-	if err := e.original(); err != nil {
+	moved, err := e.original()
+	if err != nil {
 		return err
+	}
+	if moved {
+		// The fold requeued the publication and moved its base; the caller
+		// re-prepares the verified result against the folded baseline.
+		return errBaselineMoved
 	}
 	if err := e.contract(a); err != nil {
 		return err
@@ -373,7 +406,14 @@ func (e *Engine) publish() error {
 		return err
 	}
 	if digest(data) != e.State.ExportHash {
-		return fmt.Errorf("the backlog changed outside Looper before integration")
+		// Equivalent formatting (AX-018) keeps the publication boundary: the
+		// edit changed no content, so the verified result publishes against
+		// it and the next export writes the canonical projection. A real
+		// edit still reports the hold sentinel so the loop imports it at a
+		// safe boundary.
+		if edit := e.classifyBacklog(data); !edit.Equivalent {
+			return errBacklogChanged
+		}
 	}
 	observed, err := e.Repo.SnapshotFrom(e.Config.Root, p.Tree, p.Before)
 	if err != nil {
@@ -409,6 +449,11 @@ func (e *Engine) publish() error {
 	return e.save()
 }
 
+// publicationConflict explains the collision guard: project files match
+// neither the accepted tree nor the verified candidate, so the verified work
+// stays retained without marking the task done. The structured form (AX-015)
+// carries both expected trees, the bounded changed paths for each with a
+// complete-detail route, and the retained task identities.
 func (e *Engine) publicationConflict(a *Attempt, p *Candidate, observed string) error {
 	var message strings.Builder
 	fmt.Fprintf(&message, "project files match neither the accepted tree nor the verified candidate for %s. Verified work is retained without marking the task done.", a.Task.ID)
@@ -431,7 +476,16 @@ func (e *Engine) publicationConflict(a *Attempt, p *Candidate, observed string) 
 	}
 	fmt.Fprintf(&message, "\nRetained work: %s", e.Dir)
 	message.WriteString("\nPreserve your local edits. Restore project files to the accepted tree, then rerun Looper. Merge and verify your local edits after integration. Git HEAD can be older than the accepted tree. Keep the retained work and task file.")
-	return errors.New(message.String())
+	err := &retentionError{
+		code:     "project_tree_changed",
+		message:  message.String(),
+		expected: map[string]any{"accepted_tree": p.Before, "verified_tree": p.Tree},
+		observed: map[string]any{"project_tree": observed},
+		unknown:  []string{"which process changed the project files after verification"},
+	}
+	return e.retain(err,
+		e.changedPaths("accepted_tree_changes", p.Before, observed),
+		e.changedPaths("verified_tree_changes", p.Tree, observed))
 }
 
 type reviewResult struct {
@@ -533,8 +587,19 @@ The final review must cover the original goal and every applied import, includin
 	if hashJSON(reviewed) != hashJSON(e.State.Backlog) {
 		return fmt.Errorf("review changed the private backlog; findings and completion were not applied")
 	}
+	return e.applyReview(result, final, name)
+}
+
+// applyReview applies one accepted review report: findings, completion
+// markers, and the milestone record. The backlog and receipt changes stage
+// until the saved state/export protocol commits them. A failed commit rolls
+// the staged application back and reports no finding or review outcome, so a
+// journal success is never unbacked by persisted state; recovery re-runs the
+// review because its pending marker survived.
+func (e *Engine) applyReview(result reviewResult, final bool, name string) error {
+	findings := e.beginFindingStage()
 	for _, f := range result.Findings {
-		e.addFinding(f)
+		findings.add(f)
 	}
 	e.State.ReviewedAt = e.State.Integrated
 	e.State.ReviewedTip = e.State.Tip
@@ -547,11 +612,18 @@ The final review must cover the original goal and every applied import, includin
 		}
 	}
 	e.State.Finished = final && result.Complete && !open
-	if err = e.Store.Check("", e.State.Tip, "milestone", map[bool]string{true: "complete", false: "reviewed"}[e.State.Finished], filepath.Join(e.Dir, name, "result.json")); err != nil {
+	if err := e.export(); err != nil {
+		findings.rollback()
 		return err
 	}
+	// The milestone record reports an applied review, so it follows the
+	// commit; a review that never applied leaves no record behind.
+	if err := e.Store.Check("", e.State.Tip, "milestone", map[bool]string{true: "complete", false: "reviewed"}[e.State.Finished], filepath.Join(e.Dir, name, "result.json")); err != nil {
+		return err
+	}
+	findings.emit()
 	e.event("review", result.Summary)
-	return e.export()
+	return nil
 }
 
 func (e *Engine) noteAssessment(a *Attempt, c Candidate) {
@@ -568,7 +640,7 @@ func (e *Engine) noteAssessment(a *Attempt, c Candidate) {
 			} `json:"aggregate"`
 		}
 		if json.Unmarshal(data, &report) != nil {
-			e.event("assessment", a.Task.ID+"  Invalid advisory report; see "+dir)
+			e.taskEvent("assessment", a.Task.ID+"  Invalid advisory report; see "+dir, a)
 			continue
 		}
 		outcome := report.Outcome
@@ -578,7 +650,7 @@ func (e *Engine) noteAssessment(a *Attempt, c Candidate) {
 		if outcome == "" {
 			outcome = "unknown"
 		}
-		e.event("assessment", a.Task.ID+"  Advisory assessment: "+outcome)
+		e.taskEvent("assessment", a.Task.ID+"  Advisory assessment: "+outcome, a)
 		if outcome == "fail" || outcome == "review" {
 			e.State.ReviewPending = true
 		}

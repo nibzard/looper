@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Measurement shim for the fresh-agent evaluation (AX-028).
+
+The evaluation places this directory first on PATH for a fresh agent
+session. Every `looper` invocation the session makes is timed, measured,
+logged as one JSON line, and passed through unchanged, so the protocol
+measures the session without reading private agent transcripts.
+
+Environment:
+  LOOPER_EVAL_REAL_BIN  absolute path of the real looper executable
+                        (required; the shim refuses to guess)
+  LOOPER_EVAL_LOG       JSONL log path (required; one line per call)
+  LOOPER_EVAL_LABEL     optional label recorded with each line, for
+                        example the scenario and arm
+
+The shim captures standard output and error to count bytes, so it breaks
+interactive interfaces. Evaluation briefs forbid `tui`, `attach`, and
+`--follow`; a call that streams or draws will still run, but its caller
+sees the output only when the process ends. A killed call records the
+signal and whatever output arrived.
+"""
+
+import datetime
+import json
+import os
+import subprocess
+import sys
+import time
+
+REAL = os.environ.get("LOOPER_EVAL_REAL_BIN")
+LOG = os.environ.get("LOOPER_EVAL_LOG")
+LABEL = os.environ.get("LOOPER_EVAL_LABEL", "")
+
+if not REAL or not LOG:
+    sys.stderr.write(
+        "looper shim: set LOOPER_EVAL_REAL_BIN and LOOPER_EVAL_LOG before use\n")
+    sys.exit(125)
+
+exit_code = None
+stdout = b""
+stderr = b""
+signaled = None
+started = time.monotonic()
+try:
+    completed = subprocess.run([REAL, *sys.argv[1:]], capture_output=True)
+    exit_code = completed.returncode
+    stdout, stderr = completed.stdout, completed.stderr
+except KeyboardInterrupt:
+    signaled = "interrupt"
+    exit_code = 130
+finally:
+    seconds = time.monotonic() - started
+
+sys.stdout.buffer.write(stdout)
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(stderr)
+sys.stderr.buffer.flush()
+
+record = {
+    "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"),
+    "label": LABEL,
+    "command": "looper " + " ".join(sys.argv[1:]),
+    "exit": exit_code,
+    "seconds": round(seconds, 3),
+    "stdout_bytes": len(stdout),
+    "stderr_bytes": len(stderr),
+}
+if signaled:
+    record["signaled"] = signaled
+
+with open(LOG, "a") as log:
+    log.write(json.dumps(record) + "\n")
+
+sys.exit(exit_code if exit_code is not None else 1)

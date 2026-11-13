@@ -1,0 +1,31 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.capabilities",
+  "client": {
+    "build": { "release": "0.10.0", "revision": "297e7ee1", "modified": false },
+    "contract_versions": [1, 2],
+    "commands": ["status", "events", "inspect", "doctor", "requests", "wait", "add-task", "add-plan", "config", "requeue", "stop", "recovery"],
+    "waits": ["cursor_change", "task_state", "request_outcome", "run_outcome"]
+  },
+  "controller": {
+    "session": "run-4f39faa5451b464d",
+    "build": { "release": "0.10.0", "revision": "297e7ee1", "modified": false },
+    "contract_versions": [1, 2],
+    "request_types": ["add-task", "add-plan", "settings", "requeue", "stop"],
+    "limits": {
+      "status_bytes": 8192,
+      "events_page_default": 50,
+      "events_page_max": 500,
+      "request_bytes": 1048576,
+      "pending_requests": 100,
+      "wait_timeout_seconds_max": 3600
+    }
+  },
+  "compatibility": {
+    "default_contract_version": 1,
+    "oldest_supported_contract_version": 1,
+    "legacy_default_until": "The AX-027 release gates pass and the release notes name the new default.",
+    "policy": "docs/AGENT-CONTRACT-MIGRATION.md"
+  }
+}

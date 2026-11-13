@@ -1,0 +1,11 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.agent-test",
+  "agent_profile": "glm",
+  "adapter": "claude",
+  "executable": "/opt/bin/claude-zai",
+  "result": "assumed",
+  "evidence": "/tmp/looper-agent-test-fixture",
+  "tool_call_verified": true
+}

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/inspect.schema.json",
+  "title": "Looper inspect --json (legacy contract, frozen)",
+  "description": "The document `looper inspect <task-id> --json` emits today: the task contract, every attempt with its workers, checks, log paths, and the per-task timing report. Frozen under the same rules as the legacy status schema. The bounded inspection response ships under contract version 2 (AX-005).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task", "attempts", "workers", "checks", "logs", "timing"],
+  "properties": {
+    "schema_version": { "type": "integer" },
+    "task": {
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "title", "priority", "status"],
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "priority": { "type": "integer" },
+            "status": { "enum": ["todo", "doing", "blocked", "done", "cancelled"] },
+            "details": { "type": "string" },
+            "steps": { "type": ["array", "null"], "items": { "type": "string" } },
+            "depends_on": { "type": ["array", "null"], "items": { "type": "string" } },
+            "files": { "type": ["array", "null"], "items": { "type": "string" } },
+            "blockers": { "type": ["array", "null"], "items": { "type": "string" } },
+            "tags": { "type": ["array", "null"], "items": { "type": "string" } },
+            "updated_at": { "type": "string" },
+            "created_at": { "type": "string" },
+            "unblock_when": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "attempts": {
+      "description": "Every attempt for the task, unpaged. Contract version 2 pages this history.",
+      "type": ["array", "null"],
+      "items": { "type": "object" }
+    },
+    "workers": {
+      "type": ["array", "null"],
+      "items": { "type": "object" }
+    },
+    "checks": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["time", "attempt_id", "revision", "kind", "result", "artifact"],
+        "properties": {
+          "time": { "type": "string" },
+          "attempt_id": { "type": "string" },
+          "revision": { "type": "string" },
+          "kind": { "type": "string" },
+          "result": { "type": "string" },
+          "artifact": { "type": "string" }
+        }
+      }
+    },
+    "logs": { "type": ["array", "null"], "items": { "type": "string" } },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "available",
+        "history_complete",
+        "attempts",
+        "recorded_attempts",
+        "worker_seconds",
+        "check_seconds",
+        "other_seconds",
+        "active_seconds",
+        "elapsed_seconds",
+        "unknown_processes",
+        "running_processes"
+      ],
+      "properties": {
+        "task_id": { "type": "string" },
+        "available": { "type": "boolean" },
+        "history_complete": { "type": "boolean" },
+        "attempts": { "type": "integer" },
+        "recorded_attempts": { "type": "integer" },
+        "worker_seconds": { "type": ["number", "null"] },
+        "check_seconds": { "type": ["number", "null"] },
+        "other_seconds": { "type": ["number", "null"] },
+        "active_seconds": { "type": ["number", "null"] },
+        "elapsed_seconds": { "type": ["number", "null"] },
+        "unknown_processes": { "type": "integer" },
+        "running_processes": { "type": "integer" }
+      }
+    }
+  }
+}

@@ -210,7 +210,11 @@ func TestStatusReportsDifferentRunningBuild(t *testing.T) {
 	if err := writeJSON(controllerPath(e.Dir), e.controller); err != nil {
 		t.Fatal(err)
 	}
-	o := observe(e.Config, e.State)
+	snap, err := e.Store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := observe(e.Config, e.State, snap)
 	if !o.BuildMismatch || o.Executable != currentBuild() || o.Controller.Build.Revision != "old-running" {
 		t.Fatalf("mismatch missing: %+v", o)
 	}
@@ -221,7 +225,9 @@ func TestStatusReportsDifferentRunningBuild(t *testing.T) {
 	if err := inspect(context.Background(), c, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"Installed:", "Running:", "old-running", "until restart"} {
+	// The piped plain status reports the same difference from its summary:
+	// both builds and the note that a running controller keeps its own.
+	for _, text := range []string{"Builds:", "old-running", "until it restarts"} {
 		if !strings.Contains(out.String(), text) {
 			t.Fatalf("missing %s: %s", text, out.String())
 		}

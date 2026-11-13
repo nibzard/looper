@@ -1,0 +1,21 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.doctor",
+  "observation": {
+    "executable": { "release": "0.9.1", "revision": "5f2c9ab", "modified": false },
+    "build_mismatch": false,
+    "schema_version": 1,
+    "observed_at": "2026-11-05T10:41:02Z",
+    "controller_owned": false,
+    "view_matches_controller": false,
+    "workers": [],
+    "event_cursor": 0
+  },
+  "findings": [],
+  "automatic_recovery": false,
+  "detail": {
+    "requests": "looper requests --contract v2 --json",
+    "status": "looper status --contract v2 --json"
+  }
+}

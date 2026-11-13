@@ -1,0 +1,15 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "command": "looper events --after 4210 --contract v2",
+  "error": {
+    "code": "cursor_invalid",
+    "message": "The continuation cursor belongs to an earlier event store that no longer exists.",
+    "retry": "after-change",
+    "expected": { "store_epoch": 1 },
+    "observed": { "store_epoch": 2 },
+    "evidence": [ { "kind": "event", "reference": "event 1 store reset", "command": "looper events --contract v2 --limit 5" } ],
+    "next_actions": [ { "description": "Restart observation from the current store.", "command": "looper events --contract v2" } ]
+  }
+}

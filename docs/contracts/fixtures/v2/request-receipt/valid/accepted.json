@@ -1,0 +1,16 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.receipt",
+  "request": {
+    "id": "req-01h4x9",
+    "type": "add-plan",
+    "state": "accepted",
+    "created_at": "2026-11-05T10:14:58Z",
+    "controller_session": "run-4f39faa5451b464d",
+    "idempotency_key": "import-ui-plan-v3",
+    "payload_digest": "sha256:9f2c"
+  },
+  "wait": { "command": "looper wait --contract v2 --request req-01h4x9 --timeout 30s", "timeout_seconds": 30, "note": "A wait timeout is an outcome of the wait; it never cancels the request." },
+  "query": { "command": "looper requests req-01h4x9 --contract v2" }
+}

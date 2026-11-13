@@ -1,0 +1,51 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.runs",
+  "generated_at": "2026-11-06T12:00:00Z",
+  "project": {
+    "root": "/home/agent/demo",
+    "todo_path": "/home/agent/demo/to-do.json",
+    "base_dir": "/home/agent/.looper",
+    "runtime_dir": "/home/agent/.looper/demo-3f2a1b2c/runtime",
+    "current_run_found": true,
+    "current_run_state": "saved"
+  },
+  "searched": {
+    "base_dir": "/home/agent/.looper",
+    "entries_scanned": 1,
+    "entries_skipped": 0,
+    "scan_note": "Only Looper-owned runtime directories named <project>-<hash> under the base directory are read; private agent session directories are never scanned."
+  },
+  "runs": [
+    {
+      "name": "demo-3f2a1b2c",
+      "directory": "/home/agent/.looper/demo-3f2a1b2c",
+      "runtime_dir": "/home/agent/.looper/demo-3f2a1b2c/runtime",
+      "state": "unknown",
+      "retained": false,
+      "retained_tasks": [],
+      "retained_task_total": 0,
+      "tasks_total": 0,
+      "tasks_done": 0,
+      "sessions_total": 0,
+      "last_session": { "outcome": "unknown" },
+      "last_activity": "2026-11-06T12:00:00Z",
+      "controller": { "state": "stopped" },
+      "select": ["cd /home/agent/demo && looper status --contract v2 --json"]
+    }
+  ],
+  "run_total": 1,
+  "limits": {
+    "bytes_budget": 8192,
+    "page_limit": 20,
+    "runs_max": 20,
+    "string_max": 256,
+    "retained_ids_max": 8,
+    "omitted": { "runs": 0 }
+  },
+  "detail": {
+    "run": "looper status --contract v2 --json (from a listed project root; each entry names its select command)",
+    "page": "looper runs --limit 100 --contract v2 --json"
+  }
+}

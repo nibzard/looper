@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/agent-test.schema.json",
+  "title": "Looper explicit agent test result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema_version",
+    "kind",
+    "agent_profile",
+    "adapter",
+    "executable",
+    "result",
+    "evidence",
+    "tool_call_verified"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": 2
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "looper.agent-test"
+    },
+    "agent_profile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "adapter": {
+      "enum": [
+        "claude",
+        "codex",
+        "zcode"
+      ]
+    },
+    "executable": {
+      "type": "string",
+      "minLength": 1
+    },
+    "result": {
+      "const": "passed"
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_call_verified": {
+      "type": "boolean"
+    }
+  }
+}

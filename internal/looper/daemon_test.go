@@ -116,17 +116,28 @@ func TestControllerSignals(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	installControllerSignals(c, cancel)
-	// SIGTERM drains: the stop file appears and the context stays live.
+	// SIGTERM drains: a request bound to this process appears and the
+	// context stays live.
 	syscall.Kill(os.Getpid(), syscall.SIGTERM)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(dir, "stop")); err == nil {
+		if _, err := os.Stat(stopRequestPath(dir)); err == nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "stop")); err != nil {
-		t.Fatal("SIGTERM must write the drain request")
+	req, _, err := readStopRequest(dir)
+	if err != nil || req == nil {
+		t.Fatalf("SIGTERM must write the drain request: %v", err)
+	}
+	if req.Session != "" || req.PID != os.Getpid() {
+		t.Fatalf("the startup request must bind to this process, got %+v", req)
+	}
+	if id, err := runIdentityCommand(os.Getpid()); err == nil && req.Identity != id {
+		t.Fatalf("the startup request must carry the process identity: %q vs %q", req.Identity, id)
+	}
+	if !req.targets("", nil) {
+		t.Fatal("the process-bound request must target this process")
 	}
 	select {
 	case <-ctx.Done():
@@ -139,6 +150,46 @@ func TestControllerSignals(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("SIGINT must cancel")
+	}
+	os.Remove(stopRequestPath(dir))
+}
+
+// TestSigTermBeforeEngineDrainsAtFirstBoundary covers the startup overlap: a
+// drain request written by the signal handler before controller identity is
+// published still drains that controller at its first boundary, and the
+// completed drain consumes the request.
+func TestSigTermBeforeEngineDrainsAtFirstBoundary(t *testing.T) {
+	c := preparedRepo(t, "--once")
+	_, dir := projectPaths(c)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	installControllerSignals(c, cancel)
+	syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(stopRequestPath(dir)); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(stopRequestPath(dir)); err != nil {
+		t.Fatal("SIGTERM must write the drain request during startup")
+	}
+	e, lock, err := NewEngine(c, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	defer e.Store.Close()
+	code, err := e.Run(ctx)
+	if code != 0 || err != nil {
+		t.Fatalf("startup drain after SIGTERM: %d %v", code, err)
+	}
+	if exit := lastShutdown(t, e.Store); exit.Reason != "drained" {
+		t.Fatalf("the startup request was lost: %+v", exit)
+	}
+	if _, err = os.Stat(stopRequestPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("the completed drain left its request behind")
 	}
 }
 
@@ -191,7 +242,7 @@ func TestStartDetachedRealBinary(t *testing.T) {
 		t.Fatalf("start output missing session or log path: %q", out.String())
 	}
 	_, dir := projectPaths(c)
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(testBudget(20 * time.Second))
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(controllerPath(dir)); os.IsNotExist(err) {
 			return
@@ -228,6 +279,70 @@ func TestStartDetachedDoubleStart(t *testing.T) {
 	}
 }
 
+// The detached child never reads terminal input (T011): the parent asks any
+// form, and the child is born with /dev/null on standard input and the daemon
+// log on output, so a daemon can never consume the operator's terminal.
+func TestStartDetachedChildNeverReadsTerminalInput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process-level daemon test")
+	}
+	bin := detachedBinary(t)
+	c := preparedRepo(t, "start")
+	c.Poll = 10 * time.Millisecond
+	c.CodexBin, c.ClaudeBin = "/bin/false", "/bin/false"
+	orig := startExecutable
+	startExecutable = func() (string, error) { return bin, nil }
+	t.Cleanup(func() { startExecutable = orig })
+	_, dir := projectPaths(c)
+	t.Cleanup(func() {
+		if info, err := readController(dir); err == nil {
+			syscall.Kill(info.PID, syscall.SIGINT)
+		}
+		deadline := time.Now().Add(testBudget(5 * time.Second))
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(controllerPath(dir)); os.IsNotExist(err) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("detached controller did not stop")
+	})
+	var out, stderr bytes.Buffer
+	// The test process reads /dev/null itself, which would make an inherited
+	// standard input indistinguishable from the required one. Substitute a
+	// plain file so the pin can tell the parent's stream from /dev/null.
+	probe, err := os.CreateTemp("", "looper-daemon-stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { probe.Close(); os.Remove(probe.Name()) })
+	oldStdin := os.Stdin
+	os.Stdin = probe
+	defer func() { os.Stdin = oldStdin }()
+	if code := StartDetached(c, &out, &stderr); code != 0 {
+		t.Fatalf("start failed: %s", stderr.String())
+	}
+	os.Stdin = oldStdin
+	info, err := readController(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/0", info.PID))
+	if err != nil {
+		t.Skipf("cannot inspect the child's file descriptors: %v", err)
+	}
+	if link != os.DevNull {
+		t.Fatalf("the detached child must read %s, not %q", os.DevNull, link)
+	}
+	stdout, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/1", info.PID))
+	if err != nil {
+		t.Skipf("cannot inspect the child's file descriptors: %v", err)
+	}
+	if !strings.Contains(stdout, "daemon.log") {
+		t.Fatalf("the detached child must write the daemon log, not %q", stdout)
+	}
+}
+
 func TestStartDetachedWhileControllerStaysRunning(t *testing.T) {
 	bin := detachedBinary(t)
 	c := preparedRepo(t, "start")
@@ -241,7 +356,7 @@ func TestStartDetachedWhileControllerStaysRunning(t *testing.T) {
 		if info, err := readController(dir); err == nil {
 			syscall.Kill(info.PID, syscall.SIGINT)
 		}
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(testBudget(5 * time.Second))
 		for time.Now().Before(deadline) {
 			if _, err := os.Stat(controllerPath(dir)); os.IsNotExist(err) {
 				return
@@ -285,7 +400,7 @@ func TestStartDetachedRecordsDetachedMode(t *testing.T) {
 		if info, err := readController(dir); err == nil {
 			syscall.Kill(info.PID, syscall.SIGINT)
 		}
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(testBudget(5 * time.Second))
 		for time.Now().Before(deadline) {
 			if _, err := os.Stat(controllerPath(dir)); os.IsNotExist(err) {
 				return

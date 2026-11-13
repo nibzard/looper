@@ -399,8 +399,8 @@ func TestVerificationReportsSnapshotCaptureError(t *testing.T) {
 func TestRecoveryIdentityIgnoresOperationAndFindingNames(t *testing.T) {
 	e, _, p := recoveryEngine(t)
 	before := e.recoveryIdentity()
-	e.addFinding(Finding{Title: "Obtain provider token", Details: "Supply access", Evidence: "401", Owner: "operator", Key: "provider-token"})
-	e.addFinding(Finding{Title: "Access remains missing", Details: "Supply access", Evidence: "401 again", Owner: "operator", Key: "provider-token"})
+	applyFinding(t, e, Finding{Title: "Obtain provider token", Details: "Supply access", Evidence: "401", Owner: "operator", Key: "provider-token"})
+	applyFinding(t, e, Finding{Title: "Access remains missing", Details: "Supply access", Evidence: "401 again", Owner: "operator", Key: "provider-token"})
 	old := p.RemoveSources[0]
 	replacement := strings.Replace(old, "bootstrap-fixture", "bootstrap-renamed", 1)
 	if err := writeJSON(filepath.Join(e.Dir, "bootstrap-renamed", "context", "backlog.json"), Backlog{Version: 1, Sources: []string{}, Tasks: []Task{}}); err != nil {

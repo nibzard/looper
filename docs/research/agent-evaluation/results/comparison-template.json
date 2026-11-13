@@ -1,0 +1,55 @@
+{
+  "evaluation": "agent-experience-2026-11",
+  "protocol_revision": "AX-028 (2026-11-09)",
+  "measured_on": null,
+  "host": null,
+  "looper_build": null,
+  "agent_binary": null,
+  "model": null,
+  "scenarios": [
+    {
+      "scenario": "s1-observe",
+      "repetitions": 3,
+      "legacy": {
+        "rubric_pass_rate": null,
+        "median_commands": null,
+        "median_stdout_bytes": null,
+        "median_wall_seconds": null,
+        "median_cost_usd": null,
+        "private_state_detours": null,
+        "failures": []
+      },
+      "v2": {
+        "rubric_pass_rate": null,
+        "median_commands": null,
+        "median_stdout_bytes": null,
+        "median_wall_seconds": null,
+        "median_cost_usd": null,
+        "private_state_detours": null,
+        "failures": []
+      }
+    }
+  ],
+  "historical_reference_2026_11_05_audit": {
+    "matched": false,
+    "note": "40 real sessions, 626 CLI calls; context only, not a control",
+    "heaviest_session": {
+      "name": "d01",
+      "looper_calls": 133,
+      "status_events_polls": 125,
+      "private_state_reads": "60 of 80 looper-related calls"
+    }
+  },
+  "deterministic_baseline_ax027": {
+    "source": "docs/research/AGENT-EXPERIENCE-RESULTS.md",
+    "gates": "all passing in make test; see that file for the measured run"
+  },
+  "findings": [
+    {
+      "classification": "interface-defect | documentation-gap | agent-misuse | environment-fault",
+      "summary": null,
+      "evidence": null,
+      "followup": null
+    }
+  ]
+}

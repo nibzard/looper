@@ -52,7 +52,7 @@ func (a *dashboardAttachment) addPlan(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return submitPlanImport(a.dir, session, []string{absolute})
+	return submitPlanImport(a.dir, session, "", []string{absolute})
 }
 
 func (a *dashboardAttachment) inspect(id string) (ui.TaskDetail, error) {

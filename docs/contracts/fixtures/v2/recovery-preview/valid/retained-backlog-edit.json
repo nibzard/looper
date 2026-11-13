@@ -1,0 +1,158 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.recovery.preview",
+  "generated_at": "2026-11-06T09:30:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json",
+    "runtime_dir": "/home/agent/.looper/stackfall-b17f/runtime"
+  },
+  "run": {
+    "id": "run-9c41d2aa7f30e1b6",
+    "retained": true,
+    "retained_tasks": [
+      "T004"
+    ],
+    "retained_task_total": 1,
+    "attempts": [
+      {
+        "attempt_id": "task-004-3f81",
+        "task_id": "T004",
+        "phase": "running",
+        "agent": "claude",
+        "worktree_present": true,
+        "receipt_present": false,
+        "contract_held": true
+      }
+    ],
+    "attempt_total": 1,
+    "publication_held": false
+  },
+  "controller": {
+    "state": "stopped",
+    "owned": false
+  },
+  "token": {
+    "value": "5f1d9a34c07be2f18a4dd0c6b93e45a1c88f02d37b6a19ce44d2f7ab013e6d52",
+    "note": "Present this token to the recovery application operation. Applying re-derives it and rejects a changed task file, project, or saved run instead of replaying a stale preview."
+  },
+  "comparisons": {
+    "task_file": {
+      "state": "changed",
+      "expected_digest": "3a7f0c9d21b8e45f6c0a1d2e3f4b5c6d7e8f901a2b3c4d5e6f7a8b9c0d1e2f3a",
+      "observed_digest": "3a8df24835bc70a19f097ae2ff78035c5f8eefd89838cc9cff0bbeb5d188577d",
+      "parsed": "identical",
+      "changed_contracts": [],
+      "added_contracts": [],
+      "removed_contracts": []
+    },
+    "branch": {
+      "state": "match",
+      "expected_head": "8f14e45fceea167a5a36dedd4bea2543f7a1c390",
+      "expected_branch": "main",
+      "observed_head": "8f14e45fceea167a5a36dedd4bea2543f7a1c390",
+      "observed_branch": "main"
+    },
+    "working_tree": {
+      "state": "matches_published",
+      "published_tree": "454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0"
+    }
+  },
+  "guards": [
+    {
+      "code": "backlog_contract_changed",
+      "verdict": "pass",
+      "detail": "the task file changed only in formatting (expected digest 3a7f0c9, observed 3a8df24); the next run adopts the equivalent bytes and resumes"
+    },
+    {
+      "code": "branch_moved",
+      "verdict": "pass",
+      "detail": "the branch and head match the saved baseline"
+    },
+    {
+      "code": "project_tree_changed",
+      "verdict": "pass",
+      "detail": "the working tree matches the tree the saved run published"
+    },
+    {
+      "code": "task_contract_changed",
+      "verdict": "pass",
+      "detail": "every retained attempt holds its saved task contract"
+    }
+  ],
+  "choices": [
+    {
+      "name": "resume",
+      "status": "available",
+      "preserves": [
+        "every retained attempt, its worktree, and its result commit",
+        "verified work is never repeated: startup replays receipts and coerces retained phases"
+      ],
+      "changes": [
+        "the run continues dispatching and publishing after it resumes"
+      ],
+      "apply": {
+        "mode": "command",
+        "description": "Start the controller; the startup recovery path applies under the repository lock.",
+        "command": "looper"
+      }
+    },
+    {
+      "name": "restore-task-file",
+      "status": "available",
+      "preserves": [
+        "every retained attempt and its result commit",
+        "the saved backlog contract in the run state"
+      ],
+      "changes": [
+        "the external formatting edit is discarded and the file returns to the saved bytes (digest 3a7f0c9d21b8e45f6c0a1d2e3f4b5c6d7e8f901a2b3c4d5e6f7a8b9c0d1e2f3a); no task content differs, and the next run accepts the edit as-is, so restoring is optional (AX-018)"
+      ],
+      "apply": {
+        "mode": "command",
+        "description": "Checked application: restores the retained accepted bytes after re-deriving the preview token; a stale preview is refused without mutation.",
+        "command": "looper recovery --apply restore-task-file --token 5f1d9a34c07be2f18a4dd0c6b93e45a1c88f02d37b6a19ce44d2f7ab013e6d52"
+      }
+    },
+    {
+      "name": "import-backlog",
+      "status": "available",
+      "preserves": [
+        "every retained attempt, its result commit, and the saved backlog content"
+      ],
+      "changes": [
+        "the equivalent bytes (digest 3a8df24835bc70a19f097ae2ff78035c5f8eefd89838cc9cff0bbeb5d188577d) become the accepted export; the content and the baseline stay unchanged (AX-018)"
+      ],
+      "apply": {
+        "mode": "command",
+        "description": "Checked application: applies the edit after re-deriving the preview token; a stale preview is refused without mutation.",
+        "command": "looper recovery --apply import-backlog --token 5f1d9a34c07be2f18a4dd0c6b93e45a1c88f02d37b6a19ce44d2f7ab013e6d52"
+      }
+    },
+    {
+      "name": "discard-retained",
+      "status": "unsupported",
+      "changes": [
+        "retained attempts, result commits, and the saved run would be lost"
+      ],
+      "apply": {
+        "mode": "none",
+        "description": "No supported discard exists; Looper never deletes retained work through recovery."
+      }
+    }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 256,
+    "paths_max": 20,
+    "tasks_max": 16,
+    "omitted": {
+      "retained_tasks": 0,
+      "attempts": 0
+    }
+  },
+  "detail": {
+    "status": "looper status --contract v2 --full",
+    "events": "looper events --contract v2 --after 42"
+  }
+}

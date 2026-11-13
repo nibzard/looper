@@ -258,7 +258,7 @@ update_version_files() {
         return 0
     fi
     local file
-    for file in "${VERSION_FILES[@]}"; do
+    for file in ${VERSION_FILES[@]+"${VERSION_FILES[@]}"}; do
         if [ ! -f "$file" ]; then
             echo "Error: version file not found: $file" >&2
             exit 1
@@ -311,7 +311,7 @@ preflight() {
     fi
     ensure_clean
     local file
-    for file in "${VERSION_FILES[@]}"; do
+    for file in ${VERSION_FILES[@]+"${VERSION_FILES[@]}"}; do
         [ -f "$file" ] || fail "version file not found: $file"
     done
     if [ "$SKIP_RELEASE" -eq 0 ]; then
@@ -422,7 +422,7 @@ if [ -n "$(git status --porcelain)" ] || { [ "$DRY_RUN" -eq 1 ] && { [ -n "$BUMP
 fi
 
 if [ "$DRY_RUN" -ne 1 ] && [ "${#VERSION_FILES[@]}" -gt 0 ]; then
-    git diff --quiet HEAD -- "${VERSION_FILES[@]}" \
+    git diff --quiet HEAD -- ${VERSION_FILES[@]+"${VERSION_FILES[@]}"} \
         || fail "version files remain uncommitted; include them in --stage-path."
 fi
 

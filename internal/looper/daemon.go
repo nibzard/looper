@@ -18,8 +18,8 @@ import (
 var startExecutable = os.Executable
 
 // daemonReady is the structured readiness message sent through the startup
-// pipe. Success means controller ownership is established; planning may still
-// be pending.
+// pipe. Success means controller ownership is established and the saved run
+// state is publicly queryable (AX-022); planning may still be pending.
 type daemonReady struct {
 	Status  string `json:"status"`
 	Session string `json:"session,omitempty"`
@@ -40,46 +40,38 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 	// dies at initialization would otherwise report a detached start that
 	// never runs any work.
 	if err := validatePlanFiles(c.Plans); err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, err, out, stderr)
 	}
 	_, dir := projectPaths(c)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	configPath := filepath.Join(dir, "daemon-config.json")
 	data, err := json.Marshal(c)
 	if err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	if err = atomicWrite(configPath, data, 0600); err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	exe, err := startExecutable()
 	if err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	logFile, err := os.OpenFile(daemonLogPath(dir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	defer logFile.Close()
 	readyRead, readyWrite, err := os.Pipe()
 	if err != nil {
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
 	if err != nil {
 		readyRead.Close()
 		readyWrite.Close()
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	defer devNull.Close()
 	cmd := exec.Command(exe, "__daemon", configPath)
@@ -93,8 +85,7 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 	if err = cmd.Start(); err != nil {
 		readyRead.Close()
 		readyWrite.Close()
-		fmt.Fprintln(stderr, "Error:", err)
-		return 1
+		return emitError(c, persistenceError(err.Error()), out, stderr)
 	}
 	readyWrite.Close()
 	defer readyRead.Close()
@@ -111,13 +102,10 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 	select {
 	case msg := <-ready:
 		if msg.Status != "ok" {
-			fmt.Fprintf(stderr, "The controller did not start: %s\n", msg.Error)
-			if msg.Log != "" {
-				fmt.Fprintln(stderr, "Log:", msg.Log)
-			}
+			p := startupFailure("The controller did not start: "+msg.Error, msg.Log)
 			syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
 			<-exited
-			return 1
+			return emitError(c, p, out, stderr)
 		}
 		fmt.Fprintln(out, "Controller detached, session", msg.Session)
 		fmt.Fprintln(out, "Logs:", daemonLogPath(dir))
@@ -129,11 +117,7 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 		select {
 		case msg := <-ready:
 			if msg.Status != "ok" {
-				fmt.Fprintf(stderr, "The controller did not start: %s\n", msg.Error)
-				if msg.Log != "" {
-					fmt.Fprintln(stderr, "Log:", msg.Log)
-				}
-				return 1
+				return emitError(c, startupFailure("The controller did not start: "+msg.Error, msg.Log), out, stderr)
 			}
 			// A quick --once run can finish before the parent reads the
 			// pipe; the controller owned the repository and reported ready.
@@ -141,12 +125,11 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 			fmt.Fprintln(out, "Logs:", daemonLogPath(dir))
 			return 0
 		case <-time.After(2 * time.Second):
-			fmt.Fprintf(stderr, "The controller exited during startup: %v\n", err)
-			fmt.Fprintln(stderr, "Log:", daemonLogPath(dir))
-			return 1
+			return emitError(c, startupFailure(fmt.Sprintf("The controller exited during startup: %v", err), daemonLogPath(dir)), out, stderr)
 		}
 	case <-time.After(daemonStartupTimeout):
-		fmt.Fprintln(stderr, "The controller did not report readiness in time; terminating it.")
+		p := startupFailure("The controller did not report readiness in time; it was terminated.", daemonLogPath(dir))
+		p.Retry = retryYes
 		syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-exited:
@@ -154,8 +137,7 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 			syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
 			<-exited
 		}
-		fmt.Fprintln(stderr, "Log:", daemonLogPath(dir))
-		return 1
+		return emitError(c, p, out, stderr)
 	}
 }
 
@@ -164,8 +146,10 @@ func StartDetached(c Config, out, stderr io.Writer) int {
 // reports readiness or a structured error through the readiness writer
 // before running the engine loop.
 func RunDaemon(configPath string, ready io.Writer) int {
+	// The parent writes the configuration inside the runtime directory, so
+	// its location names the directory even before the configuration parses.
 	fail := func(err error) int {
-		msg, _ := json.Marshal(daemonReady{Status: "error", Error: err.Error(), Log: "runtime/daemon.log"})
+		msg, _ := json.Marshal(daemonReady{Status: "error", Error: err.Error(), Log: daemonLogPath(filepath.Dir(configPath))})
 		fmt.Fprintln(ready, string(msg))
 		return 1
 	}
@@ -197,6 +181,19 @@ func RunDaemon(configPath string, ready io.Writer) int {
 	}
 	defer lock.Close()
 	defer e.Store.Close()
+	// Saved run state becomes queryable before readiness is reported (AX-022):
+	// a caller that sees a successful start can query the run at once. A seed
+	// failure — an unreadable or invalid task file, a failing snapshot — is a
+	// startup failure, so it reaches the parent as structured evidence through
+	// the pipe instead of a detached controller that dies after success was
+	// reported. The seeded run never started, so its ownership records go now.
+	if err = e.seedStartupState(); err != nil {
+		session := e.controller.Session
+		clearView(dir)
+		removeController(dir, session)
+		e.releaseStopRequests()
+		return fail(err)
+	}
 	msg, _ := json.Marshal(daemonReady{Status: "ok", Session: e.controller.Session})
 	fmt.Fprintln(ready, string(msg))
 	code, err := e.Run(ctx)
@@ -209,14 +206,22 @@ func RunDaemon(configPath string, ready io.Writer) int {
 // installControllerSignals routes SIGTERM to the drain request used by
 // `looper stop` without cancelling the execution context; SIGINT stays an
 // explicit cancellation with retained work. The two are not interchangeable.
+// The request binds to this process: to the controller session once
+// controller metadata names it, or to the process identity while startup has
+// not published a session yet, so the engine adopts it at its first boundary.
 func installControllerSignals(c Config, cancel context.CancelFunc) {
 	_, dir := projectPaths(c)
+	identity, _ := runIdentityCommand(os.Getpid())
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		for s := range sigs {
 			if s == syscall.SIGTERM {
-				_ = atomicWrite(filepath.Join(dir, "stop"), []byte("drain\n"), 0600)
+				req := stopRequest{PID: os.Getpid(), Identity: identity}
+				if info, err := readController(dir); err == nil && info.PID == os.Getpid() {
+					req.Session = info.Session
+				}
+				_ = writeStopRequest(dir, req)
 				continue
 			}
 			cancel()

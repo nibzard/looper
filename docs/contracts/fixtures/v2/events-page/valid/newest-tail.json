@@ -1,0 +1,18 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.events.page",
+  "items": [
+    { "id": 1200, "time": "2026-10-14T08:02:11Z", "kind": "add-task", "message": "Added 2 task(s). Active work continues." },
+    { "id": 1201, "time": "2026-11-05T10:10:02Z", "kind": "task_start", "message": "T015 started", "task_id": "T015", "attempt_id": "task-f0840342fc489adf", "controller_session": "run-4f39faa5451b464d", "phase": "running", "request_id": "req-01h4", "data": { "agent": "claude" } },
+    { "id": 1202, "time": "2026-11-05T10:10:31Z", "kind": "worker_activity", "message": "T015 wrote output", "task_id": "T015", "attempt_id": "task-f0840342fc489adf", "controller_session": "run-4f39faa5451b464d", "phase": "running", "data": { "log": "history/task-f0840342fc489adf/events-00.jsonl", "action": "wrote" } }
+  ],
+  "page": { "after": 0, "high_water": 1202, "returned": 3, "limit": 3, "order": "ascending", "has_more": false },
+  "filters": { "full_history": false },
+  "continuation": {
+    "cursor": { "event_id": 1202, "scope": "store", "store_id": "demo-3f2a/state.db", "store_epoch": 1 },
+    "command": "looper events --contract v2 --after 1202 --limit 3",
+    "has_more": false
+  },
+  "store": { "id": "demo-3f2a/state.db", "epoch": 1 }
+}

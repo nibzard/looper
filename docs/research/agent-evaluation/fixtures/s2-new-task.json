@@ -1,0 +1,7 @@
+{
+  "id": "S2-ADDED",
+  "title": "Record the release checklist date",
+  "status": "todo",
+  "priority": 2,
+  "details": "Write one line naming today's date to this task's output file."
+}

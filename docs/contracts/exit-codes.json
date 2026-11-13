@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "kind": "looper.exit_codes",
+  "description": "Transport exit codes for every public Looper command under contract version 2. An exit code reports how the call ended on the transport. It never reports operation state: the operation outcome is a field of the returned document or the request record. Under the legacy contract commands return only 0, 1, and 2. Since AX-014, a call that selects version 2 returns this full set for failures, each accompanied by one looper.error document on standard output; AX-011, AX-013, and AX-022 complete the remaining mappings for successes and lifecycle waits. The legacy_equivalent field names where each outcome lands for callers that have not opted in.",
+  "transport_exit_codes": [
+    {
+      "code": 0,
+      "name": "ok",
+      "meaning": "The command completed and its document describes the observed or requested operation, whatever that operation's own outcome was.",
+      "retry": "no",
+      "legacy_equivalent": "0"
+    },
+    {
+      "code": 1,
+      "name": "operation_failed",
+      "meaning": "The requested operation ran and reached a terminal rejected or failed result, or the command refused to act for a reason the caller can read in the error document.",
+      "retry": "after-change",
+      "legacy_equivalent": "1"
+    },
+    {
+      "code": 2,
+      "name": "usage",
+      "meaning": "The command line itself was invalid: unknown command or option, missing or malformed value, oversized input. No operation was attempted and nothing was written.",
+      "retry": "after-change",
+      "legacy_equivalent": "2"
+    },
+    {
+      "code": 3,
+      "name": "unavailable",
+      "meaning": "The command could not read what it needs: no saved run in this project, an unreadable state database, or a store that another process holds in an incompatible mode. The command recommends a discovery or recovery step in its error document.",
+      "retry": "yes",
+      "legacy_equivalent": "1"
+    },
+    {
+      "code": 4,
+      "name": "incompatible",
+      "meaning": "Client and controller do not share a contract version or capability, or the request names a controller session that no longer owns the repository. The command reports the supported range instead of queueing work.",
+      "retry": "after-change",
+      "legacy_equivalent": "1"
+    },
+    {
+      "code": 5,
+      "name": "wait_timeout",
+      "meaning": "A finite wait reached its timeout. The underlying request keeps its state and continues; a wait timeout never cancels or rejects anything.",
+      "retry": "yes",
+      "legacy_equivalent": "1 today for add-plan and add-task waits, which also print the still-pending outcome"
+    },
+    {
+      "code": 6,
+      "name": "cancelled",
+      "meaning": "The caller interrupted the command. Work is retained and no result is claimed.",
+      "retry": "yes",
+      "legacy_equivalent": "130 for interrupted controller runs; query commands currently return 1"
+    }
+  ],
+  "notes": [
+    "Exit codes stay inside the portable 0 to 125 range so shells and test runners can carry them.",
+    "Under contract version 2 every nonzero exit is accompanied by one error document that follows docs/contracts/schemas/v2/error.schema.json on standard output, with no human text beside it (AX-014). The one exception is the finite wait command: its timeout (5) and cancellation (6) carry the looper.wait document instead, because the outcome is the result the caller asked for, not a failure of the command (AX-013). Legacy calls keep plain stderr text and exit codes 0, 1, and 2.",
+    "A command that succeeds while reporting an unhealthy run still exits 0: doctor findings, blocked tasks, and build differences are observation content, not transport failures.",
+    "Adding a code appends to this list; renumbering or reusing an existing code is a contract change and needs a migration entry in docs/AGENT-CONTRACT-MIGRATION.md."
+  ]
+}

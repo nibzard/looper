@@ -1,0 +1,36 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.status.compact",
+  "generated_at": "2026-11-05T10:15:04Z",
+  "project": { "root": "/home/agent/demo", "name": "demo", "todo_path": "/home/agent/demo/to-do.json" },
+  "run": { "id": "run-4f39faa5451b464d", "controller_session": "run-4f39faa5451b464d", "mode": "detached", "started_at": "2026-11-05T09:41:02Z" },
+  "builds": {
+    "client": { "release": "0.9.0", "revision": "297e7ee1", "modified": false },
+    "controller": { "release": "0.9.0", "revision": "297e7ee1", "modified": false },
+    "match": true
+  },
+  "controller": { "state": "controlling", "owned": true, "ownership_evidence": "lock", "ownership_age_seconds": 2037, "view_matches": true, "view_age_seconds": 2 },
+  "work": {
+    "counts": { "done": 12, "todo": 28, "blocked": 4, "ready": 2, "in_flight": 2, "integrated": 12 },
+    "active": [
+      { "attempt_id": "task-f0840342fc489adf", "task_id": "T015", "phase": "running", "agent": "claude", "progress": "advancing", "output_age_seconds": 4, "output_bytes": 23789, "retained": false },
+      { "attempt_id": "task-1249c40e5cfd6e43", "task_id": "T018", "phase": "verifying", "agent": "claude", "progress": "quiet", "output_age_seconds": 640, "output_bytes": 743348, "retained": false }
+    ],
+    "phases": [ { "phase": "check", "age_seconds": 640, "detail": "T018 verification running" } ]
+  },
+  "waiting": { "reason": "active_work", "detail": "Two attempts are in flight; scheduling waits for a free worker slot.", "age_seconds": 41 },
+  "requests": { "pending": 1, "waiting": 1, "oldest_age_seconds": 97 },
+  "findings": [
+    { "code": "output_quiet", "severity": "info", "task_id": "T018", "message": "No worker log output for over five minutes. Progress is unknown.", "action": "Inspect the task and check logs.", "evidence": { "kind": "event", "reference": "worker_activity T018", "command": "looper events --task T018 --limit 20" } }
+  ],
+  "last_transition": { "event_id": 2859, "kind": "check", "time": "2026-11-05T10:12:31Z", "task_id": "T015", "message": "Checking T015 with integrated work..." },
+  "cursor": { "event_id": 2859, "scope": "store", "store_id": "demo-3f2a/state.db", "store_epoch": 1 },
+  "limits": { "bytes_budget": 8192, "active_max": 16, "findings_max": 16, "string_max": 200, "omitted": { "findings": 3 } },
+  "detail": {
+    "full": "looper status --contract v2 --full",
+    "events": "looper events --contract v2 --after 2859",
+    "inspect": "looper inspect T018 --contract v2",
+    "requests": "looper requests --contract v2"
+  }
+}

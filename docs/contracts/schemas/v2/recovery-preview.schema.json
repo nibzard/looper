@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/recovery-preview.schema.json",
+  "title": "Looper recovery preview (contract version 2)",
+  "description": "The one document `looper recovery --preview --contract v2 --json` returns. It is read-only: it changes no file, database record, process, or Git ref. It compares the current task file, branch, working tree, and retained publication against the saved contract, reports the startup guard verdicts, and enumerates the supported recovery choices with what each preserves or changes. The token binds the preview to what it observed so a later checked application rejects a stale preview.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "generated_at", "project", "run", "controller", "token", "comparisons", "guards", "choices", "limits", "detail"],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.recovery.preview" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "todo_path", "runtime_dir"],
+      "properties": {
+        "root": { "$ref": "#/$defs/boundedString" },
+        "todo_path": { "$ref": "#/$defs/boundedString" },
+        "runtime_dir": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "retained", "retained_tasks", "retained_task_total", "attempts", "attempt_total", "publication_held"],
+      "properties": {
+        "id": { "$ref": "#/$defs/boundedString" },
+        "retained": { "type": "boolean" },
+        "retained_tasks": { "$ref": "#/$defs/idList" },
+        "retained_task_total": { "type": "integer", "minimum": 0 },
+        "attempts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt_id", "task_id", "phase", "worktree_present", "receipt_present", "contract_held"],
+            "properties": {
+              "attempt_id": { "$ref": "#/$defs/boundedString" },
+              "task_id": { "$ref": "#/$defs/boundedString" },
+              "phase": { "type": "string", "minLength": 1 },
+              "agent": { "$ref": "#/$defs/boundedString" },
+              "result_commit": { "$ref": "#/$defs/revision" },
+              "worktree_present": { "type": "boolean", "description": "The retained worktree directory still exists on disk." },
+              "receipt_present": { "type": "boolean", "description": "The durable result receipt still exists beside the attempt." },
+              "contract_held": { "type": "boolean", "description": "The saved task contract still matches the backlog the run holds." }
+            }
+          }
+        },
+        "attempt_total": { "type": "integer", "minimum": 0 },
+        "publication_held": { "type": "boolean", "description": "A verified publication is retained and applies at resume." }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "owned"],
+      "properties": {
+        "state": { "enum": ["owning", "stopped", "unknown"] },
+        "owned": { "type": "boolean" },
+        "session": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "note"],
+      "properties": {
+        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Digest of the saved run, its retained attempts and publication, and the observed task file, head, branch, and working-tree listings. The checked recovery application re-derives it and rejects a stale preview." },
+        "note": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "comparisons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_file", "branch", "working_tree"],
+      "properties": {
+        "task_file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "changed_contracts", "added_contracts", "removed_contracts"],
+          "properties": {
+            "state": { "enum": ["match", "changed", "missing", "unreadable", "invalid"] },
+            "expected_digest": { "$ref": "#/$defs/digest" },
+            "observed_digest": { "$ref": "#/$defs/digest" },
+            "parsed": { "enum": ["identical", "differs", "unknown"], "description": "The parsed backlog comparison. `identical` with state `changed` is a formatting-only edit; AX-018 owns accepting it." },
+            "changed_contracts": { "$ref": "#/$defs/idList" },
+            "added_contracts": { "$ref": "#/$defs/idList" },
+            "removed_contracts": { "$ref": "#/$defs/idList" },
+            "task_data_changes": { "$ref": "#/$defs/idList", "description": "Tasks whose content changed outside their contract hash: status, files, blockers, timestamps, or finding tags (AX-018)." },
+            "non_task_change": { "type": "boolean" },
+            "unknown": { "$ref": "#/$defs/boundedString" }
+          }
+        },
+        "branch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["match", "recoverable", "moved", "unborn", "detached", "unreadable", "unknown"], "description": "`recoverable` names a same-branch descendant startup accepts: one whose committed and working content still match the saved trees, or one whose committed changes touch no file inside a retained or published attempt's write scope and therefore fold into the run baseline (the `reason` names that acceptance)." },
+            "expected_head": { "$ref": "#/$defs/revision" },
+            "expected_branch": { "$ref": "#/$defs/boundedString" },
+            "observed_head": { "$ref": "#/$defs/revision" },
+            "observed_branch": { "$ref": "#/$defs/boundedString" },
+            "unborn": { "type": "boolean" },
+            "reason": { "$ref": "#/$defs/boundedString" },
+            "committed_changes": { "$ref": "#/$defs/listing" },
+            "staged_files": { "$ref": "#/$defs/listing" },
+            "unknown": { "$ref": "#/$defs/boundedString" }
+          }
+        },
+        "working_tree": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["matches_published", "changed", "unknown"] },
+            "published_tree": { "$ref": "#/$defs/revision" },
+            "changed_paths": { "$ref": "#/$defs/listing" },
+            "untracked_paths": { "$ref": "#/$defs/listing" },
+            "changed_total": { "type": "integer", "minimum": 1, "description": "The union of the changed and untracked listings; a repository with an empty index lists untracked paths in both queries." },
+            "owner_commit_accepted": { "type": "boolean", "description": "The changed paths belong to a descendant owner commit no retained write scope covers; the fold makes them expected differences at resume, so the startup tree check passes against the folded baseline." },
+            "basis": { "$ref": "#/$defs/boundedString", "description": "What the read-only comparison covers; the startup guard additionally hashes ignored content." },
+            "unknown": { "$ref": "#/$defs/boundedString" }
+          }
+        },
+        "publication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verified_commit", "accepted_tree", "verified_tree", "outcome"],
+          "properties": {
+            "verified_commit": { "$ref": "#/$defs/revision" },
+            "attempt_id": { "$ref": "#/$defs/boundedString" },
+            "task_id": { "$ref": "#/$defs/boundedString" },
+            "accepted_tree": { "$ref": "#/$defs/revision" },
+            "verified_tree": { "$ref": "#/$defs/revision" },
+            "outcome": { "enum": ["applies_at_resume", "already_applied", "collision", "base_mismatch", "requeued_at_resume", "unknown"], "description": "`requeued_at_resume` names a publication an accepted owner commit displaced: the fold moves the baseline, so the verified result re-prepares against it and verifies again instead of applying as saved." },
+            "changes": { "$ref": "#/$defs/listing", "description": "The paths publishing changes between the accepted and verified trees." },
+            "local_edits": { "$ref": "#/$defs/listing", "description": "Local edits that block the publication; present on collision." },
+            "unknown": { "$ref": "#/$defs/boundedString" }
+          }
+        }
+      }
+    },
+    "guards": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "verdict"],
+        "properties": {
+          "code": { "enum": ["task_file_missing", "task_file_invalid", "backlog_contract_changed", "branch_moved", "project_tree_changed", "task_contract_changed", "publication_base_mismatch"], "description": "The retained-work codes match the guards AX-015 documents in the version 2 error document." },
+          "verdict": { "enum": ["pass", "fail", "unknown"], "description": "`unknown` names evidence that could not be read; it is never reported as a pass." },
+          "detail": { "$ref": "#/$defs/boundedString" },
+          "command": { "$ref": "#/$defs/boundedString", "description": "A read-only command that retrieves the complete evidence for this guard." }
+        }
+      }
+    },
+    "choices": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "enum": ["resume", "publish-retained", "restore-task-file", "import-backlog", "discard-retained"] },
+          "status": { "enum": ["available", "blocked", "unsafe", "unsupported"], "description": "`unsupported` answers a force action by refusing it; `unsafe` names the missing evidence that prevents a safe recommendation." },
+          "preserves": { "$ref": "#/$defs/stringList" },
+          "changes": { "$ref": "#/$defs/stringList" },
+          "blocked_by": { "$ref": "#/$defs/stringList", "description": "Guard codes and reasons that block the choice." },
+          "missing_evidence": { "$ref": "#/$defs/stringList" },
+          "apply": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "description"],
+            "properties": {
+              "mode": { "enum": ["command", "operator", "none"] },
+              "description": { "$ref": "#/$defs/boundedString" },
+              "command": { "$ref": "#/$defs/boundedString" }
+            }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes_budget", "string_max", "paths_max", "tasks_max", "omitted"],
+      "properties": {
+        "bytes_budget": { "type": "integer", "minimum": 1 },
+        "string_max": { "type": "integer", "minimum": 1 },
+        "paths_max": { "type": "integer", "minimum": 0 },
+        "tasks_max": { "type": "integer", "minimum": 0 },
+        "omitted": { "type": "object", "minProperties": 1 }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": { "$ref": "#/$defs/boundedString" },
+        "events": { "$ref": "#/$defs/boundedString" }
+      }
+    }
+  },
+  "$defs": {
+    "boundedString": { "type": "string", "minLength": 1, "maxLength": 257 },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+    "idList": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/boundedString" } },
+    "stringList": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/boundedString" } },
+    "listing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths", "count"],
+      "properties": {
+        "paths": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/boundedString" } },
+        "count": { "type": "integer", "minimum": 0, "description": "The complete number of paths; the listing shows at most the fit bound and states what it omitted." },
+        "command": { "$ref": "#/$defs/boundedString" }
+      }
+    }
+  }
+}

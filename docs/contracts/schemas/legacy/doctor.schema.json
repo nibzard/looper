@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/doctor.schema.json",
+  "title": "Looper doctor --json (legacy contract, frozen)",
+  "description": "The document `looper doctor --json` emits today: one observation plus a findings array. Every finding carries a stable code, severity, message, and suggested action; AX-014 extends this pattern to all CLI failures under contract version 2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observation", "findings", "automatic_recovery"],
+  "properties": {
+    "schema_version": { "type": "integer" },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "build_mismatch",
+        "schema_version",
+        "observed_at",
+        "controller_owned",
+        "view_matches_controller",
+        "workers",
+        "event_cursor"
+      ],
+      "properties": {
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release", "revision", "modified"],
+          "properties": {
+            "release": { "type": "string" },
+            "revision": { "type": "string" },
+            "modified": { "type": "boolean" }
+          }
+        },
+        "build_mismatch": { "type": "boolean" },
+        "schema_version": { "type": "integer" },
+        "observed_at": { "type": "string" },
+        "controller_owned": { "type": "boolean" },
+        "controller": { "type": "object" },
+        "view": { "type": "object" },
+        "view_matches_controller": { "type": "boolean" },
+        "workers": { "type": "array", "items": { "type": "object" } },
+        "event_cursor": { "type": "integer" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message", "suggested_action"],
+        "properties": {
+          "code": { "type": "string" },
+          "severity": { "enum": ["info", "warning", "error"] },
+          "task_id": { "type": "string" },
+          "message": { "type": "string" },
+          "suggested_action": { "type": "string" }
+        }
+      }
+    },
+    "automatic_recovery": { "type": "boolean" }
+  }
+}

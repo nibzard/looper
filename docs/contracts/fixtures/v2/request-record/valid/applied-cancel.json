@@ -1,0 +1,19 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "cancel-01h5c2",
+    "type": "cancel-task",
+    "state": "applied",
+    "age_seconds": 95,
+    "controller_session": "run-4f39faa5451b464d",
+    "submitted_at": "2026-11-08T09:41:02Z",
+    "decided_at": "2026-11-08T09:41:05Z",
+    "affected_tasks": ["T014", "T015"],
+    "result": {
+      "summary": "Cancelled T014, T015."
+    }
+  },
+  "continuation": { "command": "looper requests cancel-01h5c2 --contract v2" }
+}

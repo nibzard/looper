@@ -159,14 +159,14 @@ func taskIndex(b Backlog, budget int) string {
 	var out strings.Builder
 	count := 0
 	for _, t := range b.Tasks {
-		if t.Status == "done" || t.Marker() {
+		if t.Status == "done" || t.Status == "cancelled" || t.Marker() {
 			continue
 		}
 		count++
 	}
 	omitted := count
 	for _, t := range b.Tasks {
-		if t.Status == "done" || t.Marker() {
+		if t.Status == "done" || t.Status == "cancelled" || t.Marker() {
 			continue
 		}
 		line := fmt.Sprintf("%s [%s] %s\n", shortText(t.ID, 80), t.Status, shortText(t.Title, 120))

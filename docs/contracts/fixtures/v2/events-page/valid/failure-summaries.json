@@ -1,0 +1,118 @@
+{
+    "contract_version": 2,
+    "schema_version": 2,
+    "kind": "looper.events.page",
+    "items": [
+        {
+            "id": 1210,
+            "time": "2026-11-06T09:14:52Z",
+            "kind": "failure",
+            "message": "T015  verify failed: exited 4: tail-marker: assertion failed",
+            "task_id": "T015",
+            "attempt_id": "task-9a1e77c04b3df022",
+            "controller_session": "run-4f39faa5451b464d",
+            "phase": "verifying",
+            "data": {
+                "failure": {
+                    "operation": "verify",
+                    "tool": "verify.sh",
+                    "exit_status": 4,
+                    "outcome": "exit_failure",
+                    "cause": "exit status 4",
+                    "context": "filler line 299\nAuthorization: Bearer [redacted]\ntail-marker: assertion failed",
+                    "evidence": [
+                        {
+                            "kind": "file",
+                            "reference": "history/task-9a1e77c04b3df022/checks/1c8e0d7b/failure-verification/verify.sh"
+                        },
+                        {
+                            "kind": "log",
+                            "reference": "history/task-9a1e77c04b3df022/checks/1c8e0d7b/failure-verification/verify.log"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": 1211,
+            "time": "2026-11-06T09:14:53Z",
+            "kind": "failure",
+            "message": "resource-cleanup failed: exited 1: rm: cannot remove 'database': No such file or directory",
+            "controller_session": "run-4f39faa5451b464d",
+            "data": {
+                "failure": {
+                    "operation": "resource-cleanup",
+                    "tool": "cleanup-resources.sh",
+                    "exit_status": 1,
+                    "outcome": "cleanup_already_absent",
+                    "cause": "command script cleanup.sh: exit status 1",
+                    "context": "rm: cannot remove 'database': No such file or directory",
+                    "evidence": [
+                        {
+                            "kind": "log",
+                            "reference": "history/task-9a1e77c04b3df022/checks/1c8e0d7b/failure-verification/cleanup.log"
+                        },
+                        {
+                            "kind": "file",
+                            "reference": "history/task-9a1e77c04b3df022/checks/1c8e0d7b/failure-verification/resources.json"
+                        },
+                        {
+                            "kind": "file",
+                            "reference": "history/task-9a1e77c04b3df022/checks/1c8e0d7b/failure-verification/cleanup-resources.sh"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": 1212,
+            "time": "2026-11-06T09:15:31Z",
+            "kind": "failure",
+            "message": "launch failed (launch_failed): fork/exec /opt/agents/claude: no such file or directory",
+            "controller_session": "run-4f39faa5451b464d",
+            "data": {
+                "failure": {
+                    "operation": "launch",
+                    "tool": "claude (/opt/agents/claude) [target]",
+                    "outcome": "launch_failed",
+                    "cause": "fork/exec /opt/agents/claude: no such file or directory",
+                    "evidence": [
+                        {
+                            "kind": "file",
+                            "reference": "history/plan-31cc90bd0e68be6b/prompt.txt"
+                        },
+                        {
+                            "kind": "file",
+                            "reference": "history/plan-31cc90bd0e68be6b/invocation.json"
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "page": {
+        "after": 0,
+        "high_water": 1212,
+        "returned": 3,
+        "order": "ascending",
+        "has_more": false
+    },
+    "filters": {
+        "kind": "failure",
+        "full_history": false
+    },
+    "continuation": {
+        "cursor": {
+            "event_id": 1212,
+            "scope": "store",
+            "store_id": "demo-3f2a/state.db",
+            "store_epoch": 1
+        },
+        "command": "looper events --contract v2 --after 1212 --kind failure",
+        "has_more": false
+    },
+    "store": {
+        "id": "demo-3f2a/state.db",
+        "epoch": 1
+    }
+}

@@ -1,0 +1,118 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.recovery.preview",
+  "generated_at": "2026-11-06T09:41:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json",
+    "runtime_dir": "/home/agent/.looper/stackfall-b17f/runtime"
+  },
+  "run": {
+    "id": "run-9c41d2aa7f30e1b6",
+    "retained": true,
+    "retained_tasks": ["T002"],
+    "retained_task_total": 1,
+    "attempts": [
+      {
+        "attempt_id": "task-002-91ac",
+        "task_id": "T002",
+        "phase": "verifying",
+        "result_commit": "1b6e0f3a9c2d4e5f8091a2b3c4d5e6f7089a0b1c",
+        "worktree_present": true,
+        "receipt_present": true,
+        "contract_held": true
+      }
+    ],
+    "attempt_total": 1,
+    "publication_held": true
+  },
+  "controller": { "state": "stopped", "owned": false },
+  "token": {
+    "value": "b0c8275d9e3a41f68b7c5d0e9f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    "note": "Present this token to the recovery application operation."
+  },
+  "comparisons": {
+    "task_file": {
+      "state": "match",
+      "expected_digest": "3a7f0c9d21b8e45f6c0a1d2e3f4b5c6d7e8f901a2b3c4d5e6f7a8b9c0d1e2f3a",
+      "observed_digest": "3a7f0c9d21b8e45f6c0a1d2e3f4b5c6d7e8f901a2b3c4d5e6f7a8b9c0d1e2f3a",
+      "changed_contracts": [],
+      "added_contracts": [],
+      "removed_contracts": []
+    },
+    "branch": {
+      "state": "match",
+      "expected_head": "8f14e45fceea167a5a36dedd4bea2543f7a1c390",
+      "expected_branch": "main",
+      "observed_head": "8f14e45fceea167a5a36dedd4bea2543f7a1c390",
+      "observed_branch": "main"
+    },
+    "working_tree": {
+      "state": "unknown",
+      "published_tree": "454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0",
+      "unknown": "the working-tree check: startup stops at the publication collision first"
+    },
+    "publication": {
+      "verified_commit": "1b6e0f3a9c2d4e5f8091a2b3c4d5e6f7089a0b1c",
+      "attempt_id": "task-002-91ac",
+      "task_id": "T002",
+      "accepted_tree": "454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0",
+      "verified_tree": "7d9c1e0a3b4f5d6c8e9f0a1b2c3d4e5f60718293a",
+      "outcome": "collision",
+      "changes": {
+        "paths": ["Formula/kernel.go"],
+        "count": 1,
+        "command": "git diff --name-only 454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0 7d9c1e0a3b4f5d6c8e9f0a1b2c3d4e5f60718293a"
+      },
+      "local_edits": {
+        "paths": ["local.txt"],
+        "count": 1,
+        "command": "git diff --name-only 454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0"
+      }
+    }
+  },
+  "guards": [
+    { "code": "backlog_contract_changed", "verdict": "pass", "detail": "the task file matches the saved contract" },
+    { "code": "branch_moved", "verdict": "pass", "detail": "the branch and head match the saved baseline" },
+    { "code": "project_tree_changed", "verdict": "fail", "detail": "project files match neither the accepted tree nor the verified candidate; the verified work stays retained" },
+    { "code": "project_tree_changed", "verdict": "unknown", "detail": "the working-tree check: startup stops at the publication step first" },
+    { "code": "task_contract_changed", "verdict": "pass", "detail": "every retained attempt holds its saved task contract" }
+  ],
+  "choices": [
+    {
+      "name": "resume",
+      "status": "blocked",
+      "preserves": ["every retained attempt, its worktree, and its result commit"],
+      "changes": ["the run continues dispatching and publishing after it resumes"],
+      "blocked_by": ["project_tree_changed: project files match neither the accepted tree nor the verified candidate"],
+      "apply": { "mode": "command", "description": "Start the controller; the startup recovery path applies under the repository lock.", "command": "looper" }
+    },
+    {
+      "name": "publish-retained",
+      "status": "blocked",
+      "preserves": ["the verified result commit and every retained attempt"],
+      "changes": ["the project tree takes the verified content on 1 path(s)"],
+      "blocked_by": ["project_tree_changed: project files match neither the accepted tree nor the verified candidate"],
+      "missing_evidence": ["which process changed the project files after verification"],
+      "apply": { "mode": "command", "description": "Applied automatically at resume; no separate operation exists.", "command": "looper" }
+    },
+    {
+      "name": "discard-retained",
+      "status": "unsupported",
+      "changes": ["retained attempts, result commits, and the saved run would be lost"],
+      "apply": { "mode": "none", "description": "No supported discard exists." }
+    }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 256,
+    "paths_max": 20,
+    "tasks_max": 16,
+    "omitted": { "retained_tasks": 0, "attempts": 0 }
+  },
+  "detail": {
+    "status": "looper status --contract v2 --full",
+    "events": "looper events --contract v2 --after 42"
+  }
+}

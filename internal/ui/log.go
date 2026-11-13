@@ -2,9 +2,22 @@ package ui
 
 import "strings"
 
+// plainLines passes multiline evidence through plainText one line at a time.
+// The line structure survives; terminal control characters never reach a
+// viewport. Log and diff text comes from agent output and patch content, so a
+// worker can always write raw escapes into what the dashboard renders.
+func plainLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = plainText(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Style the readable log without altering the retained evidence. Reduce repeated
 // blank lines from test runners, while keeping every nonempty line available.
 func readableLog(text string) string {
+	text = plainLines(text)
 	var lines []string
 	blank := false
 	for _, line := range strings.Split(text, "\n") {

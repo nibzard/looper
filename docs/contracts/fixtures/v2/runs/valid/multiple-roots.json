@@ -1,0 +1,133 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.runs",
+  "generated_at": "2026-11-06T12:00:00Z",
+  "project": {
+    "root": "/home/agent/demo",
+    "todo_path": "/home/agent/demo/to-do.json",
+    "base_dir": "/home/agent/.looper",
+    "runtime_dir": "/home/agent/.looper/demo-3f2a1b2c/runtime",
+    "current_run_found": true,
+    "current_run_state": "saved"
+  },
+  "searched": {
+    "base_dir": "/home/agent/.looper",
+    "entries_scanned": 5,
+    "entries_skipped": 2,
+    "scan_note": "Only Looper-owned runtime directories named <project>-<hash> under the base directory are read; private agent session directories are never scanned."
+  },
+  "runs": [
+    {
+      "name": "demo-3f2a1b2c",
+      "directory": "/home/agent/.looper/demo-3f2a1b2c",
+      "runtime_dir": "/home/agent/.looper/demo-3f2a1b2c/runtime",
+      "state": "saved",
+      "current_project": true,
+      "run_id": "demo",
+      "root": "/home/agent/demo",
+      "root_exists": true,
+      "todo_path": "/home/agent/demo/to-do.json",
+      "head": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+      "branch": "main",
+      "retained": true,
+      "retained_tasks": ["T001", "T002"],
+      "retained_task_total": 2,
+      "tasks_total": 14,
+      "tasks_done": 9,
+      "sessions_total": 3,
+      "last_session": {
+        "id": "run-4f9a2b1c3d4e5f60",
+        "started": "2026-11-06T11:41:02Z",
+        "ended": "2026-11-06T11:58:44Z",
+        "outcome": "stopped",
+        "reason": "drained",
+        "exit_code": 0
+      },
+      "last_activity": "2026-11-06T11:41:02Z",
+      "controller": {
+        "state": "owning",
+        "session": "run-9d1e2f3a4b5c6d70",
+        "mode": "detached",
+        "started": "2026-11-06T11:59:10Z",
+        "age_seconds": 60,
+        "build": { "release": "0.9.1-dev.24", "revision": "579f2286ab", "modified": false }
+      },
+      "select": [
+        "cd /home/agent/demo && looper status --contract v2 --json",
+        "cd /home/agent/demo && looper recovery --preview --contract v2 --json"
+      ]
+    },
+    {
+      "name": "other-9c8d7e6f",
+      "directory": "/home/agent/.looper/other-9c8d7e6f",
+      "runtime_dir": "/home/agent/.looper/other-9c8d7e6f/runtime",
+      "state": "saved",
+      "run_id": "other",
+      "root": "/home/agent/work/other",
+      "root_exists": false,
+      "todo_path": "/home/agent/work/other/to-do.json",
+      "retained": false,
+      "retained_tasks": [],
+      "retained_task_total": 0,
+      "tasks_total": 6,
+      "tasks_done": 6,
+      "sessions_total": 1,
+      "last_session": {
+        "id": "run-0a1b2c3d4e5f6071",
+        "started": "2026-11-01T09:00:00Z",
+        "ended": "2026-11-01T10:12:33Z",
+        "outcome": "failed",
+        "reason": "error",
+        "exit_code": 1
+      },
+      "last_activity": "2026-11-01T09:00:00Z",
+      "controller": {
+        "state": "stale",
+        "session": "run-0a1b2c3d4e5f6071",
+        "mode": "foreground",
+        "started": "2026-11-01T09:00:00Z",
+        "age_seconds": 446400,
+        "build": { "release": "0.8.3", "revision": "80ba239f", "modified": false }
+      },
+      "select": [
+        "the recorded project root /home/agent/work/other no longer exists; its runtime records stay in /home/agent/.looper/other-9c8d7e6f/runtime"
+      ]
+    },
+    {
+      "name": "broken-5a4b3c2d",
+      "directory": "/home/agent/.looper/broken-5a4b3c2d",
+      "runtime_dir": "/home/agent/.looper/broken-5a4b3c2d/runtime",
+      "state": "unreadable",
+      "state_error": "file is not a database",
+      "retained": false,
+      "retained_tasks": [],
+      "retained_task_total": 0,
+      "tasks_total": 0,
+      "tasks_done": 0,
+      "sessions_total": 0,
+      "last_session": { "outcome": "unknown" },
+      "last_activity": "2026-11-05T18:30:00Z",
+      "controller": {
+        "state": "unknown",
+        "error": "controller metadata is unreadable: unexpected end of JSON input"
+      },
+      "select": [
+        "the saved run cannot be read; its runtime records stay in /home/agent/.looper/broken-5a4b3c2d/runtime"
+      ]
+    }
+  ],
+  "run_total": 3,
+  "limits": {
+    "bytes_budget": 8192,
+    "page_limit": 20,
+    "runs_max": 20,
+    "string_max": 256,
+    "retained_ids_max": 8,
+    "omitted": { "runs": 0 }
+  },
+  "detail": {
+    "run": "looper status --contract v2 --json (from a listed project root; each entry names its select command)",
+    "page": "looper runs --limit 100 --contract v2 --json"
+  }
+}

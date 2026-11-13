@@ -3,6 +3,7 @@ package looper
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,7 +20,10 @@ import (
 // simulate an agent that breaks its read-only contract. With
 // LOOPER_FAKE_BACKLOG_EDIT set, it overwrites the task file in its working
 // directory with that content, which simulates a review or planning agent
-// that edits the private backlog. With LOOPER_FAKE_LOG set, it appends one
+// that edits the private backlog. With LOOPER_FAKE_HOOK set, it runs that
+// executable once when the import-analysis prompt arrives, so a test can
+// inject a deterministic failure between the analysis and its application.
+// With LOOPER_FAKE_LOG set, it appends one
 // line per invocation, "worker" for worker prompts and "other" otherwise, so
 // tests can count implementation runs. With LOOPER_FAKE_SLEEP set, it sleeps
 // that many seconds first, so a test can hold a dispatched worker in the
@@ -36,6 +40,9 @@ for a in "$@"; do
 done
 p="$(cat)"
 if [ -n "$LOOPER_FAKE_SLEEP" ]; then sleep "$LOOPER_FAKE_SLEEP"; fi
+if [ -n "$LOOPER_FAKE_HOOK" ] && printf '%s' "$p" | grep -q "Analyze additional requirements"; then
+  "$LOOPER_FAKE_HOOK"
+fi
 kind=other
 if printf '%s' "$p" | grep -q "Complete task "; then kind=worker; fi
 result="$LOOPER_FAKE_RESULT"
@@ -197,6 +204,16 @@ func TestImportConflictsLeaveBacklogUnchanged(t *testing.T) {
 	}
 	if digestFile(e.Config.Todo) != before {
 		t.Fatal("failed import must leave the backlog unchanged")
+	}
+	// The acknowledgement the controller writes carries both keys, so the
+	// recorded failed variant in docs/contracts/fixtures/legacy describes
+	// this document, not a struct the guard drifted away from.
+	var ack planImportAck
+	if err := readJSON(filepath.Join(ackDir(e.Dir), record.RequestID+".json"), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Status != ImportFailed || len(ack.Conflicts) != 1 || ack.Conflicts[0] != record.Conflicts[0] || ack.Error != record.Error {
+		t.Fatalf("acknowledgement missing the failure detail: %+v", ack)
 	}
 }
 
@@ -448,7 +465,7 @@ func TestDuplicateImportAcknowledgesNewRequest(t *testing.T) {
 	e.startupImportPlans()
 	e.processPlanImports(context.Background())
 	for i := 0; i < 2; i++ {
-		e.acceptPlanImport("second-request", plans, false)
+		e.acceptPlanImport(&SettingsRequest{ID: "second-request", Paths: plans}, false)
 		var ack planImportAck
 		if err := readJSON(filepath.Join(ackDir(e.Dir), "second-request.json"), &ack); err != nil {
 			t.Fatal(err)
@@ -459,6 +476,96 @@ func TestDuplicateImportAcknowledgesNewRequest(t *testing.T) {
 	}
 	if len(e.State.Imports) != 1 || len(e.State.Backlog.Tasks) != 2 {
 		t.Fatal("duplicate import changed scope")
+	}
+}
+
+func TestDigestReplayLeavesNoCapturedArtifacts(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	plan := planFile(t, "Add telemetry")
+	e.Config.Plans = []string{plan}
+	e.startupImportPlans()
+	e.processPlanImports(context.Background())
+	if e.err != nil {
+		t.Fatal(e.err)
+	}
+	first := e.State.Imports[0].RequestID
+	// A request whose digests match the applied receipt replays the result.
+	e.acceptPlanImport(&SettingsRequest{ID: "replay-request", Paths: []string{plan}}, false)
+	var ack planImportAck
+	if err := readJSON(filepath.Join(ackDir(e.Dir), "replay-request.json"), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Status != ImportApplied || len(ack.AddedTasks) != 1 || ack.AddedTasks[0] != "T002" {
+		t.Fatalf("replay ack: %+v", ack)
+	}
+	// A startup submission of the same content is deduplicated the same way.
+	e.startupImportPlans()
+	// Only the first request may own a captured copy. Deduplicated replies
+	// reference no capture, so they must not leave one on disk.
+	entries, err := os.ReadDir(importsDir(e.Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.Name())
+	}
+	if len(ids) != 1 || ids[0] != first {
+		t.Fatalf("deduplicated replays must not persist captured artifacts: %v", ids)
+	}
+	if len(e.State.Imports) != 1 {
+		t.Fatalf("replays must not add receipts: %d records", len(e.State.Imports))
+	}
+}
+
+// TestDigestReplayEventNamesRecordedResult covers the deduplicated replay's
+// journal note: it names the recorded result of the matched receipt in the
+// same shape as the fresh-apply message, instead of ending at an empty
+// detail, while the machine acknowledgement stays error-free.
+func TestDigestReplayEventNamesRecordedResult(t *testing.T) {
+	e, _ := importEngine(t, additionProposal)
+	plan := planFile(t, "Add telemetry")
+	e.Config.Plans = []string{plan}
+	e.startupImportPlans()
+	e.processPlanImports(context.Background())
+	if e.err != nil {
+		t.Fatal(e.err)
+	}
+	first := e.State.Imports[0].RequestID
+	// The same content arrives as a new request whose digests match.
+	e.acceptPlanImport(&SettingsRequest{ID: "replay-request", Paths: []string{plan}}, false)
+	events, err := e.Store.Events(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, replay := "", ""
+	for _, ev := range events {
+		if ev.Kind != "import" {
+			continue
+		}
+		switch identityOf(t, ev).RequestID {
+		case first:
+			if strings.Contains(ev.Message, "Applied plan import") {
+				fresh = ev.Message
+			}
+		case "replay-request":
+			replay = ev.Message
+		}
+	}
+	if want := fmt.Sprintf("Applied plan import %s: 1 task(s) added, 1 covered (T002).", first); fresh != want {
+		t.Fatalf("fresh-apply event message: %q", fresh)
+	}
+	if want := fmt.Sprintf("Plan import replay-request applied: 1 task(s) added, 1 covered (T002); matches import %s", first); replay != want {
+		t.Fatalf("replay event message: %q", replay)
+	}
+	// Only the event changed; the acknowledgement still carries the recorded
+	// result without an error field.
+	var ack planImportAck
+	if err := readJSON(filepath.Join(ackDir(e.Dir), "replay-request.json"), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Status != ImportApplied || ack.Error != "" || len(ack.AddedTasks) != 1 || ack.AddedTasks[0] != "T002" {
+		t.Fatalf("replay acknowledgement changed: %+v", ack)
 	}
 }
 
@@ -579,5 +686,111 @@ func TestImportCanAddGateWithoutNewTasks(t *testing.T) {
 	_, _, err := e.applyProposal(&importProposal{Gates: []ImportGate{{TaskID: "T002", DependsOn: []string{"T001"}}}})
 	if err != nil || e.State.Backlog.Task("T002").Status != "blocked" || len(e.State.Backlog.Task("T002").Blockers) != 1 {
 		t.Fatalf("gate changed unrelated blockers: %v", err)
+	}
+}
+
+// An export failure after the analysis commits nothing: the staged receipt
+// and backlog roll back, the receipt records the failure with no applied
+// outcome, and a resubmission of the same plan ends with exactly one added
+// task and one applied outcome.
+func TestImportExportFailureStagesReceiptAndBacklog(t *testing.T) {
+	e, c := importEngine(t, additionProposal)
+	original, err := os.ReadFile(c.Todo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The analysis agent makes the project root read-only, so the export
+	// after the applied save cannot create its temporary task-file write.
+	// Everything before it (the baseline refresh, the analysis workspace,
+	// and the applied save in the runtime store) still succeeds.
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directories do not stop the root user")
+	}
+	locker := filepath.Join(t.TempDir(), "lock.sh")
+	if err := os.WriteFile(locker, []byte("#!/bin/bash\nchmod 0555 \"$LOOPER_FAKE_PROJECT\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOPER_FAKE_HOOK", locker)
+	t.Setenv("LOOPER_FAKE_PROJECT", c.Root)
+	defer os.Chmod(c.Root, 0755)
+	plan := planFile(t, "Add telemetry")
+	e.Config.Plans = []string{plan}
+	e.startupImportPlans()
+	e.processPlanImports(context.Background())
+	if e.err != nil {
+		t.Fatal(e.err)
+	}
+	if err := os.Chmod(c.Root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	record := e.State.Imports[0]
+	if record.Status != ImportFailed || record.Error == "" {
+		t.Fatalf("receipt after failed export: %+v", record)
+	}
+	if task := e.State.Backlog.Task("T002"); task != nil {
+		t.Fatalf("failed export kept a staged task: %+v", task)
+	}
+	for _, event := range journal(t, e) {
+		if strings.Contains(event.Message, "Applied plan import") {
+			t.Fatalf("uncommitted import reported success: %+v", event)
+		}
+	}
+	if e.State.ExportPending != true {
+		t.Fatal("the pending export journal was not recorded")
+	}
+	// Recovery: restore the task file, resubmit the same plan, and require
+	// exactly one durable task and one applied outcome.
+	t.Setenv("LOOPER_FAKE_HOOK", "")
+	if err := os.Remove(c.Todo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.Todo, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	e.acceptPlanImport(&SettingsRequest{ID: "retry-request", Paths: []string{plan}}, false)
+	e.processPlanImports(context.Background())
+	if e.err != nil {
+		t.Fatal(e.err)
+	}
+	count := 0
+	for _, task := range e.State.Backlog.Tasks {
+		if task.Title == "Add telemetry" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("resubmission produced %d added tasks", count)
+	}
+	applied := 0
+	for _, event := range journal(t, e) {
+		if strings.Contains(event.Message, "Applied plan import") {
+			applied++
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("expected exactly one applied outcome, got %d", applied)
+	}
+	var ack planImportAck
+	if err := readJSON(filepath.Join(ackDir(e.Dir), "retry-request.json"), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Status != ImportApplied || len(ack.AddedTasks) != 1 {
+		t.Fatalf("retry ack: %+v", ack)
+	}
+	saved, err := e.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	count = 0
+	for _, task := range saved.Backlog.Tasks {
+		if task.Title == "Add telemetry" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("saved state holds %d added tasks", count)
+	}
+	if saved.ExportPending {
+		t.Fatal("the recovered export stayed pending")
 	}
 }

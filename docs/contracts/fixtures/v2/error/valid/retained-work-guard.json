@@ -1,0 +1,72 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "command": "looper status --contract v2",
+  "error": {
+    "code": "backlog_contract_changed",
+    "message": "The backlog changed while work was retained; restore its saved contract before resuming.",
+    "retry": "after-change",
+    "paths": [
+      "/home/agent/demo",
+      "/home/agent/demo/to-do.json",
+      "/home/agent/.looper/demo-3f2a/runtime/state.db"
+    ],
+    "expected": {
+      "task_file_digest": "sha256:4d21"
+    },
+    "observed": {
+      "task_file_digest": "sha256:9f2c",
+      "task_contract_changes": [
+        "T001"
+      ],
+      "task_contract_additions": [
+        "T004"
+      ],
+      "task_contract_removals": [],
+      "parsed_backlog": "differs from the saved backlog",
+      "retained_tasks": [
+        "T001",
+        "T002",
+        "T003"
+      ],
+      "task_data_changes": [
+        "T002"
+      ]
+    },
+    "evidence": [
+      {
+        "kind": "event",
+        "reference": "event 1198 backlog hold",
+        "command": "looper events --after 1190 --limit 10"
+      },
+      {
+        "kind": "file",
+        "reference": "retained attempt directories under runtime/",
+        "command": "looper status --json"
+      },
+      {
+        "kind": "file",
+        "reference": "the saved task contract for T001",
+        "command": "looper inspect T001 --json"
+      }
+    ],
+    "next_actions": [
+      {
+        "description": "Preview which work and files each recovery action preserves.",
+        "command": "looper recovery --preview --contract v2"
+      },
+      {
+        "description": "Read the retention guard explanation and the changed paths.",
+        "command": "looper doctor --contract v2"
+      },
+      {
+        "description": "Read the retained attempt, its checks, and its logs for T001.",
+        "command": "looper inspect T001 --json"
+      }
+    ],
+    "unknown_evidence": [
+      "which process edited the task file"
+    ]
+  }
+}

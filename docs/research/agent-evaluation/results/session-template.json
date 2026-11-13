@@ -1,0 +1,53 @@
+{
+  "evaluation": "agent-experience-2026-11",
+  "protocol_revision": "AX-028 (2026-11-09)",
+  "scenario": "s1-observe | s2-submit | s3-recover | s4-discover",
+  "arm": "legacy | v2",
+  "repetition": 1,
+  "session": {
+    "agent_binary": null,
+    "model": null,
+    "turn_bound": null,
+    "started_utc": null,
+    "ended_utc": null,
+    "wall_seconds": null,
+    "usage_source": "harness session report",
+    "usage": {
+      "input_tokens": null,
+      "output_tokens": null,
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null
+    }
+  },
+  "commands": {
+    "log_path": null,
+    "count": null,
+    "by_command": {},
+    "total_stdout_bytes": null,
+    "slowest_command": null,
+    "repeated_identical_calls": null
+  },
+  "rubric": {
+    "checks": [
+      {
+        "name": "copy the check name from the protocol's rubric table",
+        "passed": null,
+        "evidence": "quote or command reference"
+      }
+    ],
+    "passed": null,
+    "failed": null
+  },
+  "private_state_detours": {
+    "count": null,
+    "notes": "from the transcript review step; 0 expected"
+  },
+  "outcome": "pass | partial | fail",
+  "failure_review": {
+    "classification": "interface-defect | documentation-gap | agent-misuse | environment-fault | none",
+    "notes": null,
+    "followup": "papercut id or task reference"
+  },
+  "deviations": "record any protocol deviation, or null"
+}

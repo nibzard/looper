@@ -1,0 +1,247 @@
+{
+  "version": 1,
+  "kind": "looper.commands",
+  "description": "The public command surface and the contract documents each command emits. A test parses every invocation through the real command-line parser and requires the parser's command list to match this file, so a new command cannot land without a contract entry. owning_task names the agent-experience task that implements the version 2 document; implemented marks documents that exist today.",
+  "commands": [
+    {
+      "name": "run",
+      "invocation": ["run"],
+      "summary": "Start or resume a controller in the foreground.",
+      "legacy": null,
+      "v2": null,
+      "streaming": false,
+      "owning_task": "AX-022",
+      "implemented": true
+    },
+    {
+      "name": "start",
+      "invocation": ["start"],
+      "summary": "Start a detached controller through the readiness pipe.",
+      "legacy": null,
+      "v2": null,
+      "streaming": false,
+      "owning_task": "AX-022",
+      "implemented": true
+    },
+    {
+      "name": "tui",
+      "invocation": ["tui"],
+      "summary": "Attach with controls, or start a controller under the dashboard. While a controller owns the repository, startup --plan files submit through the add-plan receipt; the non-interactive fallback prints that receipt on stderr so its followed event stream stays one event document per line.",
+      "legacy": null,
+      "v2": null,
+      "streaming": false,
+      "owning_task": "AX-011",
+      "implemented": true
+    },
+    {
+      "name": "attach",
+      "invocation": ["attach"],
+      "summary": "Attach as a read-only observer; never starts a controller.",
+      "legacy": null,
+      "v2": null,
+      "streaming": false,
+      "owning_task": "AX-004",
+      "implemented": true
+    },
+    {
+      "name": "status",
+      "invocation": ["status", "--json"],
+      "summary": "Report run identity, ownership, work, and waiting reason; --contract v2 serves the bounded compact document and --full keeps the complete state.",
+      "legacy": "schemas/legacy/status.schema.json",
+      "v2": "schemas/v2/status-compact.schema.json",
+      "streaming": false,
+      "owning_task": "AX-004",
+      "implemented": true
+    },
+    {
+      "name": "runs",
+      "invocation": ["runs", "--contract", "v2", "--json"],
+      "summary": "Read-only discovery: one bounded listing of the saved runs under the resolved base directory, with project roots, retained work, last known outcomes, ownership freshness, build evidence, and the command that selects each run (--limit bounds the page).",
+      "legacy": null,
+      "v2": "schemas/v2/runs.schema.json",
+      "streaming": false,
+      "owning_task": "AX-025",
+      "implemented": true
+    },
+    {
+      "name": "inspect",
+      "invocation": ["inspect", "T1", "--json"],
+      "summary": "Report one task contract, its attempts, checks, and evidence; --contract v2 serves the bounded compact document with paged attempt and check history (--after, --checks-after, --limit), and --full keeps the complete unpaged document.",
+      "legacy": "schemas/legacy/inspect.schema.json",
+      "v2": "schemas/v2/inspect-compact.schema.json",
+      "streaming": false,
+      "owning_task": "AX-005",
+      "implemented": true
+    },
+    {
+      "name": "events",
+      "invocation": ["events", "--json"],
+      "summary": "Return journal events; NDJSON with --follow, one bounded page document per finite query under contract version 2 (--limit, --task, --kind, --full).",
+      "legacy": "schemas/legacy/event-ndjson.schema.json",
+      "v2": "schemas/v2/events-page.schema.json",
+      "streaming": true,
+      "owning_task": "AX-006",
+      "implemented": true
+    },
+    {
+      "name": "tail",
+      "invocation": ["tail"],
+      "summary": "Follow stored events in plain text.",
+      "legacy": null,
+      "v2": null,
+      "streaming": true,
+      "owning_task": "AX-006",
+      "implemented": true
+    },
+    {
+      "name": "doctor",
+      "invocation": ["doctor", "--json"],
+      "summary": "Report health findings with codes and suggested actions; --contract v2 serves the version 2 document, which adds bounded pending-request summaries and exits 0 for findings, because they are observation content.",
+      "legacy": "schemas/legacy/doctor.schema.json",
+      "v2": "schemas/v2/doctor.schema.json",
+      "streaming": false,
+      "owning_task": "AX-010",
+      "implemented": true
+    },
+    {
+      "name": "requests",
+      "invocation": ["requests", "--contract", "v2", "--json"],
+      "summary": "Read the run's durable request records — add-task, add-plan, cancel-task, settings, requeue, and stop submissions with their state, age, wait reason, affected tasks, plan coverage, and error evidence — one record by identifier or one bounded page (--after continues after a request ID, --limit bounds the page).",
+      "legacy": null,
+      "v2": "schemas/v2/request-record.schema.json",
+      "streaming": false,
+      "owning_task": "AX-010",
+      "implemented": true
+    },
+    {
+      "name": "wait",
+      "invocation": ["wait", "--cursor", "1202", "--timeout", "30s", "--contract", "v2", "--json"],
+      "summary": "One finite, read-only wait for a changed cursor (--cursor), a task state (--task with optional --status), a request outcome (--request), or the run outcome (--run), bounded by the explicit --timeout. Returns one structured outcome naming the satisfied condition or the timeout plus the latest cursor and receipt; a timeout or interruption cancels nothing, and looper events --follow remains the streaming alternative.",
+      "legacy": null,
+      "v2": "schemas/v2/wait.schema.json",
+      "streaming": false,
+      "owning_task": "AX-013",
+      "implemented": true
+    },
+    {
+      "name": "preflight",
+      "invocation": ["preflight", "--contract", "v2", "--json"],
+      "summary": "Read-only execution preview: resolves executable paths, coding and review agents, models and effort with their sources, launch mode, verification and setup, and once semantics without starting a controller or an agent, and reports what stayed unchecked.",
+      "legacy": null,
+      "v2": "schemas/v2/preflight.schema.json",
+      "streaming": false,
+      "owning_task": "AX-023",
+      "implemented": true
+    },
+    {
+      "name": "recovery",
+      "invocation": ["recovery", "--preview", "--contract", "v2", "--json"],
+      "summary": "Read-only recovery preview: compares the task file, branch, working tree, retained attempts, and publication state against the saved contract, and enumerates supported recovery choices with a revision/digest token; changes nothing. The checked application below applies one enumerated choice after re-deriving the token.",
+      "legacy": null,
+      "v2": "schemas/v2/recovery-preview.schema.json",
+      "streaming": false,
+      "owning_task": "AX-016",
+      "implemented": true
+    },
+    {
+      "name": "recovery",
+      "invocation": ["recovery", "--apply", "restore-task-file", "--token", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+      "summary": "Checked recovery application (AX-017): restore-task-file returns the accepted task-file bytes and import-backlog applies the external edit (equivalent formatting is adopted; a real edit imports through the retained-backlog import with every retained result replaying). A live controller applies the request at its boundary; a stopped run applies under the repository lock without launching agents. The preview token is re-derived first, so a stale preview is refused without mutation; unsupported situations retain work and report the limitation (--wait waits bounded for the record, --idempotency-key makes retries return the original request).",
+      "legacy": null,
+      "v2": "schemas/v2/request-record.schema.json",
+      "streaming": false,
+      "owning_task": "AX-017",
+      "implemented": true
+    },
+    {
+      "name": "version",
+      "invocation": ["--version", "--json"],
+      "summary": "Report the executable build identity; --contract v2 serves the client and controller capabilities document.",
+      "legacy": "schemas/legacy/version.schema.json",
+      "v2": "schemas/v2/capabilities.schema.json",
+      "streaming": false,
+      "owning_task": "AX-008",
+      "implemented": true
+    },
+    {
+      "name": "add-task",
+      "invocation": ["add-task", "tasks.json", "--json"],
+      "summary": "Submit new tasks through the controller request transport; returns the immediate receipt naming the durable request (--wait waits bounded for the applied acknowledgement, --idempotency-key makes retries return the original request).",
+      "legacy": "schemas/legacy/settings-ack.schema.json",
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "AX-011",
+      "implemented": true
+    },
+    {
+      "name": "add-plan",
+      "invocation": ["add-plan", "plan.md", "--json"],
+      "summary": "Submit additional requirements to the active controller; returns the immediate receipt naming the durable import (--wait waits bounded for the applied acknowledgement, --idempotency-key addresses the plan content and makes retries return the original request).",
+      "legacy": "schemas/legacy/plan-import-ack.schema.json",
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "AX-011",
+      "implemented": true
+    },
+    {
+      "name": "cancel",
+      "invocation": ["cancel", "T014", "--json"],
+      "summary": "Cancel open work through a checked controller request: the task revision the caller read must match, live dependents are refused by name until --cascade takes them along, active work finishes first with its results preserved, and cancelled work is never encoded as done (--wait waits bounded for the record, --idempotency-key makes retries return the original request).",
+      "legacy": "schemas/legacy/settings-ack.schema.json",
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "AX-019",
+      "implemented": true
+    },
+    {
+      "name": "config",
+      "invocation": ["config"],
+      "summary": "Configure machine agent commands and project roles. Online project changes return a settings receipt. The explicit --test-agent mode returns schemas/v2/agent-test.schema.json with --contract v2 --json and consumes agent usage.",
+      "legacy": "schemas/legacy/settings-ack.schema.json",
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "AX-011",
+      "implemented": true
+    },
+    {
+      "name": "amend",
+      "invocation": ["amend", "T014", "task.json", "--json"],
+      "summary": "Amend one task contract through a checked controller request: the file carries the complete amended task, the revision the caller read must match, dependency cycles and invalid write paths are refused before anything commits, work that holds the task (running, verifying, or retained) is refused with the boundary named, and a done task is never rewritten — the changed requirements create a follow-up task while the accepted result stays (--wait waits bounded for the record, --idempotency-key makes retries return the original request).",
+      "legacy": "schemas/legacy/settings-ack.schema.json",
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "AX-020",
+      "implemented": true
+    },
+    {
+      "name": "stop",
+      "invocation": ["stop", "--wait"],
+      "summary": "Request a drain from the controller that owns the repository; version 2 returns the immediate receipt naming the derived stop request identity, and --wait (AX-022) waits bounded for the durable stop result bound to the stopped controller session.",
+      "legacy": null,
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "AX-011",
+      "implemented": true
+    },
+    {
+      "name": "help",
+      "invocation": ["--help"],
+      "summary": "Show the command overview.",
+      "legacy": null,
+      "v2": null,
+      "streaming": false,
+      "owning_task": "AX-026",
+      "implemented": true
+    },
+    {
+      "name": "help",
+      "invocation": ["help", "status"],
+      "summary": "Show one command's contextual help block — usage, examples, the documents it serves, and its pagination, wait, and exit semantics — through any of three spellings: `help <command>`, `<command> --help`, and `<command> help`. A topic that names no command is a usage error, as is any unknown command: a bare word that names no file exits 2 instead of starting a run. Help is text; the machine-readable command surface is the capabilities document (`looper version --contract v2 --json`).",
+      "legacy": null,
+      "v2": null,
+      "streaming": false,
+      "owning_task": "AX-026",
+      "implemented": true
+    }
+  ]
+}

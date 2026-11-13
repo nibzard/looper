@@ -28,13 +28,32 @@ class SkillInstallTest(unittest.TestCase):
             shutil.copy2(ROOT / script, self.package / script)
         shutil.copytree(ROOT / 'skills', self.package / 'skills')
         self.skills = self.root / 'user skills'
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        self.user_prefix = self.root / 'user-prefix'
         self.args = ['--skip-bin', '--skills-dir', str(self.skills)]
+
+    def installer_env(self):
+        # T056: installer fixtures must never reach the operator's prefix.
+        # HOME and LOOPER_USER_PREFIX point into this sandbox and inherited
+        # PREFIX/CODEX_HOME values are dropped; an explicit --prefix on the
+        # command line still wins inside the scripts.
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('HOME', 'PREFIX', 'CODEX_HOME', 'LOOPER_USER_PREFIX')}
+        env['HOME'] = str(self.home)
+        env['LOOPER_USER_PREFIX'] = str(self.user_prefix)
+        for value in (env['HOME'], env['LOOPER_USER_PREFIX']):
+            assert Path(value).is_relative_to(self.root), value
+        return env
 
     def run_script(self, script, *args, success=True):
         result = subprocess.run(
             ['bash', str(self.package / script), *self.args, *args],
-            text=True, capture_output=True)
+            env=self.installer_env(), text=True, capture_output=True)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+        # Nothing may ever appear at the sandbox HOME's default locations.
+        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse((self.home / '.codex').exists())
         return result
 
     def user_skill(self, name):
@@ -130,6 +149,28 @@ class SkillInstallTest(unittest.TestCase):
         self.run_script('uninstall.sh', success=False)
         self.assertEqual(receipt.read_text(), 'looper-backlog\n')
         self.assertTrue(user.exists())
+
+    def test_default_locations_stay_in_bound_prefix(self):
+        # The incident shape: a no-options invocation must not install into
+        # the real user prefix. With LOOPER_USER_PREFIX bound, bin and skills
+        # land inside it, and the sandbox HOME stays empty.
+        (self.package / 'build').mkdir()
+        binary = self.package / 'build/looper'
+        binary.write_text('#!/bin/sh\necho stub looper\n')
+        binary.chmod(0o755)
+        self.args = []
+        self.run_script('install.sh')
+        self.assertEqual((self.user_prefix / 'bin/looper').read_text(),
+                         '#!/bin/sh\necho stub looper\n')
+        skills = self.user_prefix / 'share/looper/skills'
+        self.assertTrue((skills / 'looper-diagnose/SKILL.md').is_file())
+        self.assertTrue((skills / 'looper-backlog/SKILL.md').is_file())
+        self.assertTrue((skills / '.looper-installed-skills').is_file())
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.run_script('uninstall.sh')
+        self.assertFalse((self.user_prefix / 'bin/looper').exists())
+        self.assertFalse((skills / 'looper-diagnose').exists())
+        self.assertFalse((skills / '.looper-installed-skills').exists())
 
     def test_location_options_use_the_matching_receipt(self):
         for option in ('--prefix', '--codex-home'):

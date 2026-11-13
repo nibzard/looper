@@ -1,0 +1,28 @@
+{
+  "added_task_ids": [
+    "string"
+  ],
+  "adjustments": [
+    "string"
+  ],
+  "controller_session": "string",
+  "coverage": [
+    {
+      "evidence": "string",
+      "requirement": "string",
+      "task_id": "string"
+    }
+  ],
+  "gates": [
+    {
+      "depends_on": [
+        "string"
+      ],
+      "task_id": "string"
+    }
+  ],
+  "id": "string",
+  "status": "string",
+  "type": "string",
+  "version": "integer"
+}

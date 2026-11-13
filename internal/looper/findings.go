@@ -47,9 +47,70 @@ func (t Task) OperatorOnly() bool {
 	return hasTaskTag(t, operatorTaskTag) || operatorFinding(Finding{Title: t.Title, Details: t.Details})
 }
 
-func (e *Engine) addFinding(f Finding) {
+// A findingStage applies one transaction's findings together with the state
+// the surrounding result or review transition mutates. The mutations and
+// their journal notes stage in memory: the notes are emitted only after the
+// saved state/export protocol commits the changes, and a failed commit rolls
+// the mutations back so no in-memory-only follow-up can survive it. Recovery
+// replays the retained result or review and re-applies the findings.
+type findingStage struct {
+	e           *Engine
+	backlog     Backlog
+	planSig     string
+	finished    bool
+	reviewedAt  int
+	reviewedTip string
+	reviewPend  bool
+	notes       []findingNote
+}
+
+// findingNote is one staged finding outcome. The task identity names the
+// mutated task; a rejected report that never reached a task carries none.
+type findingNote struct {
+	taskID  string
+	message string
+}
+
+func (e *Engine) beginFindingStage() *findingStage {
+	return &findingStage{
+		e:           e,
+		backlog:     clone(e.State.Backlog),
+		planSig:     e.State.PlanSignature,
+		finished:    e.State.Finished,
+		reviewedAt:  e.State.ReviewedAt,
+		reviewedTip: e.State.ReviewedTip,
+		reviewPend:  e.State.ReviewPending,
+	}
+}
+
+// emit reports the staged finding outcomes. Call it only after the changes
+// are durable, so a journal success is never unbacked by saved state.
+func (s *findingStage) emit() {
+	for _, note := range s.notes {
+		s.e.taskIDEvent("finding", note.message, note.taskID)
+	}
+	s.notes = nil
+}
+
+// rollback restores every field the transaction staged. A commit that fails
+// before the export protocol finishes leaves neither a task nor a marker of
+// this application behind.
+func (s *findingStage) rollback() {
+	e := s.e
+	e.State.Backlog = s.backlog
+	e.State.PlanSignature = s.planSig
+	e.State.Finished = s.finished
+	e.State.ReviewedAt = s.reviewedAt
+	e.State.ReviewedTip = s.reviewedTip
+	e.State.ReviewPending = s.reviewPend
+	s.notes = nil
+}
+
+func (s *findingStage) add(f Finding) {
+	e := s.e
+	note := func(taskID, message string) { s.notes = append(s.notes, findingNote{taskID: taskID, message: message}) }
 	reject := func(reason string) {
-		e.event("finding", fmt.Sprintf("Ignored follow-up %q (%s): %s.", shortText(sanitize(f.Title), 160), hashJSON(f)[:12], reason))
+		note("", fmt.Sprintf("Ignored follow-up %q (%s): %s.", shortText(sanitize(f.Title), 160), hashJSON(f)[:12], reason))
 	}
 	if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Details) == "" || strings.TrimSpace(f.Evidence) == "" {
 		reject("missing a title, acceptance details, or evidence")
@@ -98,7 +159,7 @@ func (e *Engine) addFinding(f Finding) {
 		}
 		active := existing.Status == "doing"
 		for _, a := range e.State.Attempts {
-			if a.Task.ID == existing.ID && a.Phase != "done" && a.Phase != "blocked" {
+			if a.Task.ID == existing.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "cancelled" {
 				active = true
 			}
 		}
@@ -122,7 +183,7 @@ func (e *Engine) addFinding(f Finding) {
 			deferTask(existing, f.DeferUntil)
 		}
 		e.State.PlanSignature = ""
-		e.event("finding", existing.ID+"  Updated existing finding: "+sanitize(f.Title)+"\nEvidence: "+sanitize(f.Evidence))
+		note(existing.ID, existing.ID+"  Updated existing finding: "+sanitize(f.Title)+"\nEvidence: "+sanitize(f.Evidence))
 		return
 	}
 	priority := f.Priority
@@ -148,7 +209,7 @@ func (e *Engine) addFinding(f Finding) {
 	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, task)
 	e.State.PlanSignature = ""
 	e.State.Finished = false
-	e.event("finding", id+"  Added follow-up: "+f.Title)
+	note(id, id+"  Added follow-up: "+f.Title)
 }
 
 func holdForOperator(t *Task) {

@@ -1,0 +1,16 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.status.compact",
+  "generated_at": "2026-11-05T10:15:04Z",
+  "project": { "root": "/home/agent/demo" },
+  "run": { "id": "run-4f39faa5451b464d" },
+  "builds": { "client": { "release": "0.9.0", "revision": "unknown", "modified": false } },
+  "controller": { "state": "running", "owned": true },
+  "work": { "counts": { "done": 0, "todo": 0, "blocked": 0, "ready": 0 }, "active": [] },
+  "waiting": { "reason": "active_work" },
+  "requests": { "pending": 0 },
+  "findings": [],
+  "cursor": { "event_id": 0, "scope": "store" },
+  "limits": { "bytes_budget": 8192, "omitted": {} }
+}

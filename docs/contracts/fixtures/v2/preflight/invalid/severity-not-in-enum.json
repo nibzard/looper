@@ -1,0 +1,151 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.preflight",
+  "generated_at": "2026-11-06T09:30:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json",
+    "runtime_dir": "/home/agent/.looper/stackfall-b17f/runtime",
+    "profile": {
+      "path": "/home/agent/.looper/stackfall-b17f/runtime/profile.json",
+      "present": false
+    }
+  },
+  "agents": {
+    "coding": {
+      "name": "claude",
+      "source": "default",
+      "binary": {
+        "tool": "claude",
+        "requested": "claude",
+        "source": "default",
+        "state": "found",
+        "resolved": "/home/agent/.local/bin/claude"
+      },
+      "sandbox": "permissions-skipped",
+      "sandbox_note": "planning and review run with read, glob, and grep tools only"
+    },
+    "review": {
+      "name": "claude",
+      "source": "derived",
+      "follows_coding": true,
+      "binary": {
+        "tool": "claude",
+        "requested": "claude",
+        "source": "default",
+        "state": "found",
+        "resolved": "/home/agent/.local/bin/claude"
+      },
+      "sandbox": "permissions-skipped",
+      "sandbox_note": "planning and review run with read, glob, and grep tools only"
+    }
+  },
+  "settings": {
+    "jobs": {
+      "value": 4,
+      "auto": true,
+      "source": "default",
+      "note": "auto mode sizes the worker count from CPU and memory"
+    },
+    "checks": {
+      "value": 1,
+      "note": "--check-jobs or LOOPER_CHECK_JOBS; default 1"
+    },
+    "codex_model": {
+      "value": "",
+      "source": "default",
+      "resolution": "not_applicable",
+      "note": "no agent of this kind is configured, so the setting is unused"
+    },
+    "claude_model": {
+      "value": "",
+      "source": "default",
+      "resolution": "provider_default",
+      "note": "the claude binary chooses its own default model at launch"
+    },
+    "effort": {
+      "value": "",
+      "source": "default",
+      "resolution": "not_applicable",
+      "note": "no agent of this kind is configured, so the setting is unused"
+    },
+    "review_every": {
+      "value": 5,
+      "source": "default"
+    }
+  },
+  "execution": {
+    "mode": "foreground",
+    "mode_note": "looper start runs the same configuration detached through the daemon; looper tui runs it under the dashboard",
+    "once": {
+      "enabled": false,
+      "note": "the run keeps waiting for new work when idle; use looper stop to finish"
+    },
+    "dispatch_limit": 0,
+    "poll_seconds": 30,
+    "worker_timeout_seconds": 0,
+    "git_timeout_seconds": 600,
+    "retry": {
+      "limit": 12,
+      "delay_seconds": 60
+    },
+    "plans": [],
+    "plan_total": 0
+  },
+  "commands": {
+    "verify": {
+      "value": "",
+      "source": "planner",
+      "note": "the planning agent chooses this command at first run; detected candidate \"go test ./...\" from go.mod"
+    },
+    "setup": {
+      "value": "",
+      "source": "planner",
+      "note": "no setup command is configured; the planning agent may propose one at first run, and an empty setup is valid"
+    }
+  },
+  "environment": [
+    {
+      "name": "LOOPER_ITER_SCHEDULE",
+      "present": false,
+      "affects": "coding agent"
+    },
+    {
+      "name": "LOOPER_BASE_DIR",
+      "present": true,
+      "affects": "runtime base directory"
+    }
+  ],
+  "findings": [
+    {
+      "code": "executable_missing",
+      "severity": "fatal",
+      "message": "the coding agent binary was not found on PATH"
+    }
+  ],
+  "unchecked": [
+    {
+      "code": "agent_authentication",
+      "note": "no credential, login, quota, or billing state was probed; the first real launch decides"
+    },
+    {
+      "code": "provider_default_models",
+      "note": "unset model and effort fields are chosen by the agent binary at launch; Looper does not resolve the provider default"
+    },
+    {
+      "code": "verify_command",
+      "note": "the verify command is chosen by the planning agent at first run; a detected candidate is a hint, not a decision"
+    }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 256,
+    "findings_max": 16
+  },
+  "detail": {
+    "settings": "looper config",
+    "health": "looper doctor",
+    "capabilities": "looper version --contract v2 --json"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "cancel-01h5d4",
+    "type": "cancel-task",
+    "state": "waiting",
+    "age_seconds": 42,
+    "controller_session": "run-4f39faa5451b464d",
+    "submitted_at": "2026-11-08T09:42:10Z",
+    "waiting_on": {
+      "reason": "active_work",
+      "age_seconds": 40,
+      "detail": "T014 and its decided set cancel when the active work finishes"
+    },
+    "affected_tasks": ["T014", "T015"]
+  },
+  "continuation": { "command": "looper requests cancel-01h5d4 --contract v2" }
+}

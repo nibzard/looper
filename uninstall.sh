@@ -17,11 +17,25 @@ Options:
   --skip-skills        Skip removing skills
   --dry-run            Print actions without making changes
   -h, --help           Show help
+
+Environment:
+  LOOPER_USER_PREFIX   Default prefix instead of ~/.local; an explicit
+                       --prefix still wins. Test fixtures bind this so
+                       they can never remove from the user's real prefix.
 USAGE
 }
 
+require_value() {
+    [ -n "$2" ] || {
+        echo "Error: $1 requires a value." >&2
+        usage >&2
+        return 1
+    }
+}
+
 DEFAULT_PREFIX="$HOME/.local"
-PREFIX="${PREFIX:-$DEFAULT_PREFIX}"
+# Same precedence as install.sh: --prefix, PREFIX, LOOPER_USER_PREFIX, ~/.local.
+PREFIX="${PREFIX:-${LOOPER_USER_PREFIX:-$DEFAULT_PREFIX}}"
 TARGET_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
 PREFIX_OVERRIDE=""
@@ -36,19 +50,23 @@ PREFIX_MODE=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --prefix)
+            require_value "$1" "${2:-}" || exit 1
             PREFIX_OVERRIDE="$2"
             PREFIX_MODE=1
             shift 2
             ;;
         --bin-dir)
+            require_value "$1" "${2:-}" || exit 1
             BIN_DIR_OVERRIDE="$2"
             shift 2
             ;;
         --skills-dir)
+            require_value "$1" "${2:-}" || exit 1
             SKILLS_DIR_OVERRIDE="$2"
             shift 2
             ;;
         --codex-home)
+            require_value "$1" "${2:-}" || exit 1
             CODEX_HOME_OVERRIDE="$2"
             shift 2
             ;;

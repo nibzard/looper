@@ -1,0 +1,203 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.inspect.compact",
+  "generated_at": "2026-11-06T02:10:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json"
+  },
+  "run": {
+    "id": "run-9c41d2aa7f30e1b6",
+    "controller_session": "run-9c41d2aa7f30e1b6",
+    "mode": "detached"
+  },
+  "controller": { "state": "controlling", "owned": true },
+  "task": {
+    "id": "T014",
+    "title": "Keep completed agent runs with oversized event logs",
+    "status": "doing",
+    "priority": 2,
+    "contract_digest": "189ea8c7a33b815320d47068f187c71ef173272d556c3318bbb54fa550b6ea35",
+    "unblock_when": "The operator records the decision.",
+    "depends_on": ["T002"],
+    "files": ["internal/looper/agent.go"],
+    "blockers": [],
+    "details": {
+      "text": "A completed run with a valid result and a 100 MiB event log must retain its result. Truncate retained … h a marker. The acceptance run keeps its result file and the truncated log.",
+      "bytes": 1846,
+      "truncated": true
+    }
+  },
+  "attempts": {
+    "total": 14,
+    "current": {
+      "ordinal": 14,
+      "attempt_id": "task-0013",
+      "phase": "running",
+      "agent": "claude",
+      "active": true,
+      "retained": false,
+      "repairs": 9,
+      "repeats": 1,
+      "diagnosed": true,
+      "base": "8f14e45fceea167a5a36dedd4bea2543f7a1c390",
+      "directory": "/home/agent/.looper/stackfall-b17f/runtime/task-0013",
+      "result_commit": "454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0",
+      "failure_hash": "3b5d5c37a29f",
+      "summary": { "status": "done", "text": "implemented the retention path" },
+      "verification": {
+        "ok": false,
+        "feedback": { "text": "the verify command exited 1", "bytes": 24, "truncated": false }
+      },
+      "feedback": {
+        "text": "Verification failed. The recorded feedback repeats the verify output for … ated log. Repair the retention path so a completed run keeps its result.",
+        "bytes": 90000,
+        "truncated": true
+      },
+      "output": {
+        "log": "work-08-71f3/events-00.jsonl",
+        "bytes": 21094,
+        "age_seconds": 12,
+        "progress": "advancing"
+      },
+      "logs": [
+        "work-05-9a2c/events-00.jsonl",
+        "work-06-b31d/events-00.jsonl",
+        "work-07-e4f8/events-00.jsonl",
+        "work-08-71f3/events-00.jsonl"
+      ],
+      "logs_total": 9
+    },
+    "items": [
+      {
+        "ordinal": 9,
+        "attempt_id": "task-0008",
+        "phase": "blocked",
+        "agent": "claude",
+        "active": false,
+        "retained": false,
+        "repairs": 1,
+        "repeats": 0,
+        "base": "7d2c9e01ba34f5678c9d0e1f2a3b4c5d6e7f89012",
+        "directory": "/home/agent/.looper/stackfall-b17f/runtime/task-0008",
+        "logs": ["work-00-4c1a/events-00.jsonl"],
+        "logs_total": 1
+      },
+      {
+        "ordinal": 14,
+        "attempt_id": "task-0013",
+        "phase": "running",
+        "agent": "claude",
+        "active": true,
+        "retained": false,
+        "repairs": 9,
+        "repeats": 1,
+        "diagnosed": true,
+        "base": "8f14e45fceea167a5a36dedd4bea2543f7a1c390",
+        "directory": "/home/agent/.looper/stackfall-b17f/runtime/task-0013",
+        "result_commit": "454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0",
+        "failure_hash": "3b5d5c37a29f",
+        "summary": { "status": "done", "text": "implemented the retention path" },
+        "verification": {
+          "ok": false,
+          "feedback": { "text": "the verify command exited 1", "bytes": 24, "truncated": false }
+        },
+        "feedback": {
+          "text": "Verification failed. The recorded feedback repeats the verify output for … ated log. Repair the retention path so a completed run keeps its result.",
+          "bytes": 90000,
+          "truncated": true
+        },
+        "output": {
+          "log": "work-08-71f3/events-00.jsonl",
+          "bytes": 21094,
+          "age_seconds": 12,
+          "progress": "advancing"
+        },
+        "logs": [
+          "work-05-9a2c/events-00.jsonl",
+          "work-06-b31d/events-00.jsonl",
+          "work-07-e4f8/events-00.jsonl",
+          "work-08-71f3/events-00.jsonl"
+        ],
+        "logs_total": 9
+      }
+    ],
+    "page": { "after": 0, "returned": 6, "limit": 6, "order": "ascending", "has_more": true },
+    "continuation": {
+      "command": "looper inspect T014 --contract v2 --after 0 --limit 6",
+      "has_more": true
+    }
+  },
+  "checks": {
+    "total": 42,
+    "items": [
+      {
+        "id": 41,
+        "time": "2026-11-06T01:58:44.120Z",
+        "attempt_id": "task-0013",
+        "revision": "rev-13-02",
+        "kind": "verify",
+        "result": "fail",
+        "artifact": "checks/rev-13-02/verify.log"
+      },
+      {
+        "id": 42,
+        "time": "2026-11-06T02:04:10.001Z",
+        "attempt_id": "task-0013",
+        "revision": "rev-13-08",
+        "kind": "verify",
+        "result": "fail",
+        "artifact": "checks/rev-13-08/verify.log"
+      }
+    ],
+    "page": { "after": 0, "returned": 6, "limit": 6, "order": "ascending", "has_more": true },
+    "continuation": {
+      "command": "looper inspect T014 --contract v2 --checks-after 0 --limit 6",
+      "has_more": true
+    }
+  },
+  "timing": {
+    "task_id": "T014",
+    "available": true,
+    "history_complete": false,
+    "attempts": 14,
+    "recorded_attempts": 12,
+    "worker_seconds": 4021.5,
+    "check_seconds": 812.25,
+    "other_seconds": 96,
+    "active_seconds": 4890.75,
+    "elapsed_seconds": 8123,
+    "unknown_processes": 2,
+    "running_processes": 1
+  },
+  "evidence": [
+    { "kind": "log", "reference": "work-08-71f3/events-00.jsonl" },
+    { "kind": "commit", "reference": "454f6ac52b1e2d3c8a9b0c1d2e3f4a5b6c7d8e9f0" },
+    { "kind": "log", "reference": "checks/rev-13-08/verify.log" },
+    { "kind": "event", "reference": "task events T014", "command": "looper events --contract v2 --task T014" }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 96,
+    "excerpt_max": 256,
+    "attempts_max": 6,
+    "checks_max": 6,
+    "logs_max": 4,
+    "omitted": {
+      "attempts": 0,
+      "checks": 0,
+      "logs": 5,
+      "blockers": 0,
+      "steps": 0,
+      "depends_on": 0,
+      "files": 0,
+      "tags": 0
+    }
+  },
+  "detail": {
+    "full": "looper inspect T014 --contract v2 --full --json",
+    "history": "looper inspect T014 --contract v2 --after 0 --limit 6",
+    "events": "looper events --contract v2 --task T014"
+  }
+}

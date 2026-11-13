@@ -1,0 +1,51 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.recovery.preview",
+  "generated_at": "2026-11-06T09:46:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json",
+    "runtime_dir": "/home/agent/.looper/stackfall-b17f/runtime"
+  },
+  "run": {
+    "id": "run-9c41d2aa7f30e1b6",
+    "retained": false,
+    "retained_tasks": [],
+    "retained_task_total": 0,
+    "attempts": [],
+    "attempt_total": 0,
+    "publication_held": false
+  },
+  "controller": { "state": "stopped", "owned": false },
+  "comparisons": {
+    "task_file": {
+      "state": "match",
+      "changed_contracts": [],
+      "added_contracts": [],
+      "removed_contracts": []
+    },
+    "branch": { "state": "match" },
+    "working_tree": { "state": "matches_published" }
+  },
+  "guards": [
+    { "code": "backlog_contract_changed", "verdict": "pass" },
+    { "code": "branch_moved", "verdict": "pass" },
+    { "code": "project_tree_changed", "verdict": "pass" }
+  ],
+  "choices": [
+    { "name": "resume", "status": "available" },
+    { "name": "discard-retained", "status": "unsupported" }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 256,
+    "paths_max": 20,
+    "tasks_max": 16,
+    "omitted": { "retained_tasks": 0, "attempts": 0 }
+  },
+  "detail": {
+    "status": "looper status --contract v2 --full",
+    "events": "looper events --contract v2 --after 42"
+  }
+}

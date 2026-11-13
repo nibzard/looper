@@ -1,0 +1,3 @@
+{"id":1,"time":"2026-11-06T11:40:00Z","kind":"start","message":"Session started"}
+{"data":{"attempt_id":"task-live","task_id":"T2"},"id":2,"time":"2026-11-06T11:40:30Z","kind":"check","message":"Checking T2 with integrated work..."}
+{"data":{"session":"run-f7803453a9ce5f6b","reason":"drained","exit_code":0,"last_event_id":2},"id":3,"time":"2026-11-06T11:41:30Z","kind":"shutdown","message":"Stopped after draining active work"}

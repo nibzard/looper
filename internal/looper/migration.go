@@ -2,6 +2,7 @@ package looper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,6 +53,7 @@ func (e *Engine) importLegacy(b Backlog, data []byte) (*State, error) {
 	s.Finished = false
 	s.Backlog = b
 	s.ExportHash = digest(data)
+	s.ExportSemantics = b.semanticFingerprint()
 	_, s.Branch = e.Repo.Head()
 	if len(legacy.Plan) > 0 && string(legacy.Plan) != "null" {
 		var p struct {
@@ -67,8 +69,19 @@ func (e *Engine) importLegacy(b Backlog, data []byte) (*State, error) {
 			scope.TaskID = id
 			s.Plan.Tasks = append(s.Plan.Tasks, scope)
 		}
-		if err = s.Plan.Validate(b, e.Config.Verify); err != nil {
-			return nil, err
+		for {
+			err = s.Plan.Validate(b, e.Config.Verify)
+			if err == nil {
+				break
+			}
+			var bad *writePathError
+			if !errors.As(err, &bad) {
+				return nil, err
+			}
+			// One malformed legacy scope drops; the signature stays empty, so
+			// the first planning pass rebuilds the plan instead of the
+			// controller dying at startup.
+			s.Plan.dropScope(bad.TaskID)
 		}
 	}
 	if err = writeJSON(filepath.Join(e.Dir, "history", "imported-python-state.json"), json.RawMessage(raw)); err != nil {

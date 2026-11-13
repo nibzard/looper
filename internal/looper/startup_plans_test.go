@@ -3,11 +3,14 @@ package looper
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nibzard/looper/internal/contractschema"
 )
 
 // missingPlan returns a path that never exists, for rejected-input fixtures.
@@ -193,5 +196,133 @@ func TestStartDetachedRejectsInvalidPlans(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("a rejected start must not report a detached controller: %q", out.String())
+	}
+}
+
+// The double-start refusal both launch paths share, byte for byte: callers
+// that read the default contract learn the plans were not submitted and the
+// command that submits them.
+const ownedRepositoryRefusal = "A controller already owns this repository.\nSubmit the plans with: looper add-plan <path>\n"
+
+// TestStartPlanUnderLiveControllerSuggestsAddPlan pins the T123 rule from
+// docs/UI-PLAN.md: `start --plan` against a live controller refuses the
+// invocation with the same add-plan suggestion the run path emits, instead of
+// dropping the plans behind a detached child that cannot take the lock.
+func TestStartPlanUnderLiveControllerSuggestsAddPlan(t *testing.T) {
+	t.Setenv("LOOPER_NO_PROMPT", "1")
+	c := preparedRepo(t, "start")
+	c.Plans = []string{planFile(t, "# Needs\nAdd one counter.\n")}
+	// The guard must act before a child exists, so an executable that cannot
+	// run stands in for the spawn: reaching it would fail differently.
+	orig := startExecutable
+	startExecutable = func() (string, error) { return "/nonexistent-detached-child", nil }
+	t.Cleanup(func() { startExecutable = orig })
+	release := holdRepositoryLock(t, c)
+	defer release()
+	var out, stderr bytes.Buffer
+	code := runCLIController([]string{"start", "--plan", c.Plans[0]}, c, &out, &stderr)
+	if code != 1 {
+		t.Fatalf("the double start must fail: %d %s %s", code, out.String(), stderr.String())
+	}
+	if stderr.String() != ownedRepositoryRefusal {
+		t.Fatalf("the refusal must match the run path's suggestion: %q", stderr.String())
+	}
+	if strings.Contains(out.String(), "Controller detached") {
+		t.Fatalf("no controller may be reported started: %q", out.String())
+	}
+	_, dir := projectPaths(c)
+	if _, err := os.Stat(filepath.Join(dir, "daemon-config.json")); err == nil {
+		t.Fatal("the refusal must come before the daemon child is configured")
+	}
+}
+
+// TestRunPlanUnderLiveControllerSuggestsAddPlan keeps the foreground half of
+// the shared refusal pinned: the same text, with the launch description still
+// preceding it (AX-023).
+func TestRunPlanUnderLiveControllerSuggestsAddPlan(t *testing.T) {
+	t.Setenv("LOOPER_NO_PROMPT", "1")
+	c := preparedRepo(t, "run")
+	c.Plans = []string{planFile(t, "# Needs\nAdd one counter.\n")}
+	release := holdRepositoryLock(t, c)
+	defer release()
+	var out, stderr bytes.Buffer
+	code := runCLIController([]string{"run", "--plan", c.Plans[0]}, c, &out, &stderr)
+	if code != 1 {
+		t.Fatalf("the double start must fail: %d %s %s", code, out.String(), stderr.String())
+	}
+	if stderr.String() != ownedRepositoryRefusal {
+		t.Fatalf("the run path's refusal must stay unchanged: %q", stderr.String())
+	}
+	if !strings.Contains(out.String(), "Launch: agent") {
+		t.Fatalf("the run path keeps its launch description first: %q", out.String())
+	}
+}
+
+// TestStartPlanUnderLiveControllerServesStructuredRefusal checks the same
+// refusal under contract version 2: exactly one error document, valid against
+// the published schema, whose action carries the add-plan command.
+func TestStartPlanUnderLiveControllerServesStructuredRefusal(t *testing.T) {
+	t.Setenv("LOOPER_NO_PROMPT", "1")
+	c := preparedRepo(t, "start")
+	plan := planFile(t, "# Needs\nAdd one counter.\n")
+	orig := startExecutable
+	startExecutable = func() (string, error) { return "/nonexistent-detached-child", nil }
+	t.Cleanup(func() { startExecutable = orig })
+	release := holdRepositoryLock(t, c)
+	defer release()
+	cc := v2Config(c, "start", true)
+	cc.Plans = []string{plan}
+	var out, stderr bytes.Buffer
+	code := runCLIController([]string{"start", "--plan", plan}, cc, &out, &stderr)
+	if code != exitOperationFailed {
+		t.Fatalf("exit %d: %s %s", code, out.String(), stderr.String())
+	}
+	if stderr.Len() > 0 {
+		t.Fatalf("a version 2 JSON error must stay one document on stdout: %q", stderr.String())
+	}
+	var doc errorDocument
+	if err := json.Unmarshal([]byte(out.String()), &doc); err != nil {
+		t.Fatalf("stdout is not one error document: %v\n%s", err, out.String())
+	}
+	if doc.Command != "looper start --contract v2" {
+		t.Fatalf("command label %q", doc.Command)
+	}
+	if doc.Error.Code != "controller_owns_repository" {
+		t.Fatalf("error code %q", doc.Error.Code)
+	}
+	if len(doc.Error.NextActions) != 1 || doc.Error.NextActions[0].Command != "looper add-plan <path>" {
+		t.Fatalf("the action must name the add-plan command: %+v", doc.Error.NextActions)
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = contractschema.ValidateJSON(errorSchema(t), data); err != nil {
+		t.Fatalf("the refusal violates the error schema: %v\n%s", err, data)
+	}
+}
+
+// TestStartWithoutPlansStillDispatchesToDetachedStart pins the unchanged half
+// of the rule: without startup plans a double start still reaches the detached
+// child, and no add-plan suggestion appears.
+func TestStartWithoutPlansStillDispatchesToDetachedStart(t *testing.T) {
+	t.Setenv("LOOPER_NO_PROMPT", "1")
+	c := preparedRepo(t, "start")
+	orig := startExecutable
+	startExecutable = func() (string, error) { return "/nonexistent-detached-child", nil }
+	t.Cleanup(func() { startExecutable = orig })
+	release := holdRepositoryLock(t, c)
+	defer release()
+	var out, stderr bytes.Buffer
+	code := runCLIController([]string{"start"}, c, &out, &stderr)
+	if code != exitOperationFailed {
+		t.Fatalf("the double start must keep failing: %d %s %s", code, out.String(), stderr.String())
+	}
+	combined := out.String() + stderr.String()
+	if strings.Contains(combined, "add-plan") {
+		t.Fatalf("a start without plans must not suggest add-plan: %q %q", out.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "/nonexistent-detached-child") {
+		t.Fatalf("the start must still dispatch to the detached child: %q", stderr.String())
 	}
 }

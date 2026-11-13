@@ -1,0 +1,6 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "error": { "code": "run_not_found", "message": "No saved Looper run exists in this project." }
+}

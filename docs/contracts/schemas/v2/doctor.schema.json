@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/doctor.schema.json",
+  "title": "Looper doctor (contract version 2)",
+  "description": "The document `looper doctor --contract v2 --json` emits: the same observation and findings shape the legacy doctor document carries, plus the bounded pending-request summaries with their detail routes (AX-010). Findings are observation content, not transport failures: a command that completed exits 0 however unhealthy the run looks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "schema_version",
+    "kind",
+    "observation",
+    "findings",
+    "requests",
+    "automatic_recovery",
+    "detail"
+  ],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.doctor" },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "build_mismatch",
+        "schema_version",
+        "observed_at",
+        "controller_owned",
+        "view_matches_controller",
+        "workers",
+        "event_cursor"
+      ],
+      "properties": {
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release", "revision", "modified"],
+          "properties": {
+            "release": { "type": "string" },
+            "revision": { "type": "string" },
+            "modified": { "type": "boolean" }
+          }
+        },
+        "build_mismatch": { "type": "boolean" },
+        "schema_version": { "type": "integer" },
+        "observed_at": { "type": "string" },
+        "controller_owned": { "type": "boolean" },
+        "controller": { "type": "object" },
+        "view": { "type": "object" },
+        "view_matches_controller": { "type": "boolean" },
+        "workers": { "type": "array", "items": { "type": "object" } },
+        "event_cursor": { "type": "integer" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message", "suggested_action"],
+        "properties": {
+          "code": { "type": "string" },
+          "severity": { "enum": ["info", "warning", "error"] },
+          "task_id": { "type": "string" },
+          "message": { "type": "string" },
+          "suggested_action": { "type": "string" }
+        }
+      }
+    },
+    "requests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pending", "waiting_on"],
+      "properties": {
+        "pending": { "type": "integer", "minimum": 0, "description": "Request envelopes queued or claimed that no receipt has answered." },
+        "waiting": { "type": "integer", "minimum": 0, "description": "Durable requests the run still owes an outcome to, every type included." },
+        "oldest_age_seconds": { "type": "integer", "minimum": 0 },
+        "waiting_on": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "type", "state", "reason"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "type": { "type": "string", "minLength": 1 },
+              "state": { "enum": ["submitted", "accepted", "waiting", "applied", "rejected", "failed", "cancelled"] },
+              "reason": { "type": "string", "minLength": 1, "description": "The wait reason a waiting receipt names, or the non-terminal state itself." },
+              "age_seconds": { "type": "integer", "minimum": 0 },
+              "detail": { "type": "string" }
+            }
+          }
+        },
+        "waiting_omitted": { "type": "integer", "minimum": 0, "description": "Waiting requests beyond the bounded list." }
+      }
+    },
+    "automatic_recovery": { "type": "boolean" },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "status"],
+      "properties": {
+        "requests": { "type": "string", "minLength": 1, "description": "The bounded request query that reads each record named in the summary." },
+        "status": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

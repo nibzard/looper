@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/capabilities.schema.json",
+  "title": "Looper client and controller capabilities (contract version 2)",
+  "description": "The machine-readable entry for capability discovery. A client validates this before publishing a request envelope and again against the controller that claims it, so an unsupported operation is refused instead of becoming a dead letter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "client", "compatibility"],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.capabilities" },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build", "contract_versions"],
+      "properties": {
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release", "revision", "modified"],
+          "properties": {
+            "release": { "type": "string", "minLength": 1 },
+            "revision": { "type": "string" },
+            "modified": { "type": "boolean" }
+          }
+        },
+        "contract_versions": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "waits": { "type": "array", "items": { "type": "string", "description": "Wait predicates this client supports, for example cursor_change, task_state, request_outcome, and run_outcome." } }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "build", "contract_versions", "request_types"],
+      "properties": {
+        "session": { "type": "string", "minLength": 1 },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release", "revision", "modified"],
+          "properties": {
+            "release": { "type": "string", "minLength": 1 },
+            "revision": { "type": "string" },
+            "modified": { "type": "boolean" }
+          }
+        },
+        "contract_versions": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+        "request_types": {
+          "type": "array",
+          "items": { "enum": ["add-task", "add-plan", "settings", "requeue", "stop", "cancel-task", "amend-task", "recovery"] }
+        },
+        "absent_metadata": {
+          "type": "boolean",
+          "description": "True when live controller metadata carries no capability record, which happens with controllers older than this contract. The documented compatibility policy applies."
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 1 },
+          "properties": {
+            "status_bytes": { "type": "integer", "minimum": 1 },
+            "events_page_default": { "type": "integer", "minimum": 1 },
+            "events_page_max": { "type": "integer", "minimum": 1 },
+            "request_bytes": { "type": "integer", "minimum": 1 },
+            "pending_requests": { "type": "integer", "minimum": 1 },
+            "wait_timeout_seconds_max": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_contract_version", "oldest_supported_contract_version"],
+      "properties": {
+        "default_contract_version": { "type": "integer", "minimum": 1 },
+        "oldest_supported_contract_version": { "type": "integer", "minimum": 1 },
+        "legacy_default_until": {
+          "type": "string",
+          "description": "Names the release or gate after which the default contract version changes. Until then legacy output is the default."
+        },
+        "policy": { "type": "string", "description": "Points at docs/AGENT-CONTRACT-MIGRATION.md." }
+      }
+    }
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/runs.schema.json",
+  "title": "Looper saved-run discovery (contract version 2)",
+  "description": "The one document `looper runs --contract v2 --json` returns. It lists the saved runs found within the resolved configured base directory with each run's project root, retained work, session count and last known outcome, controller ownership freshness (metadata plus process liveness), recorded build evidence, and the exact command that selects it. Discovery is read-only: no run is started, stopped, or mutated, only Looper-owned runtime directories named <project>-<hash> under the base directory are read, and private agent session directories are never scanned. The listing is bounded and reports what it omits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "schema_version", "kind", "generated_at", "project", "searched", "runs", "run_total", "limits", "detail"],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "schema_version": { "const": 2 },
+    "kind": { "const": "looper.runs" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "todo_path", "base_dir", "runtime_dir", "current_run_found", "current_run_state"],
+      "properties": {
+        "root": { "$ref": "#/$defs/boundedString" },
+        "todo_path": { "$ref": "#/$defs/boundedString" },
+        "base_dir": { "$ref": "#/$defs/boundedString" },
+        "runtime_dir": { "$ref": "#/$defs/boundedString" },
+        "current_run_found": { "type": "boolean", "description": "State records exist at this project's own runtime location, whether or not the bounded page showed them." },
+        "current_run_state": { "enum": ["saved", "missing", "unreadable", "none"] }
+      }
+    },
+    "searched": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_dir", "entries_scanned", "entries_skipped", "scan_note"],
+      "properties": {
+        "base_dir": { "$ref": "#/$defs/boundedString" },
+        "entries_scanned": { "type": "integer", "minimum": 0, "description": "Base directory entries the scan read, bounded by the scan limit." },
+        "entries_skipped": { "type": "integer", "minimum": 0, "description": "Entries that are not Looper-owned runtime directories; they were counted, never opened." },
+        "scan_truncated": { "type": "boolean", "description": "The base directory holds more entries than the scan limit read; counts cover the scanned prefix only." },
+        "scan_note": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "runs": { "type": "array", "items": { "$ref": "#/$defs/run" } },
+    "run_total": { "type": "integer", "minimum": 0, "description": "Every run the scan found, including those the page or the byte budget omitted." },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes_budget", "page_limit", "runs_max", "string_max", "retained_ids_max", "omitted"],
+      "properties": {
+        "bytes_budget": { "const": 8192 },
+        "page_limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "runs_max": { "type": "integer", "minimum": 1, "description": "The entry bound that actually applied after the byte budget." },
+        "string_max": { "type": "integer", "minimum": 1 },
+        "retained_ids_max": { "type": "integer", "minimum": 1 },
+        "omitted": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "minProperties": 1,
+          "description": "What the bounded listing left out, by collection: at least the runs omitted by the page or the byte budget."
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run", "page"],
+      "properties": {
+        "run": { "$ref": "#/$defs/boundedString", "description": "How to read one listed run in full." },
+        "page": { "$ref": "#/$defs/boundedString", "description": "How to request a larger bounded page." }
+      }
+    }
+  },
+  "$defs": {
+    "boundedString": { "type": "string", "maxLength": 1024 },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "directory", "runtime_dir", "state", "retained", "retained_tasks", "retained_task_total", "tasks_total", "tasks_done", "sessions_total", "last_session", "last_activity", "controller", "select"],
+      "properties": {
+        "name": { "$ref": "#/$defs/boundedString", "description": "The directory name under the base directory: the project slug plus its digest prefix." },
+        "directory": { "$ref": "#/$defs/boundedString" },
+        "runtime_dir": { "$ref": "#/$defs/boundedString" },
+        "state": { "enum": ["saved", "missing", "unreadable"], "description": "The saved state database: saved and readable, absent (a start that never reached its first save), or present but unreadable with the reason in state_error." },
+        "state_error": { "$ref": "#/$defs/boundedString" },
+        "current_project": { "type": "boolean", "description": "This entry is the invocation's own project: its directory name is the one this project's root derives." },
+        "run_id": { "$ref": "#/$defs/boundedString", "description": "The saved run identity: the durable ref, or the newest controller session before one exists." },
+        "root": { "$ref": "#/$defs/boundedString", "description": "The project root the saved state records; absent when the state cannot be read." },
+        "root_exists": { "type": "boolean", "description": "The recorded project root still exists on this machine." },
+        "todo_path": { "$ref": "#/$defs/boundedString" },
+        "head": { "$ref": "#/$defs/boundedString" },
+        "branch": { "$ref": "#/$defs/boundedString" },
+        "retained": { "type": "boolean", "description": "The saved run holds retained work: attempts outside done and blocked, or a held publication." },
+        "retained_tasks": { "type": "array", "items": { "$ref": "#/$defs/boundedString" }, "description": "The bounded retained task identifiers; retained_task_total carries the complete count." },
+        "retained_task_total": { "type": "integer", "minimum": 0 },
+        "tasks_total": { "type": "integer", "minimum": 0 },
+        "tasks_done": { "type": "integer", "minimum": 0 },
+        "sessions_total": { "type": "integer", "minimum": 0, "description": "Controller sessions the store retained; a store from before session records reports zero." },
+        "last_session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome"],
+          "properties": {
+            "id": { "$ref": "#/$defs/boundedString" },
+            "started": { "$ref": "#/$defs/boundedString" },
+            "ended": { "$ref": "#/$defs/boundedString" },
+            "outcome": { "enum": ["running", "stopped", "failed", "cancelled", "panicked", "interrupted", "unknown"], "description": "The last known outcome, exactly as the store recorded it. running with a stale or stopped controller means the session ended without recording its exit; unknown means the store predates session records." },
+            "reason": { "$ref": "#/$defs/boundedString", "description": "The shutdown reason of the newest session's exit event, when one was recorded." },
+            "exit_code": { "type": "integer" }
+          }
+        },
+        "last_activity": { "$ref": "#/$defs/boundedString", "description": "The newest write the run's own records show: the state file's modification time, or the controller metadata's when no state was saved." },
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["owning", "stale", "stopped", "unknown"], "description": "Ownership freshness from controller metadata plus process liveness: owning (the recorded controller process is alive), stale (metadata names a process that is gone), stopped (no metadata remains; a clean shutdown removes its own record), unknown (metadata could not be read)." },
+            "session": { "$ref": "#/$defs/boundedString" },
+            "mode": { "$ref": "#/$defs/boundedString", "description": "foreground or detached, as the controller recorded it." },
+            "started": { "$ref": "#/$defs/boundedString" },
+            "age_seconds": { "type": "integer", "minimum": 0, "description": "Age of the controller metadata file, the freshness stamp of the ownership evidence." },
+            "build": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["release", "revision", "modified"],
+              "properties": {
+                "release": { "$ref": "#/$defs/boundedString" },
+                "revision": { "$ref": "#/$defs/boundedString" },
+                "modified": { "type": "boolean" }
+              },
+              "description": "Build evidence: the controller's recorded build, or the build its newest session event recorded when the controller's own metadata is gone."
+            },
+            "error": { "$ref": "#/$defs/boundedString", "description": "Why the controller metadata could not be read." }
+          }
+        },
+        "select": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "$ref": "#/$defs/boundedString" }, "description": "The exact commands that select this run. Looper resolves a project's runtime directory from the working directory, so selecting a run means running from its recorded project root." }
+      }
+    }
+  }
+}

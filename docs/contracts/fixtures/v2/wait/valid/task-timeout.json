@@ -1,0 +1,27 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.wait",
+  "outcome": "timeout",
+  "condition": {
+    "kind": "task_state",
+    "task_id": "T015",
+    "status": "done",
+    "from": "todo"
+  },
+  "observed": {
+    "at": "2026-11-09T12:03:01.402Z",
+    "high_water": 1284,
+    "task": { "present": true, "status": "doing", "changed": true },
+    "note": "task T015 is still doing."
+  },
+  "cursor": { "event_id": 1284, "scope": "store", "store_id": "store-3f9c1a2b", "store_epoch": 1 },
+  "controller": { "state": "owning", "session": "run-4f39faa5451b464d" },
+  "wait": { "timeout_seconds": 30, "elapsed_seconds": 30 },
+  "detail": {
+    "command": "looper wait --contract v2 --task T015 --status done --timeout 30s",
+    "events": "looper events --contract v2 --task T015",
+    "status": "looper status --contract v2 --json",
+    "follow": "looper events --contract v2 --follow --json --task T015"
+  }
+}

@@ -15,11 +15,20 @@ func reportedFinding(t *testing.T, body string) Finding {
 	return f
 }
 
+// applyFinding drives one finding through the staged protocol exactly as a
+// committed result or review does: mutate first, report afterwards.
+func applyFinding(t *testing.T, e *Engine, f Finding) {
+	t.Helper()
+	s := e.beginFindingStage()
+	s.add(f)
+	s.emit()
+}
+
 func TestFindingKeyDeduplicatesRenamedBlocker(t *testing.T) {
 	e := snapshotEngine(t)
 	before := len(e.State.Backlog.Tasks)
-	e.addFinding(reportedFinding(t, `{"title":"Obtain benchmark access","details":"Operator supplies access","evidence":"401","owner":"operator","key":"benchmark-access","priority":1}`))
-	e.addFinding(reportedFinding(t, `{"title":"Unblock dedicated pair provisioning","details":"Same access is missing","evidence":"second 401","owner":"operator","key":"benchmark-access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Obtain benchmark access","details":"Operator supplies access","evidence":"401","owner":"operator","key":"benchmark-access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Unblock dedicated pair provisioning","details":"Same access is missing","evidence":"second 401","owner":"operator","key":"benchmark-access","priority":1}`))
 	if len(e.State.Backlog.Tasks) != before+1 {
 		t.Fatal("renamed blocker created another task")
 	}
@@ -33,7 +42,7 @@ func TestFindingKeyDeduplicatesRenamedBlocker(t *testing.T) {
 func TestFindingReferencesExistingTask(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = []Task{{ID: "T001", Title: "Await access", Status: "blocked", Priority: 1}}
-	e.addFinding(reportedFinding(t, `{"title":"Access still unavailable","details":"Same prerequisite","evidence":"401 again","owner":"operator","key":"access","existing_task_id":"T001","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Access still unavailable","details":"Same prerequisite","evidence":"401 again","owner":"operator","key":"access","existing_task_id":"T001","priority":1}`))
 	if len(e.State.Backlog.Tasks) != 1 {
 		t.Fatal("existing task was not updated")
 	}
@@ -43,7 +52,7 @@ func TestFindingReferencesExistingTask(t *testing.T) {
 	if err := json.Unmarshal(data, &e.State.Backlog); err != nil {
 		t.Fatal(err)
 	}
-	e.addFinding(reportedFinding(t, `{"title":"Retry access","details":"Still blocked","evidence":"401 third time","owner":"operator","key":"access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Retry access","details":"Still blocked","evidence":"401 third time","owner":"operator","key":"access","priority":1}`))
 	if len(e.State.Backlog.Tasks) != 1 {
 		t.Fatal("saved identity was lost")
 	}
@@ -57,7 +66,7 @@ func TestOperatorFindingNeverEntersReadyQueue(t *testing.T) {
 	} {
 		e := snapshotEngine(t)
 		e.State.Backlog.Tasks = nil
-		e.addFinding(reportedFinding(t, body))
+		applyFinding(t, e, reportedFinding(t, body))
 		if len(e.State.Backlog.Tasks) != 1 {
 			t.Fatal("operator work was lost")
 		}
@@ -75,9 +84,9 @@ func TestOperatorFindingNeverEntersReadyQueue(t *testing.T) {
 func TestAgentFindingDoesNotReopenCompletedOperatorTask(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = nil
-	e.addFinding(reportedFinding(t, `{"title":"Authorize host","details":"Operator grants access","evidence":"401","owner":"operator","key":"access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Authorize host","details":"Operator grants access","evidence":"401","owner":"operator","key":"access","priority":1}`))
 	e.State.Backlog.Tasks[0].Status = "done"
-	e.addFinding(reportedFinding(t, `{"title":"Authorize the host again","details":"Old report","evidence":"old 401","owner":"agent","key":"access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Authorize the host again","details":"Old report","evidence":"old 401","owner":"agent","key":"access","priority":1}`))
 	if len(e.State.Backlog.Tasks) != 1 || e.State.Backlog.Tasks[0].Status != "done" {
 		t.Fatal("duplicate reopened completed work")
 	}
@@ -87,7 +96,7 @@ func TestFindingRejectsInvalidOwnershipAndReference(t *testing.T) {
 	for _, extra := range []string{`"owner":"robot"`, `"existing_task_id":"missing"`, `"key":" "`} {
 		e := snapshotEngine(t)
 		before := len(e.State.Backlog.Tasks)
-		e.addFinding(reportedFinding(t, `{"title":"Fix code","details":"Acceptance","evidence":"Failure","priority":1,`+extra+`}`))
+		applyFinding(t, e, reportedFinding(t, `{"title":"Fix code","details":"Acceptance","evidence":"Failure","priority":1,`+extra+`}`))
 		if len(e.State.Backlog.Tasks) != before {
 			t.Fatal("invalid finding created executable work")
 		}
@@ -98,7 +107,7 @@ func TestDistinctFindingsRemainRunnable(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = nil
 	for _, key := range []string{"input-validation", "output-validation"} {
-		e.addFinding(reportedFinding(t, `{"title":"Fix `+key+`","details":"Document operator workflow","evidence":"Test fails","owner":"agent","key":"`+key+`","priority":1}`))
+		applyFinding(t, e, reportedFinding(t, `{"title":"Fix `+key+`","details":"Document operator workflow","evidence":"Test fails","owner":"agent","key":"`+key+`","priority":1}`))
 	}
 	if len(e.State.Backlog.Ready()) != 2 {
 		t.Fatal("distinct code fixes were merged or blocked")
@@ -115,8 +124,8 @@ func TestLegacyOperatorTaskNeverEntersReadyQueue(t *testing.T) {
 func TestFindingDoesNotEraseOperatorOwnership(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = nil
-	e.addFinding(reportedFinding(t, `{"title":"Authorize host","details":"Supply access","evidence":"401","owner":"operator","key":"access","priority":1}`))
-	e.addFinding(reportedFinding(t, `{"title":"Retry host","details":"Still blocked","evidence":"401 again","owner":"agent","key":"access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Authorize host","details":"Supply access","evidence":"401","owner":"operator","key":"access","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Retry host","details":"Still blocked","evidence":"401 again","owner":"agent","key":"access","priority":1}`))
 	if len(e.State.Backlog.Tasks) != 1 || len(e.State.Backlog.Ready()) != 0 {
 		t.Fatal("duplicate changed operator ownership")
 	}
@@ -140,7 +149,7 @@ func TestDuplicateEvidencePreservesRunningTaskContract(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = []Task{{ID: "T001", Title: "Fix validation", Details: "Reject invalid input", Status: "doing", Priority: 1, Tags: []string{"P0", "M0"}}}
 	contract := e.State.Backlog.Tasks[0].Contract()
-	e.addFinding(reportedFinding(t, `{"title":"Same validation defect","details":"Do not replace acceptance criteria","evidence":"Another failed test","owner":"agent","key":"validation","existing_task_id":"T001","priority":1}`))
+	applyFinding(t, e, reportedFinding(t, `{"title":"Same validation defect","details":"Do not replace acceptance criteria","evidence":"Another failed test","owner":"agent","key":"validation","existing_task_id":"T001","priority":1}`))
 	if e.State.Backlog.Tasks[0].Contract() != contract {
 		t.Fatal("new evidence invalidated a running worker contract")
 	}
@@ -152,7 +161,7 @@ func TestDuplicateEvidencePreservesRunningTaskContract(t *testing.T) {
 func TestOperatorCapabilityRequirementRemainsAgentWork(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = nil
-	e.addFinding(Finding{Title: "Fix operator workflow", Details: "An operator must be able to manage sessions through the UI.", Evidence: "The reset button fails.", Priority: 1})
+	applyFinding(t, e, Finding{Title: "Fix operator workflow", Details: "An operator must be able to manage sessions through the UI.", Evidence: "The reset button fails.", Priority: 1})
 	if len(e.State.Backlog.Ready()) != 1 {
 		t.Fatal("a product requirement was mistaken for an operator action")
 	}
@@ -162,7 +171,7 @@ func TestOperatorFindingPreservesActiveContract(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = []Task{{ID: "T001", Title: "Fix validation", Details: "Reject invalid input", Status: "doing", Priority: 1}}
 	before := e.State.Backlog.Tasks[0].Contract()
-	e.addFinding(Finding{Title: "Grant validation access", Details: "Supply credentials", Evidence: "401", Owner: "operator", Key: "validation", ExistingTaskID: "T001"})
+	applyFinding(t, e, Finding{Title: "Grant validation access", Details: "Supply credentials", Evidence: "401", Owner: "operator", Key: "validation", ExistingTaskID: "T001"})
 	if e.State.Backlog.Tasks[0].Contract() != before || e.State.Backlog.Tasks[0].Status != "doing" {
 		t.Fatal("finding changed an active contract")
 	}
@@ -187,7 +196,7 @@ func TestFindingReopensCompletedAgentTask(t *testing.T) {
 			case "title":
 				finding.Title = original.Title
 			}
-			e.addFinding(finding)
+			applyFinding(t, e, finding)
 			task := e.State.Backlog.Tasks[0]
 			if len(e.State.Backlog.Tasks) != 1 || task.Status != "todo" || len(e.State.Backlog.Ready()) != 1 {
 				t.Fatal("completed defect has no runnable repair")
@@ -201,7 +210,7 @@ func TestFindingReopensCompletedAgentTask(t *testing.T) {
 			if e.State.Attempts[0].Task.Contract() != original.Contract() || e.State.Attempts[0].Phase != "done" {
 				t.Fatal("completed attempt history changed")
 			}
-			e.addFinding(finding)
+			applyFinding(t, e, finding)
 			if len(e.State.Backlog.Tasks) != 1 || e.State.Backlog.Tasks[0].Details != task.Details {
 				t.Fatal("repeated finding duplicated repair")
 			}
@@ -213,7 +222,7 @@ func TestDistinctFindingsRetainRepairCriteria(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks = []Task{{ID: "T001", Title: "Implement storage", Status: "done", Priority: 1}}
 	for _, key := range []string{"readback", "large-pack"} {
-		e.addFinding(Finding{Title: key, Details: "Repair " + key, Evidence: key + " fails", Owner: "agent", Key: key, ExistingTaskID: "T001"})
+		applyFinding(t, e, Finding{Title: key, Details: "Repair " + key, Evidence: key + " fails", Owner: "agent", Key: key, ExistingTaskID: "T001"})
 	}
 	task := e.State.Backlog.Tasks[0]
 	if len(e.State.Backlog.Ready()) != 1 || !strings.Contains(task.Details, "Repair readback") || !strings.Contains(task.Details, "Repair large-pack") {
@@ -228,7 +237,7 @@ func TestFindingPreservesRetainedAttemptContract(t *testing.T) {
 			task := Task{ID: "T001", Title: "Implement storage", Status: "todo", Priority: 1}
 			e.State.Backlog.Tasks = []Task{task}
 			e.State.Attempts = []*Attempt{{Task: task, Phase: phase}}
-			e.addFinding(Finding{Title: "Repair storage", Details: "Fix readback", Evidence: "Readback fails", Owner: "agent", ExistingTaskID: "T001"})
+			applyFinding(t, e, Finding{Title: "Repair storage", Details: "Fix readback", Evidence: "Readback fails", Owner: "agent", ExistingTaskID: "T001"})
 			if e.State.Backlog.Tasks[0].Contract() != task.Contract() {
 				t.Fatal("finding invalidated retained work")
 			}
@@ -242,7 +251,7 @@ func TestOperatorFollowupPreservesIdleAgentOwnership(t *testing.T) {
 			e := snapshotEngine(t)
 			original := Task{ID: "T001", Title: "Implement layout", Details: "Automate layout checks", Status: status, Priority: 1}
 			e.State.Backlog.Tasks = []Task{original}
-			e.addFinding(Finding{Title: "Wire the layout gate", Details: "Operator adds the gate dependency", Evidence: "Dependency missing", Owner: "operator", ExistingTaskID: "T001", Key: "layout"})
+			applyFinding(t, e, Finding{Title: "Wire the layout gate", Details: "Operator adds the gate dependency", Evidence: "Dependency missing", Owner: "operator", ExistingTaskID: "T001", Key: "layout"})
 			task := e.State.Backlog.Tasks[0]
 			if task.OperatorOnly() || task.Status != status || task.UnblockWhen != "" || len(task.Blockers) != 0 {
 				t.Fatalf("operator follow-up changed implementation ownership: %+v", task)

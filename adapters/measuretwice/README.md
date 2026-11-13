@@ -44,6 +44,7 @@ full evidence during product review.
 
 `fail` and `review` request an independent product review. They do not directly
 block publication. Errors are recorded separately. An exploration profile cannot
-establish false-accept rates or qualify this check for enforcement. The four
-scripted tests only verify outcome mapping and size handling. Collect real task
-cases and independent labels before relying on semantic judgments as gates.
+establish false-accept rates or qualify this check for enforcement. The five
+scripted tests verify three outcome mappings, one oversized-evidence case, and
+one direct versus symlinked invocation parity case. Collect real task cases and
+independent labels before relying on semantic judgments as gates.

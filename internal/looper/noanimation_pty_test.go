@@ -67,8 +67,8 @@ func TestTUIAttachNoAnimationShowsStaticStatus(t *testing.T) {
 
 	var stderr strings.Builder
 	done := make(chan int, 1)
-	go func() { done <- runTUI(c, masterOut, &stderr) }()
-	deadline := time.Now().Add(20 * time.Second)
+	go func() { done <- runTUI([]string{"tui"}, c, masterOut, &stderr) }()
+	deadline := time.Now().Add(testBudget(20 * time.Second))
 	detached := false
 	for time.Now().Before(deadline) && !detached {
 		select {
@@ -78,7 +78,15 @@ func TestTUIAttachNoAnimationShowsStaticStatus(t *testing.T) {
 			}
 			detached = true
 		default:
-			masterIn.WriteString("q")
+			// The attached dashboard asks before it detaches, so wait for
+			// the first board frame; an early q would open the dialog
+			// before the board is drawn, and the next q would detach.
+			mu.Lock()
+			drawn := strings.Contains(screen.String(), "LOOPER")
+			mu.Unlock()
+			if drawn {
+				masterIn.WriteString("q")
+			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}

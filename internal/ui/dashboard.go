@@ -28,7 +28,7 @@ const (
 // ExitAction reports why the dashboard stopped. The wrapper may run a form
 // and restart the dashboard for form actions.
 type ExitAction struct {
-	Kind string // "", "settings", "add-plan"
+	Kind string // "", "settings", "add-plan", "drain"
 }
 
 // Controls connects the dashboard to a controller without importing the
@@ -58,6 +58,12 @@ type Controls struct {
 	// NoAnimation suppresses decorative motion such as the bootstrap spinner.
 	// Status text, controls, and refresh behavior stay unchanged.
 	NoAnimation bool
+	// OwnSignals reports that the caller installed its own SIGINT and SIGTERM
+	// handling. The dashboard then disables Bubble Tea's signal capture, so
+	// those handlers own the signals, and exits through its Done poll when the
+	// controller it manages exits: a drain stays visible on the board instead
+	// of closing the view while the run continues unseen.
+	OwnSignals bool
 }
 
 var (
@@ -91,7 +97,7 @@ type model struct {
 	diffView          viewport.Model
 	message           string
 	err               string
-	dialog            string // "", "drain", "exit", "add-plan"
+	dialog            string // "", "drain", "exit", "detach", "add-plan"
 	drainAsked        bool
 	planPath          string
 	tailView          viewport.Model
@@ -121,7 +127,11 @@ func RunDashboard(c Controls) (ExitAction, error) {
 		m.snap = c.Poll()
 		m.trackBootstrap(m.snap)
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if c.OwnSignals {
+		opts = append(opts, tea.WithoutSignalHandler())
+	}
+	p := tea.NewProgram(m, opts...)
 	out, err := p.Run()
 	if err != nil {
 		return ExitAction{}, err
@@ -135,6 +145,11 @@ func RunDashboard(c Controls) (ExitAction, error) {
 		return ExitAction{Kind: "settings"}, nil
 	case "add-plan":
 		return ExitAction{Kind: "add-plan"}, nil
+	}
+	// An attached client leaves a drain running in the controller it
+	// detached from, so the wrapper can say what continues after exit.
+	if finished.drainAsked && c.Snapshot == nil {
+		return ExitAction{Kind: "drain"}, nil
 	}
 	return ExitAction{}, nil
 }
@@ -333,8 +348,14 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case "q":
-		if m.ctrl.ReadOnly || m.ctrl.Snapshot == nil {
+		if m.ctrl.ReadOnly || (m.ctrl.Snapshot == nil && m.ctrl.Drain == nil) {
 			return m, tea.Quit // observers detach; work continues
+		}
+		if m.ctrl.Snapshot == nil {
+			// An attached client cannot interrupt the controller it does
+			// not own, but it can ask that controller to drain.
+			m.dialog = "detach"
+			return m, nil
 		}
 		m.dialog = "exit"
 		return m, nil
@@ -370,8 +391,10 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.workspace.returnMode = m.mode
 			m.diffFor, m.mode, m.err = sel, ModeDiff, ""
-			m.diffText = text
-			m.diffView.SetContent(lipgloss.NewStyle().Width(m.width).Render(text))
+			// Patch content is agent-controlled file text, so neutralize its
+			// control characters before the resize path can re-render it.
+			m.diffText = plainLines(text)
+			m.diffView.SetContent(lipgloss.NewStyle().Width(m.width).Render(m.diffText))
 			m.diffView.GotoTop()
 			return m, nil
 		}
@@ -530,6 +553,21 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dialog = ""
 		}
 		return m, nil
+	case "detach":
+		switch strings.ToLower(msg.String()) {
+		case "d":
+			if err := m.ctrl.Drain(); err != nil {
+				m.err, m.dialog = err.Error(), ""
+				return m, nil
+			}
+			m.drainAsked = true
+			return m, tea.Quit
+		case "q", "enter":
+			return m, tea.Quit
+		case "esc":
+			m.dialog = ""
+		}
+		return m, nil
 	case "drain":
 		switch strings.ToLower(msg.String()) {
 		case "y", "enter":
@@ -578,6 +616,10 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if runes := []rune(m.planPath); len(runes) > 0 {
 				m.planPath = string(runes[:len(runes)-1])
 			}
+			return m, nil
+		case msg.Type == tea.KeySpace:
+			// Bubble Tea reports the space key as KeySpace, not KeyRunes.
+			m.planPath += " "
 			return m, nil
 		case msg.Type == tea.KeyRunes:
 			m.planPath += string(msg.Runes)
@@ -1426,6 +1468,8 @@ func (m model) dialogView() string {
 		}
 	case "exit":
 		return m.dialogBox("Exit controller?\n\n [d] Drain, then exit\n [c] Interrupt; retain work\n [esc] Stay")
+	case "detach":
+		return m.dialogBox("Detach from controller?\n\n [d] Drain, then detach\n [q] Detach; work continues\n [esc] Stay")
 	case "drain":
 		return m.dialogBox("Drain work?\n\n [y] Finish active work\n any other key  cancel")
 	case "add-plan":

@@ -1,0 +1,16 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.error",
+  "command": "looper status --contract v2",
+  "error": {
+    "code": "run_not_found",
+    "message": "no saved run; start looper first",
+    "retry": "after-change",
+    "paths": ["/home/agent/demo/.looper/demo-3f2a/runtime/state.db"],
+    "observed": { "saved_run": false },
+    "next_actions": [
+      { "description": "Start or resume a controller in this project.", "command": "looper" }
+    ]
+  }
+}

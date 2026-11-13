@@ -1,0 +1,24 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "req-01h4x9",
+    "type": "add-plan",
+    "state": "waiting",
+    "age_seconds": 97,
+    "controller_session": "run-4f39faa5451b464d",
+    "idempotency_key": "import-ui-plan-v3",
+    "submitted_at": "2026-11-05T10:14:58Z",
+    "waiting_on": { "reason": "active_work", "age_seconds": 41, "detail": "The import applies at the next boundary after T015 finishes." },
+    "affected_tasks": ["T015"],
+    "plan_coverage": {
+      "added_tasks": ["T070", "T071"],
+      "covered": [ { "requirement": "Keep plain status readable when piped", "task_id": "T012", "evidence": "docs/UI-PLAN.md Part 1" } ]
+    }
+  },
+  "continuation": {
+    "command": "looper requests req-01h4x9 --contract v2",
+    "list": "looper requests --contract v2 --after req-01h4x9"
+  }
+}

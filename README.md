@@ -64,6 +64,11 @@ The latest release can lag behind `main`. To build the current source:
    Run `./uninstall.sh` with the same location options to remove the recorded skills.
    Without a receipt, uninstall preserves all skills, including skills from older installations.
 
+   Both scripts honor `LOOPER_USER_PREFIX` as the default prefix instead of
+   `~/.local`. An explicit `--prefix` still wins. Test fixtures that exercise
+   the installers bind this variable (plus a temporary `HOME`) so they can
+   never write to the real user prefix.
+
 2. In your project's repository root, describe the intended outcome and
    exclusions in a file such as `PROJECT.md`.
 
@@ -88,12 +93,28 @@ looper --agent claude --review-agent codex
 looper --agent zcode --review-agent zcode
 looper tui
 looper status
+looper runs
+looper recovery --preview
+looper preflight
 looper tail --follow
 looper stop
 ```
 
-`looper stop` stops new dispatch and lets active work finish. An interrupt
-stops child processes and retains partial work. Run `looper` again to resume.
+`looper help` prints the command overview and `looper help <command>` prints
+one command's own help: its examples, the documents it emits, and its
+pagination, wait, and exit semantics. A word that names no command and no
+file is a usage error, so a mistyped command cannot start a run.
+
+`looper stop` stops new dispatch and lets active work finish. A stop request
+binds to the controller that owns the repository. `looper stop` writes a
+request only while a controller runs, so a stop without a running controller
+changes nothing and a later start runs normally. A request that arrives
+during startup still drains that controller at its first boundary. A request
+left by a controller that already exited is discarded when the next
+controller starts. A request from an older Looper version names no owner.
+The next controller honors such a request only when it arrived after that
+controller started. An interrupt stops child processes and retains partial
+work. Run `looper` again to resume.
 
 ## How it works
 
@@ -127,6 +148,12 @@ conflict with a correction hint. Stop still drains with code 0, an interrupt
 returns 130, and invalid input at startup or under `--once` exits with
 code 1.
 
+An external edit that lands while work runs pauses dispatch the same way.
+The edit imports at the first boundary with nothing in flight, and the
+interrupted results continue against the new baseline. A stop during that
+wait drains at the same boundary: the results stay retained and your edited
+file stays untouched.
+
 Looper chooses a worker limit automatically, up to four workers. Setup and
 checks share one execution slot by default. The plan identifies files and
 resources that tasks can change to avoid conflicts. Looper checks the actual
@@ -158,8 +185,16 @@ Looper records each operation's owner, prefix, and cleanup status in
 After retained work finishes, Looper retries its cleanup. Restart also retries
 failed cleanup and cleans abandoned resources for completed work. Cleanup has
 a 30-second limit and a separate `cleanup.log`. A cleanup failure preserves the
-task result and emits a `resource-cleanup-error` event. Projects without a
-registered cleanup script keep their existing resource behavior.
+task result, emits a `resource-cleanup-error` event, and journals a bounded
+`failure` summary with the script's exit status, its own log excerpt, and the
+retained evidence; a cleanup that failed only on already-absent paths reports
+the outcome `cleanup_already_absent`, so it never reads as a failure of the
+cleanup logic itself. The wrapper runs the script under `set -e`; the
+documented check-before-remove idiom `[ -d path ] && rm -rf path` survives a
+clean path when commands follow it, but a script whose final command is that
+idiom reports its own status 1 with nothing left to remove, and plain Bash
+does the same without the wrapper. Projects without a registered cleanup
+script keep their existing resource behavior.
 
 Let the operating system choose available server ports. Worktrees share Git
 metadata; they are workspace isolation, not a security sandbox.
@@ -420,10 +455,32 @@ Looper is idle. Looper reuses its partial work. It does not repeatedly
 dispatch blocked tasks without that change. Editing a retained task's
 requirements starts a fresh attempt.
 
+## Agent configuration
+
+Run `looper config` to add agent commands and choose separate worker and reviewer
+profiles. Each command uses a supported adapter: Claude Code, Codex, or Zcode.
+For example, `anthropic` can run `claude` while `glm` runs `claude-zai`, both
+through the Claude Code adapter:
+
+```sh
+looper --agent glm --review-agent anthropic
+```
+
+Machine commands live in `~/.config/looper/agents.json` (or the XDG configuration
+location). Project role choices stay in the existing project profile. The first
+interactive start opens the same setup flow. Fresh unattended projects require
+an explicit agent or saved choice; `--yes` explicitly accepts defaults.
+Inspection commands never open setup.
+
+Saving configuration runs no agents. Use `looper config --test-agent glm` for an
+explicit live check that consumes usage. See [agent profiles](docs/AGENT-PROFILES.md)
+for configuration, migration, permission behavior, and adding future adapters.
+
 ## Models
 
-The default agent is Claude. Looper uses the model configured in each agent
-unless you select one explicitly.
+The legacy default agent is Claude. A named profile can select its own model
+and effort. Empty profile values use the agent's settings. Existing model
+flags and environment variables remain available as overrides.
 
 ```sh
 looper --model YOUR_MODEL --effort high
@@ -516,15 +573,67 @@ results. It does not automatically commit, push, or open pull requests on
 your branch.
 
 A repository lock covers all linked worktrees. Concurrent outside edits
-during integration stop publication and retain the result. Restore the saved
-baseline and task contract before resuming interrupted work. Do not delete
+during integration stop publication and retain the result. An external
+task-file edit imports at the next boundary where no work is in flight, and
+at startup when every retained attempt holds a replayable result — a result
+commit or a worker receipt. Work that would rerun its worker still asks you
+to restore the saved baseline and task contract before resuming. Do not delete
 the runtime directory or private refs while you need recovery. Logs and refs
 are retained; there is no automatic retention limit yet.
+
+`looper recovery --preview` explains what a guard refused before you change
+anything. The preview is read-only: it changes no file, database record,
+process, or Git ref. It compares the task file, branch, working tree, and
+any retained publication against the saved contract, reports each startup
+guard verdict, and lists the supported recovery choices with what each
+preserves or changes. Each preview carries a token; `looper recovery --apply
+<choice> --token <token>` applies one enumerated choice and re-derives the
+token first, so a stale preview is refused without changing anything. A live
+controller applies the request at its boundary; a stopped run applies under
+the repository lock without launching agents. Add `--contract v2 --json` for
+the machine document.
 
 `looper status --json` returns the saved state. `looper tail --json` reads
 events. `looper doctor` checks local dependencies and the backlog. Exit
 codes are 0 for a completed finite run or drained stop, 2 for blocked work
 or a dispatch limit, 1 for a controller failure, and 130 for interruption.
+
+`looper preflight` shows the execution configuration a start would use before
+any agent launches: which agent binaries resolve where, which agents, models,
+and effort apply and where each value came from (flag, environment, saved
+profile, the saved plan, or a planner choice), the launch mode, once
+semantics, and the effective verify and setup commands. The preview is
+read-only — no controller starts, no agent runs, nothing is billed — and
+credentials, environment values, and raw agent arguments stay out of it.
+What Looper cannot verify without launching an agent is listed as unchecked.
+A missing agent binary or core tool exits 1 like doctor. Add
+`--contract v2 --json` for the machine document; it stays within 8 KiB
+whatever the configured values hold. A foreground `looper` run
+prints the same facts as one concise launch line before it starts; on a
+resume the line's verify and setup commands name the layer that will supply
+them (the configuration, a recovered command, or the saved plan), because it
+reads the saved run read-only like preflight.
+
+`looper inspect <task> --contract v2 [--json]` returns one bounded task
+view: the contract and blockers, the current attempt with a stated feedback
+excerpt, the newest checks, timing provenance, and the routes that page the
+attempt (`--after`) and check (`--checks-after`) history without duplication
+or gaps. The document stays within 8 KiB no matter how many repairs a task
+accumulated; `--full` returns the complete unpaged report.
+
+`looper runs [--limit N]` lists the saved runs under the configured base
+directory (`LOOPER_BASE_DIR`, default `~/.looper`), newest first: each run's
+project root, whether it still exists, its retained work, its session count
+with the last recorded outcome, controller freshness (owning, stale,
+stopped, or unknown), build evidence, and the exact `cd` command that
+selects it. The listing is read-only — no run is started, stopped, or
+changed — and reads only Looper-owned runtime directories; private agent
+session directories are never scanned. `--limit` bounds the page (default
+20, at most 100) and the document reports what it omitted. An empty base
+directory is a bounded result with a start hint. Add `--contract v2 --json`
+for the machine document. No-run errors from other commands name the
+resolved project root, task file, and searched base and runtime locations,
+and point at `looper runs` for discovery.
 
 ## Configuration
 
@@ -605,15 +714,31 @@ See [migration instructions](docs/migration.md) before upgrading an older runner
 Run these commands inside the project directory:
 
 ```sh
-looper status --json
-looper events --json --follow
-looper inspect T054 --json
-looper doctor --json
+looper status --contract v2 --json
+looper events --contract v2 --json
+looper inspect T054 --contract v2 --json
+looper doctor --contract v2 --json
 ```
 
 These commands read saved runtime records. They do not start workers or
 change task status. Stopping an event observer does not drain the
-controller.
+controller. Each version 2 document is one bounded JSON object with
+`limits` and `detail` routes naming what it omitted and where to read it.
+
+`looper wait` replaces a polling loop with one bounded call. It observes one
+predicate — a cursor change, a task status, a request outcome, or the run's
+end — and returns one outcome document:
+
+```sh
+looper wait --contract v2 --request req-1c0ffee --timeout 30s --json
+looper wait --contract v2 --task T054 --status done --timeout 120s --json
+```
+
+`--timeout` is required. Exit 0 means the condition held, exit 5 means the
+bound expired, and exit 6 means the caller interrupted the wait. A timeout
+or an interruption cancels nothing: the request, task, and controller keep
+their state. Mutation receipts and the compact status document name the
+exact wait that observes their outcome.
 
 `status --json` includes the saved state and an `observation` object with
 `schema_version: 1`. It reports controller ownership, the published view,
@@ -692,6 +817,22 @@ with `looper events --json --follow --after 123`. Without `--follow`, the
 command replays saved events. Worker activity includes the session, task,
 attempt, phase, and log path in `data`. Older events can omit `data`.
 
+Worker, verification, launcher, and resource-cleanup failures journal one
+bounded summary as a `failure` event: the operation, the tool or agent, the
+exit status when the process ran, a stable outcome, a short cause, and
+Looper-owned evidence references. The excerpt is at most 2 KiB, keeps the tail
+of the failing tool's own output, and is scrubbed of credential shapes; agent
+session streams are referenced, never quoted. Retrieve every summary with one
+query:
+
+    looper events --contract v2 --json --kind failure
+    looper events --contract v2 --json --kind failure --task T015
+
+A failed check also retains its summary as `failure.json` beside its logs.
+A cleanup that failed only on already-absent paths reports the outcome
+`cleanup_already_absent`, which stays distinguishable from an exit failure of
+the cleanup logic itself.
+
 A `shutdown` event records the controller session, reason, exit code, optional
 error, and last event ID. Reasons include `complete`, `drained`, `cancelled`,
 `error`, `panic`, `no_runnable_tasks`, and `dispatch_limit`. The session end and
@@ -737,11 +878,25 @@ an execution replay engine.
 
 If you commit files that Looper has already published, restart with `looper`.
 Looper accepts a descendant commit on the same branch when the committed files
-and working files match its accepted tree or its verified publication candidate.
-It preserves your commit and finishes retained publication through the usual checks.
+and working files match its accepted tree or its verified publication candidate,
+or when the commit changes no file inside a retained or published attempt's
+write scope. It preserves your commit and finishes retained publication through
+the usual checks.
 Staged project changes, other file edits, branch switches, and changed backlog
 contracts require reconciliation. `looper doctor --json` reports a moved branch
 and the last recorded shutdown before you attempt recovery.
+
+### Commit to the project while a run is live
+
+You can commit files the run does not depend on while the controller keeps a
+run live. When the commit is a descendant of the run's baseline and changes no
+file inside a retained or published attempt's write scope, the next boundary
+accepts it: the run folds the commit into its baseline, records a `recovery`
+event that names the accepted commit and its changed paths, and continues.
+A held publication re-verifies against the folded baseline before it
+publishes. A commit that changes a file inside a write scope competes with
+retained work; the run retains everything and the resume requires
+reconciliation.
 
 ### Add tasks during a run
 
@@ -766,13 +921,86 @@ and priorities from 1 through 5. Dependencies can refer to existing tasks or
 other tasks in the batch. The controller validates the complete batch before
 adding it. Existing tasks and active attempts stay intact.
 
-Add `--json` for a structured acknowledgement. The command waits up to 30
-seconds. A timeout reports the request ID; the request can still apply later.
-Check `looper status` before submitting it again. Requests belong to the
-current controller session. If that session ends before application, inspect
-the backlog before resubmitting. An invalid batch adds no tasks.
+Add `--json` for a structured acknowledgement. The command returns a receipt
+at once and the controller owns the outcome; query it with `looper requests
+<id>`. Add `--wait` to wait for the applied acknowledgement, bounded by
+`--wait-timeout` (default 30 seconds). A timeout reports the request ID; the
+request can still apply later. Check `looper status` before submitting it
+again. Requests belong to the current controller session. If that session
+ends before application, inspect the backlog before resubmitting. An invalid
+batch adds no tasks.
+
+Pass `--idempotency-key <key>` to make a retry safe. The key is scoped to
+this project and this operation: repeating the same key with the same task
+batch returns the original request instead of adding the tasks twice, and a
+changed batch under the same key is rejected as a conflict. Distinct keys
+with identical content both apply, so intentional repeats stay possible. A
+key is 1 to 128 bytes without control characters. Keys answer from the
+retained request receipts: a request that is still running keeps its receipt,
+and at most the newest 200 decided receipts stay per run, so a key whose
+receipt was pruned behaves as fresh.
 
 This command needs an active controller built with support for `add-task`.
 Installing a new binary does not update an existing controller. Use
 `looper add-plan requirements.md` when the planner should create tasks from
-requirements.
+requirements. `add-plan` and `looper config` accept `--idempotency-key` with
+the same semantics; for `add-plan` the key addresses the plan content, not
+its path.
+
+### Cancel tasks during a run
+
+Use `looper cancel <task-id>` to withdraw open work through the active
+controller. The command reads the task from your task file and sends its
+revision with the request: if the task changed, completed, or left the
+backlog since you read it, the controller refuses with a conflict and
+changes nothing. Done work is accepted history and cannot be cancelled.
+
+A task that other live tasks depend on is refused by name, because a
+cancelled dependency never satisfies a dependent. Pass `--cascade` to cancel
+the transitive live dependent set in one decision; dependents that are
+already done keep their history.
+
+When the target has work in flight, the cancellation is recorded and waits:
+the receipt reports `waiting` with the reason `active_work`, the running
+worker finishes first — its verified result still passes the checks and is
+never discarded — and the cancellation applies at the first boundary where
+the work drained. If the work completed first, the task stays done and the
+request records that outcome. A restart between the decision and the drain
+keeps the decision.
+
+The command returns a receipt at once; query it with `looper requests <id>`.
+Add `--wait` for one bounded wait that reports the record, and
+`--idempotency-key` with the same semantics as `add-task`. Cancelled tasks
+carry the `cancelled` status in the task file, never `done`: they stay in
+the backlog for inspection, never re-enter the ready set, and `looper
+status --contract v2` counts them under `work.counts.cancelled`. This
+command needs an active controller built with support for `cancel-task`.
+
+### Amend tasks during a run
+
+Use `looper amend <task-id> <task.json>` to change one task contract through
+the active controller. The file carries the complete amended task: title,
+priority, details, steps, `depends_on`, files, blockers, tags, and
+`unblock_when`. Identity, status, and `created_at` are not amendable, and the
+control tags Looper owns (`project-done`, `looper:operator`, `looper:deferred`,
+`looper:finding:*`) cannot be added or removed through a request.
+
+The request carries the task revision your task file held. If the task
+changed, left the backlog, or a held task-file edit is waiting for its
+boundary import, the controller refuses with a conflict and changes nothing.
+Dependency cycles, unknown dependencies, duplicate identifiers, and invalid
+write paths are refused before anything commits.
+
+Work that holds the task contract — running, verifying, ready, integrated, or
+resume attempts — is refused with the boundary named, because a contract
+cannot change under a worker. Wait for the work to finish or cancel it, then
+amend the drained task. A done task is never rewritten: the changed
+requirements create a follow-up task named `<task-id>-amend-<n>` while the
+accepted task, its attempts, and its results stay as they were. A cancelled
+task refuses and points at `looper add-task`.
+
+The command returns a receipt at once; query it with `looper requests <id>`,
+add `--wait` for one bounded wait, and pass `--idempotency-key` with the same
+semantics as `add-task`. This command needs an active controller built with
+support for `amend-task`. Installing a new binary does not update a running
+controller.

@@ -1,0 +1,29 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.status.compact",
+  "generated_at": "2026-11-05T10:15:04Z",
+  "project": { "root": "/home/agent/demo", "name": "demo", "todo_path": "/home/agent/demo/to-do.json" },
+  "run": { "id": "run-4f39faa5451b464d", "controller_session": "run-4f39faa5451b464d", "mode": "detached", "started_at": "2026-11-05T10:14:24Z" },
+  "builds": {
+    "client": { "release": "0.9.0", "revision": "297e7ee1", "modified": false },
+    "controller": { "release": "0.9.0", "revision": "297e7ee1", "modified": false },
+    "match": true
+  },
+  "controller": { "state": "starting", "owned": true, "ownership_evidence": "lock", "ownership_age_seconds": 40 },
+  "work": {
+    "counts": { "done": 0, "todo": 0, "blocked": 0, "ready": 0 },
+    "active": [],
+    "phases": [ { "phase": "bootstrap", "age_seconds": 12, "detail": "reading project requirements with the claude agent" } ]
+  },
+  "waiting": { "reason": "bootstrap", "detail": "The controller is reading project requirements; the first backlog is not saved yet.", "age_seconds": 40 },
+  "requests": { "pending": 0 },
+  "findings": [],
+  "last_transition": null,
+  "cursor": { "event_id": 0, "scope": "store", "store_id": "demo-3f2a/state.db", "store_epoch": 1 },
+  "limits": { "bytes_budget": 8192, "active_max": 16, "findings_max": 16, "string_max": 200, "omitted": {} },
+  "detail": {
+    "full": "looper status --contract v2 --full",
+    "events": "looper events --contract v2 --after 0"
+  }
+}

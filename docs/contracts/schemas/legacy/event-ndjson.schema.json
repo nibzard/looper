@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/event-ndjson.schema.json",
+  "title": "Looper events --json line (legacy contract, frozen)",
+  "description": "One line of the newline-delimited JSON stream that `looper events --json` and `looper tail --json` emit today. NDJSON stays the format for explicit streaming; finite event queries return one document per call under contract version 2 (AX-006). The optional structured identity fields arrive with AX-007.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "time", "kind", "message"],
+  "properties": {
+    "data": {
+      "type": "object",
+      "description": "Structured payload the event was written with. Absent when the writer supplied none."
+    },
+    "id": { "type": "integer", "minimum": 1 },
+    "time": { "type": "string" },
+    "kind": { "type": "string" },
+    "message": { "type": "string" }
+  }
+}

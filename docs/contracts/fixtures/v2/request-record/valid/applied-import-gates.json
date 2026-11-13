@@ -1,0 +1,25 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.request.record",
+  "request": {
+    "id": "import-01h4x9",
+    "type": "add-plan",
+    "state": "applied",
+    "age_seconds": 140,
+    "controller_session": "run-4f39faa5451b464d",
+    "submitted_at": "2026-11-05T10:14:58Z",
+    "decided_at": "2026-11-05T10:17:00Z",
+    "affected_tasks": ["T070", "T071"],
+    "plan_coverage": {
+      "added_tasks": ["T070", "T071"],
+      "adjustments": ["T071 now depends on T070"],
+      "gates": [ { "task_id": "T012", "depends_on": ["T070"] } ]
+    },
+    "result": {
+      "summary": "2 task(s) added, 0 covered (T070, T071)",
+      "added_task_ids": ["T070", "T071"]
+    }
+  },
+  "continuation": { "command": "looper requests import-01h4x9 --contract v2" }
+}

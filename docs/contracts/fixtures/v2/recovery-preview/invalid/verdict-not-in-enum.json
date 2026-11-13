@@ -1,0 +1,49 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.recovery.preview",
+  "generated_at": "2026-11-06T09:45:00Z",
+  "project": {
+    "root": "/home/agent/stackfall",
+    "todo_path": "/home/agent/stackfall/to-do.json",
+    "runtime_dir": "/home/agent/.looper/stackfall-b17f/runtime"
+  },
+  "run": {
+    "id": "run-9c41d2aa7f30e1b6",
+    "retained": true,
+    "retained_tasks": [],
+    "retained_task_total": 0,
+    "attempts": [],
+    "attempt_total": 0,
+    "publication_held": false
+  },
+  "controller": { "state": "stopped", "owned": false },
+  "token": {
+    "value": "b0c8275d9e3a41f68b7c5d0e9f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
+    "note": "Present this token to the recovery application operation."
+  },
+  "comparisons": {
+    "task_file": {
+      "state": "match",
+      "changed_contracts": [],
+      "added_contracts": [],
+      "removed_contracts": []
+    },
+    "branch": { "state": "maybe" },
+    "working_tree": { "state": "matches_published" }
+  },
+  "guards": [
+    { "code": "backlog_contract_changed", "verdict": "probably", "detail": "a verdict the contract does not define" }
+  ],
+  "choices": [
+    { "name": "resume", "status": "probably-fine" }
+  ],
+  "limits": {
+    "bytes_budget": 8192,
+    "string_max": 256,
+    "paths_max": 20,
+    "tasks_max": 16,
+    "omitted": { "retained_tasks": 0 }
+  },
+  "detail": {}
+}

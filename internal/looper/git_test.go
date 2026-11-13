@@ -3,12 +3,14 @@ package looper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Snapshot trees exclude control files, but prompts name the backlog and its
@@ -292,5 +294,122 @@ func TestCustomTaskFileGuardsSchemaSymlink(t *testing.T) {
 				t.Fatalf("a symlinked %s must be rejected, got %v", tc.victim, err)
 			}
 		})
+	}
+}
+
+// A failed merge is a content conflict only when the worktree index holds
+// unmerged paths. A missing object and a killed invocation keep the conflict
+// label off while the original error survives both classification and
+// feedback, so the operator is never sent to resolve conflicts that no
+// repository evidence shows.
+func TestMergeClassifiesConflictFromOtherFailures(t *testing.T) {
+	c := repoConfig(t, "run")
+	todo := Backlog{Version: 1, Sources: []string{}, Goal: "existing goal", Tasks: []Task{
+		{ID: "T001", Title: "existing", Priority: 1, Status: "todo"},
+	}}
+	if err := writeJSON(c.Todo, todo); err != nil {
+		t.Fatal(err)
+	}
+	e, lock, err := NewEngine(c, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.initialize(context.Background()); err != nil {
+		lock.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Store.Close(); lock.Close() })
+	// One committed side per divergent edit, exactly as an accepted
+	// integration and a worker result diverge from one base.
+	side := func(content string) string {
+		work, err := e.Repo.Workspace(identifier("check"), e.State.Tip, e.State.Backlog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer e.Repo.Remove(work)
+		if err = os.WriteFile(filepath.Join(work, "shared.txt"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		tree, err := e.Repo.Snapshot(work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit, err := e.Repo.Commit(tree, []string{e.State.Tip}, "Diverge "+content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return commit
+	}
+	worker := side("worker implementation\n")
+	integrated := side("integrated implementation\n")
+	work, err := e.Repo.Workspace(identifier("check"), integrated, e.State.Backlog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Repo.Remove(work) })
+
+	err = e.Repo.Merge(work, worker)
+	var conflict *MergeError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("a conflicting merge must return a MergeError, got %v", err)
+	}
+	if !conflict.Checked || len(conflict.Unmerged) != 1 || conflict.Unmerged[0] != "shared.txt" {
+		t.Fatalf("conflict not verified from the worktree index: %+v", conflict)
+	}
+	feedback := mergeFailureFeedback("task", err)
+	for _, want := range []string{"conflicts with the integrated project", "shared.txt", "CONFLICT"} {
+		if !strings.Contains(feedback, want) {
+			t.Fatalf("conflict feedback lacks %q: %s", want, feedback)
+		}
+	}
+
+	// A Git failure that leaves no unmerged paths is not a conflict.
+	missing := strings.Repeat("0123456789", 4)
+	fresh, err := e.Repo.Workspace(identifier("check"), integrated, e.State.Backlog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Repo.Remove(fresh) })
+	err = e.Repo.Merge(fresh, missing)
+	var failure *MergeError
+	if !errors.As(err, &failure) {
+		t.Fatalf("a failed merge must return a MergeError, got %v", err)
+	}
+	if !failure.Checked || len(failure.Unmerged) != 0 {
+		t.Fatalf("a missing object must verify as conflict-free: %+v", failure)
+	}
+	if !strings.Contains(failure.Err.Error(), missing) {
+		t.Fatalf("the original Git error was lost: %v", failure.Err)
+	}
+	feedback = mergeFailureFeedback("task", err)
+	if !strings.Contains(feedback, "failed without a content conflict") || !strings.Contains(feedback, missing) {
+		t.Fatalf("failure feedback must name the operation and the actual error: %s", feedback)
+	}
+	if strings.Contains(feedback, "conflicts with the integrated project") {
+		t.Fatalf("a non-conflict failure reads as a conflict: %s", feedback)
+	}
+
+	// A killed invocation cannot be checked; the conflict status stays unknown
+	// instead of asserted in either direction.
+	previous := gitTimeout
+	gitTimeout = time.Nanosecond
+	defer func() { gitTimeout = previous }()
+	err = e.Repo.Merge(fresh, worker)
+	var killed *MergeError
+	if !errors.As(err, &killed) {
+		t.Fatalf("a killed merge must return a MergeError, got %v", err)
+	}
+	if killed.Checked || len(killed.Unmerged) != 0 {
+		t.Fatalf("a killed merge must stay unverified: %+v", killed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the original timeout error was lost: %v", err)
+	}
+	feedback = mergeFailureFeedback("task", err)
+	if !strings.Contains(feedback, "could not be checked for content conflicts") {
+		t.Fatalf("unverified feedback must say so: %s", feedback)
+	}
+	if strings.Contains(feedback, "conflicts with the integrated project") {
+		t.Fatalf("an unverified failure reads as a conflict: %s", feedback)
 	}
 }

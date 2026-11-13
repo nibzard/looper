@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/legacy/plan-import-ack.schema.json",
+  "title": "Looper plan import result (legacy contract, frozen)",
+  "description": "The document `looper add-plan --json` prints after waiting for the import. It reports the durable import receipt's outcome, added task identifiers, coverage of requirements that needed no new task, and conflicts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "status", "controller_session"],
+  "properties": {
+    "version": { "type": "integer" },
+    "type": { "type": "string" },
+    "id": { "type": "string" },
+    "status": { "enum": ["queued", "waiting", "planning", "applied", "failed"] },
+    "controller_session": { "type": "string" },
+    "added_task_ids": { "type": ["array", "null"], "items": { "type": "string" } },
+    "coverage": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement"],
+        "properties": {
+          "requirement": { "type": "string" },
+          "task_id": { "type": "string" },
+          "evidence": { "type": "string" }
+        }
+      }
+    },
+    "conflicts": { "type": ["array", "null"], "items": { "type": "string" } },
+    "adjustments": { "type": ["array", "null"], "items": { "type": "string" } },
+    "gates": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "depends_on"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "depends_on": { "type": ["array", "null"], "items": { "type": "string" } }
+        }
+      }
+    },
+    "error": { "type": "string" }
+  }
+}

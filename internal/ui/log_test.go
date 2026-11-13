@@ -24,3 +24,38 @@ func TestReadableLogPreservesEvidenceAndCompactsSpacing(t *testing.T) {
 		t.Fatalf("missing log navigation: %s", footer)
 	}
 }
+
+// hasControl reports any character a terminal would act on rather than print.
+// Newlines separate viewport lines and are the one control character a log may
+// keep.
+func hasControl(s string) bool {
+	for _, r := range s {
+		if r != '\n' && (r < 0x20 || r == 0x7f) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReadableLogStripsTerminalControls(t *testing.T) {
+	// Agent tool names, commands, and paths arrive from the event stream, and
+	// the raw fallback carries stored bytes. Both reach this one viewport.
+	input := "Bash \x1b[31mrm -rf /tmp/x\x1b[0m\n" +
+		"\x1b]0;stolen title\x07Grep pattern in src\n" +
+		"vertical\x0btab and bel\x07\n" +
+		"unterminated \x1b]0;osc\n" +
+		"delete\x7f me\n" +
+		"clean line"
+	text := ansi.Strip(readableLog(input))
+	if hasControl(text) {
+		t.Fatalf("terminal controls reached the log viewport: %q", text)
+	}
+	for _, want := range []string{"rm -rf /tmp/x", "Grep pattern in src", "clean line"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lost readable evidence %q in %q", want, text)
+		}
+	}
+	if strings.Contains(text, "stolen title") || strings.Contains(text, "osc") {
+		t.Fatalf("escape payload survived: %q", text)
+	}
+}
