@@ -1,0 +1,18 @@
+# Context
+
+The owner requested one commit containing all pending Looper work,
+including their existing changes and the named agent profile redesign.
+The snapshot includes versioned command contracts, controller and request
+lifecycle work, recovery, dashboard behavior, installers, documentation,
+and evaluation fixtures.
+
+Named profiles bind commands to protocol adapters. Project roles select
+profiles independently, allowing separate Anthropic and Z.ai entry points
+through the Claude Code adapter. Controllers retain a machine definition
+snapshot. Future agents can implement the same adapter boundary.
+
+Build, static checks, focused Go tests, focused race tests, command-level
+runtime tests, and live checks through both providers passed. The full
+regression suite is incomplete and is not recorded as passing. Tests now
+isolate machine catalogs per fixture and guard against accidental live
+agent invocations. Pi integration remains future work.
