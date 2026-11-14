@@ -1,0 +1,42 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.show",
+  "generated_at": "2026-11-14T00:33:02.784115071Z",
+  "scope": "project",
+  "saved": {
+    "worker": "claude-alt",
+    "reviewer": "",
+    "jobs": 2,
+    "model": "",
+    "claude_model": "",
+    "effort": "",
+    "verify_command": "make check",
+    "setup_command": "",
+    "review_every": 5
+  },
+  "effective": {
+    "worker": { "value": "claude-alt", "source": "profile" },
+    "reviewer": { "value": "claude-alt", "source": "default" },
+    "jobs": { "value": 2, "source": "profile" },
+    "model": { "value": "", "source": "default" },
+    "claude_model": { "value": "", "source": "default" },
+    "effort": { "value": "", "source": "default" },
+    "verify_command": { "value": "make check", "source": "profile" },
+    "setup_command": { "value": "", "source": "default" },
+    "review_every": { "value": 5, "source": "profile" }
+  },
+  "machine": {
+    "path": "/home/operator/.config/looper/agents.json",
+    "exists": true,
+    "revision": "a3f94c569e707b9b3e32c18af4ba9aa5dad0aa1a24d6a77b62ef7485768c22bb",
+    "worker": "claude-alt",
+    "reviewer": "",
+    "agents": [
+      { "name": "claude-alt", "adapter": "claude", "command": "/usr/local/bin/claude-alt" }
+    ],
+    "agent_total": 1
+  },
+  "controller": { "state": "stopped" },
+  "detail": { "status": "project settings", "note": "saved values apply when the next controller starts" }
+}

@@ -2,6 +2,7 @@ package looper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -139,6 +140,10 @@ func loadAgentCatalog(path string) (*AgentCatalog, error) {
 	return &catalog, nil
 }
 
+// errCatalogConcurrent reports a lost revision race between a catalog read
+// and its save. Callers map it to a structured retryable conflict.
+var errCatalogConcurrent = errors.New("machine agents changed while editing; run looper config again")
+
 func saveAgentCatalog(path string, catalog *AgentCatalog) error {
 	if err := catalog.validate(); err != nil {
 		return err
@@ -155,7 +160,7 @@ func saveAgentCatalog(path string, catalog *AgentCatalog) error {
 		return fmt.Errorf("another configuration editor is saving machine agents; retry")
 	}
 	if catalog.revision != profileDigest(path) {
-		return fmt.Errorf("machine agents changed while editing; run looper config again")
+		return errCatalogConcurrent
 	}
 	data, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {

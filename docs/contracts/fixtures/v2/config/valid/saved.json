@@ -1,0 +1,29 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.saved",
+  "generated_at": "2026-11-14T00:33:02.780090675Z",
+  "scope": "project",
+  "revision": "d84a273adfbbf2be35f798ff6eeb06ba0abc8bac55cbd33932d7299ca7b99501",
+  "outcomes": [
+    {
+      "field": "worker",
+      "from": "",
+      "to": "claude-alt",
+      "outcome": "saved",
+      "note": "saved; it becomes effective when the next controller starts"
+    },
+    {
+      "field": "jobs",
+      "from": 0,
+      "to": 2,
+      "outcome": "saved",
+      "note": "saved; it becomes effective when the next controller starts"
+    }
+  ],
+  "journal": { "id": "cfgset-6b5fbcd6c09849d5", "state": "done" },
+  "detail": {
+    "status": "saved",
+    "note": "the changes become effective when the next controller starts"
+  }
+}

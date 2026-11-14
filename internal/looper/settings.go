@@ -208,6 +208,9 @@ func runConfig(c Config, in *os.File, out, stderr io.Writer) int {
 	if c.TestAgent != "" {
 		return testAgentProfile(c, out, stderr)
 	}
+	if configHeadlessRequested(c) {
+		return runConfigHeadless(c, out, stderr)
+	}
 	if repositoryOwned(c) {
 		return runConfigOnline(c, in, out, stderr)
 	}
@@ -895,24 +898,19 @@ func (e *Engine) applySettingsRequest(req *SettingsRequest) SettingsAck {
 	}
 	// Role names must exist in this controller's snapshot or in the newly
 	// saved machine catalog. New definitions can be saved for restart without
-	// allowing arbitrary unknown names into the project profile.
-	for key, name := range map[string]string{"agent": patched.Agent, "review_agent": patched.ReviewAgent} {
-		if _, touched := req.Fields[key]; !touched || name == "" {
+	// allowing arbitrary unknown names into the project profile. The shared
+	// validator keeps the live and stopped paths in agreement (OW-05).
+	for _, role := range []string{"agent", "review_agent"} {
+		if _, touched := req.Fields[role]; !touched {
 			continue
 		}
-		if _, err := e.Config.agentProfile(name); err == nil {
-			continue
+		name := patched.Agent
+		if role == "review_agent" {
+			name = patched.ReviewAgent
 		}
-		path := orDefault(e.Config.AgentCatalogPath, agentCatalogPath())
-		catalog, err := loadAgentCatalog(path)
-		if err != nil {
+		if err := validateProfileRole(e.Config, name); err != nil {
 			base.Status = AckError
 			base.Message = err.Error()
-			return base
-		}
-		if _, ok := catalog.Agents[name]; !ok {
-			base.Status = AckError
-			base.Message = fmt.Sprintf("unknown agent profile %q; add it with looper config", name)
 			return base
 		}
 	}

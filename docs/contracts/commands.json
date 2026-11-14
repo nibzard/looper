@@ -224,6 +224,16 @@
       "implemented": true
     },
     {
+      "name": "config",
+      "invocation": ["config", "--show", "--contract", "v2", "--json"],
+      "summary": "Read and change configuration without a terminal through schemas/v2/config.schema.json: --show reports saved values, effective values, sources, the machine catalog, and controller ownership; --preview validates one --set/--unset patch read-only with the revision and the application boundary; --set/--unset apply a project patch through the live settings request protocol or a journaled stopped save beside profile.json, and --scope machine edits the agent catalog outside any repository with --if-revision guarding concurrent edits. Live project edits answer with the request receipt schema instead.",
+      "legacy": null,
+      "v2": "schemas/v2/config.schema.json",
+      "streaming": false,
+      "owning_task": "OW-06",
+      "implemented": true
+    },
+    {
       "name": "amend",
       "invocation": ["amend", "T014", "task.json", "--json"],
       "summary": "Amend one task contract through a checked controller request: the file carries the complete amended task, the revision the caller read must match, dependency cycles and invalid write paths are refused before anything commits, work that holds the task (running, verifying, or retained) is refused with the boundary named, and a done task is never rewritten — the changed requirements create a follow-up task while the accepted result stays (--wait waits bounded for the record, --idempotency-key makes retries return the original request).",

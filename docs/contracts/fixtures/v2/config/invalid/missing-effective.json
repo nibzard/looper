@@ -1,0 +1,19 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.show",
+  "generated_at": "2026-11-14T00:33:02.784115071Z",
+  "scope": "project",
+  "saved": null,
+  "machine": {
+    "path": "/home/operator/.config/looper/agents.json",
+    "exists": false,
+    "revision": "",
+    "worker": "",
+    "reviewer": "",
+    "agents": [],
+    "agent_total": 0
+  },
+  "controller": { "state": "unknown" },
+  "detail": { "status": "project settings" }
+}

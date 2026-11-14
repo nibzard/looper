@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/config.schema.json",
+  "title": "Looper configuration documents (contract version 2)",
+  "description": "One document from the non-interactive looper config modes. --show reads saved and effective settings with their sources, the machine agent catalog, and the controller state; it changes nothing. --preview validates one patch read-only and reports the exact changes, the revision it read, and where the change applies. A saved document reports one applied change: a stopped project edit journals its result beside profile.json, and a machine edit is a catalog file transaction with a revision result. Live project edits answer with the request receipt schema instead.",
+  "oneOf": [
+    { "$ref": "#/$defs/show" },
+    { "$ref": "#/$defs/preview" },
+    { "$ref": "#/$defs/saved" }
+  ],
+  "$defs": {
+    "show": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "schema_version", "kind", "generated_at", "scope", "saved", "effective", "machine", "controller", "detail"],
+      "properties": {
+        "contract_version": { "const": 2 },
+        "schema_version": { "const": 1 },
+        "kind": { "const": "looper.config.show" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "scope": { "enum": ["project", "machine"] },
+        "saved": {
+          "oneOf": [
+            { "$ref": "#/$defs/savedProfile" },
+            { "type": "null" }
+          ],
+          "description": "The saved project profile with public field names; null on machine scope or when no profile exists."
+        },
+        "effective": {
+          "oneOf": [
+            { "$ref": "#/$defs/effective" },
+            { "type": "null" }
+          ],
+          "description": "The effective settings for this invocation with the source of each value; null on machine scope."
+        },
+        "machine": { "$ref": "#/$defs/machine" },
+        "controller": {
+          "oneOf": [
+            { "$ref": "#/$defs/controller" },
+            { "type": "null" }
+          ],
+          "description": "The controller ownership snapshot; null on machine scope. Show reads metadata only and never probes the lock."
+        },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "savedProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worker", "reviewer", "jobs", "model", "claude_model", "effort", "verify_command", "setup_command", "review_every"],
+      "properties": {
+        "worker": { "$ref": "#/$defs/valueString" },
+        "reviewer": { "$ref": "#/$defs/valueString" },
+        "jobs": { "type": "integer", "minimum": 0 },
+        "model": { "$ref": "#/$defs/valueString" },
+        "claude_model": { "$ref": "#/$defs/valueString" },
+        "effort": { "$ref": "#/$defs/valueString" },
+        "verify_command": { "$ref": "#/$defs/valueString" },
+        "setup_command": { "$ref": "#/$defs/valueString" },
+        "review_every": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "null" }
+          ],
+          "description": "Null means the profile stores no review frequency."
+        }
+      }
+    },
+    "effective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worker", "reviewer", "jobs", "model", "claude_model", "effort", "verify_command", "setup_command", "review_every"],
+      "properties": {
+        "worker": { "$ref": "#/$defs/valueSource" },
+        "reviewer": { "$ref": "#/$defs/valueSource" },
+        "jobs": { "$ref": "#/$defs/valueSource" },
+        "model": { "$ref": "#/$defs/valueSource" },
+        "claude_model": { "$ref": "#/$defs/valueSource" },
+        "effort": { "$ref": "#/$defs/valueSource" },
+        "verify_command": { "$ref": "#/$defs/valueSource" },
+        "setup_command": { "$ref": "#/$defs/valueSource" },
+        "review_every": { "$ref": "#/$defs/valueSource" }
+      }
+    },
+    "valueSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "$ref": "#/$defs/valueString" },
+            { "type": "integer", "minimum": 0 }
+          ]
+        },
+        "source": { "enum": ["default", "machine", "profile", "environment", "flag"] }
+      }
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "exists", "revision", "worker", "reviewer", "agents", "agent_total"],
+      "properties": {
+        "path": { "$ref": "#/$defs/pathString" },
+        "exists": { "type": "boolean" },
+        "revision": { "$ref": "#/$defs/digestOrEmpty" },
+        "worker": { "$ref": "#/$defs/valueString" },
+        "reviewer": { "$ref": "#/$defs/valueString" },
+        "agents": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "adapter", "command"],
+            "properties": {
+              "name": { "$ref": "#/$defs/boundedString" },
+              "adapter": { "$ref": "#/$defs/boundedString" },
+              "command": { "$ref": "#/$defs/boundedString" },
+              "model": { "$ref": "#/$defs/boundedString" },
+              "effort": { "$ref": "#/$defs/boundedString" }
+            }
+          }
+        },
+        "agent_total": { "type": "integer", "minimum": 0 },
+        "omitted_hint": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["owning", "stopped", "unknown"] },
+        "session": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "schema_version", "kind", "generated_at", "scope", "revision", "changes", "application", "if_revision_ok", "detail"],
+      "properties": {
+        "contract_version": { "const": 2 },
+        "schema_version": { "const": 1 },
+        "kind": { "const": "looper.config.preview" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "scope": { "enum": ["project", "machine"] },
+        "revision": { "$ref": "#/$defs/digestOrEmpty", "description": "The profile digest or catalog revision the patch was validated against." },
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/change" }
+        },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "description"],
+          "properties": {
+            "mode": { "enum": ["controller-request", "stopped-file", "catalog-file"] },
+            "description": { "$ref": "#/$defs/boundedString" },
+            "session": { "$ref": "#/$defs/boundedString" },
+            "command": { "$ref": "#/$defs/pathString" }
+          }
+        },
+        "if_revision_ok": { "type": "boolean", "description": "False when --if-revision named a revision that no longer matches; the apply refuses." },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "saved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "schema_version", "kind", "generated_at", "scope", "revision", "outcomes", "detail"],
+      "properties": {
+        "contract_version": { "const": 2 },
+        "schema_version": { "const": 1 },
+        "kind": { "const": "looper.config.saved" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "scope": { "enum": ["project", "machine"] },
+        "revision": { "$ref": "#/$defs/digest", "description": "The digest of the saved profile bytes or the new catalog revision." },
+        "outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/change" }
+        },
+        "journal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/boundedString" },
+            "state": { "enum": ["done", "failed"] }
+          }
+        },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "from", "to", "outcome"],
+      "properties": {
+        "field": { "$ref": "#/$defs/boundedString", "description": "The public field path: worker, reviewer, jobs, model, claude_model, effort, verify_command, setup_command, review_every, or agents.<name>.<field>." },
+        "from": { "$ref": "#/$defs/valueAny" },
+        "to": { "$ref": "#/$defs/valueAny" },
+        "outcome": {
+          "enum": ["saved", "saved-live", "saved-overridden", "saved-restart-required", "unchanged"],
+          "description": "saved-live applies at the next dispatch boundary; saved-overridden names an environment or flag override; saved-restart-required names a machine change a running controller has not loaded."
+        },
+        "note": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "valueAny": {
+      "oneOf": [
+        { "$ref": "#/$defs/valueString" },
+        { "type": "integer", "minimum": 0 },
+        { "type": "null" }
+      ]
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "$ref": "#/$defs/boundedString" },
+        "note": { "$ref": "#/$defs/boundedString" }
+      }
+    },
+    "boundedString": { "type": "string", "minLength": 1, "maxLength": 257 },
+    "valueString": { "type": "string", "maxLength": 1025 },
+    "pathString": { "type": "string", "minLength": 1, "maxLength": 1025 },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "digestOrEmpty": { "type": "string", "pattern": "^([0-9a-f]{64})?$" }
+  }
+}

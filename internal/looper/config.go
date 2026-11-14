@@ -661,6 +661,17 @@ func validateConfigModeFlags(c Config) error {
 		p.Observed = map[string]any{"--if-revision": true, "--scope": orDefault(c.ConfigScope, "project")}
 		return p
 	}
+	if c.ConfigScope == "machine" && (c.Reset || c.Wait || c.IdempotencyKey != "") {
+		p := usageFailure("option_conflict", "machine scope edits one catalog file; the reset, wait, and idempotency-key options belong to project requests")
+		p.Observed = map[string]any{"--scope": "machine", "--reset": c.Reset, "--wait": c.Wait, "--idempotency-key": c.IdempotencyKey != ""}
+		p.Actions = []ErrorAction{{Description: "Drop the project request options, or remove --scope machine."}}
+		return p
+	}
+	if c.Preview && len(c.ConfigSets) == 0 && len(c.ConfigUnsets) == 0 {
+		p := usageFailure("option_conflict", "--preview reports one patch; it needs at least one --set or --unset assignment")
+		p.Observed = map[string]any{"--preview": true, "--set": 0, "--unset": 0}
+		return p
+	}
 	return nil
 }
 

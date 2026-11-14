@@ -1,0 +1,29 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.show",
+  "generated_at": "2026-11-14T00:33:02.784115071Z",
+  "scope": "machine",
+  "saved": null,
+  "effective": null,
+  "machine": {
+    "path": "/home/operator/.config/looper/agents.json",
+    "exists": true,
+    "revision": "a3f94c569e707b9b3e32c18af4ba9aa5dad0aa1a24d6a77b62ef7485768c22bb",
+    "worker": "claude-alt",
+    "reviewer": "claude",
+    "agents": [
+      {
+        "name": "claude-alt",
+        "adapter": "claude",
+        "command": "/opt/tools/claude alt",
+        "model": "fable-5",
+        "effort": "high"
+      }
+    ],
+    "agent_total": 1,
+    "omitted_hint": "the catalog lists 33 agents; the document shows the first 32"
+  },
+  "controller": null,
+  "detail": { "status": "machine settings", "note": "machine scope reads no project state" }
+}

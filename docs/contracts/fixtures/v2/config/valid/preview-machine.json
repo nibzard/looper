@@ -1,0 +1,32 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.preview",
+  "generated_at": "2026-11-14T00:33:02.78889239Z",
+  "scope": "machine",
+  "revision": "",
+  "changes": [
+    {
+      "field": "agents.claude-alt.adapter",
+      "from": null,
+      "to": "claude",
+      "outcome": "saved-restart-required",
+      "note": "saved, but a running controller keeps its snapshot until it restarts"
+    },
+    {
+      "field": "agents.claude-alt.command",
+      "from": null,
+      "to": "/usr/local/bin/claude-alt",
+      "outcome": "saved-restart-required",
+      "note": "saved, but a running controller keeps its snapshot until it restarts"
+    }
+  ],
+  "application": {
+    "mode": "catalog-file",
+    "description": "The machine edit is a file transaction under the catalog lock with a revision result; running controllers keep their snapshot until they restart.",
+    "session": "run-7f3e",
+    "command": "looper config --scope machine --set agents.claude-alt.adapter=claude --set agents.claude-alt.command=/usr/local/bin/claude-alt --contract v2 --json"
+  },
+  "if_revision_ok": false,
+  "detail": { "status": "read-only validation; nothing changed" }
+}

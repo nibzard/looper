@@ -1,0 +1,18 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.saved",
+  "generated_at": "2026-11-14T00:33:02.780090675Z",
+  "scope": "repository",
+  "revision": "not-a-digest",
+  "outcomes": [
+    {
+      "field": "worker",
+      "from": "",
+      "to": "claude-alt",
+      "outcome": "applied-immediately",
+      "note": "an outcome the contract does not define"
+    }
+  ],
+  "detail": { "status": "saved" }
+}

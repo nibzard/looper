@@ -1,0 +1,38 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.config.preview",
+  "generated_at": "2026-11-14T00:33:02.78889239Z",
+  "scope": "project",
+  "revision": "d84a273adfbbf2be35f798ff6eeb06ba0abc8bac55cbd33932d7299ca7b99501",
+  "changes": [
+    {
+      "field": "worker",
+      "from": "claude",
+      "to": "claude-alt",
+      "outcome": "saved-overridden",
+      "note": "saved, but an environment variable or flag overrides the effective value"
+    },
+    {
+      "field": "review_every",
+      "from": 5,
+      "to": 0,
+      "outcome": "saved",
+      "note": "saved; it becomes effective when the next controller starts"
+    },
+    {
+      "field": "reviewer",
+      "from": null,
+      "to": "",
+      "outcome": "unchanged",
+      "note": "unchanged; the saved value already matches"
+    }
+  ],
+  "application": {
+    "mode": "stopped-file",
+    "description": "The stopped edit saves the profile under the repository lock and journals the result; it becomes effective when the next controller starts.",
+    "command": "looper config --set worker=claude-alt --set review_every=0 --contract v2 --json"
+  },
+  "if_revision_ok": true,
+  "detail": { "status": "read-only validation; nothing changed" }
+}
