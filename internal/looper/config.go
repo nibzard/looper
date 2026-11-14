@@ -40,6 +40,22 @@ type Config struct {
 	// choice (AX-017).
 	RecoveryChoice string
 	RecoveryToken  string
+	// PublishApply selects the checked publication application (the publish
+	// command); PublishMessage carries its commit message.
+	PublishApply   bool
+	PublishMessage string
+	// RequeueTask names the task one requeue targets and RequeueFresh selects
+	// the fresh-attempt mode that retires reusable attempts.
+	RequeueTask  string
+	RequeueFresh bool
+	// The non-interactive configuration modes: explicit assignments, removals,
+	// the read-only show, the scope the edits address, and the revision a
+	// script-sequenced edit requires.
+	ConfigSets       []string
+	ConfigUnsets     []string
+	ConfigShow       bool
+	ConfigScope      string
+	ConfigIfRevision string
 	// IdempotencyKey is the caller key one mutation carries (AX-012). It
 	// scopes to the project and the operation: the same key and payload
 	// returns the original request, and a changed payload is a conflict.
@@ -244,7 +260,7 @@ func requestsQueryCommand(command string) bool {
 // and accepts the explicit bounded --wait (AX-011). Stop joined the family in
 // AX-022: its wait is the durable, session-bound drain wait.
 func mutationWaitCommand(command string) bool {
-	return command == "add-task" || command == "add-plan" || command == "cancel" || command == "amend" || command == "config" || command == "recovery" || command == "stop"
+	return command == "add-task" || command == "add-plan" || command == "cancel" || command == "amend" || command == "config" || command == "recovery" || command == "requeue" || command == "stop"
 }
 
 // validateMutationWaitFlags checks the mutation wait options against the
@@ -427,8 +443,11 @@ func parseWaitTimeout(v string) (time.Duration, error) {
 // idempotency key (AX-012). The key makes a mutation retry-safe, so it
 // belongs to the submission commands; `looper stop` derives its request
 // identity from the controller it targets and is retry-safe without one.
+// The publish command keeps its own journaled receipts beside the project
+// rather than controller requests, and a requeue submission carries the key
+// like every other controller mutation.
 func idempotencyKeyCommand(command string) bool {
-	return command == "add-task" || command == "add-plan" || command == "cancel" || command == "amend" || command == "config" || command == "recovery"
+	return command == "add-task" || command == "add-plan" || command == "cancel" || command == "amend" || command == "config" || command == "recovery" || command == "publish" || command == "requeue"
 }
 
 // validateIdempotencyKeyFlags checks the caller key option against the
@@ -490,6 +509,159 @@ func validateForegroundFlags(c Config) error {
 	p.Expected = map[string]any{"option": "--foreground", "command": "tui"}
 	p.Observed = map[string]any{"option": "--foreground", "command": c.Command}
 	return p
+}
+
+// validatePublishFlags checks the publication options against the command
+// that received them. The publish command serves two operations: one
+// read-only preview and one checked application bound to the token that
+// preview issued.
+func validatePublishFlags(c Config) error {
+	options := []struct {
+		name     string
+		set      bool
+		commands string
+	}{
+		{"--apply", c.PublishApply, "looper publish"},
+		{"--message", c.PublishMessage != "", "looper publish --apply"},
+	}
+	for _, option := range options {
+		if option.set && c.Command != "publish" {
+			p := usageFailure("option_command_mismatch", option.name+" is supported by "+option.commands)
+			p.Expected = map[string]any{"option": option.name, "command": "publish"}
+			p.Observed = map[string]any{"option": option.name, "command": c.Command}
+			return p
+		}
+	}
+	if c.Command != "publish" {
+		return nil
+	}
+	if c.PublishApply == c.Preview {
+		p := usageFailure("usage_invalid", "looper publish serves two operations: --preview and --apply --token <token>")
+		p.Expected = map[string]any{"invocation": "looper publish --preview or looper publish --apply --token <token>"}
+		p.Observed = map[string]any{"invocation": "looper publish"}
+		p.Actions = []ErrorAction{{Description: "Preview the publication read-only first.", Command: "looper publish --preview --contract v2 --json"}}
+		return p
+	}
+	if c.PublishApply {
+		if c.RecoveryToken == "" {
+			p := usageFailure("usage_invalid", "a publication application requires the token from looper publish --preview")
+			p.Expected = map[string]any{"invocation": "looper publish --apply --token <token> --message <text>"}
+			p.Observed = map[string]any{"invocation": "looper publish --apply", "token": "missing"}
+			p.Actions = []ErrorAction{{Description: "Preview the publication and its token.", Command: "looper publish --preview --contract v2 --json"}}
+			return p
+		}
+		if !recoveryTokenPattern.MatchString(c.RecoveryToken) {
+			return optionValueInvalid("--token", c.RecoveryToken, "the 64-hex-digit token from looper publish --preview")
+		}
+	} else if c.RecoveryToken != "" {
+		p := usageFailure("option_conflict", "--token belongs to a publication application; name the operation with --apply")
+		p.Observed = map[string]any{"--token": true, "--apply": false}
+		return p
+	}
+	if c.PublishMessage != "" && !c.PublishApply {
+		p := usageFailure("option_conflict", "--message belongs to a publication application; pass --apply with it")
+		p.Observed = map[string]any{"--message": true, "--apply": false}
+		return p
+	}
+	if c.Preview && (c.Wait || c.IdempotencyKey != "" || c.PublishMessage != "") {
+		p := usageFailure("option_conflict", "--preview is one read; --wait, --idempotency-key, and --message belong to looper publish --apply")
+		p.Observed = map[string]any{"--preview": true, "--wait": c.Wait, "--idempotency-key": c.IdempotencyKey != "", "--message": c.PublishMessage != ""}
+		return p
+	}
+	return nil
+}
+
+// validateRequeueFlags checks the requeue options against the command that
+// received them. The fresh mode changes retry semantics, so it is an explicit
+// selection on the requeue command alone.
+func validateRequeueFlags(c Config) error {
+	if c.RequeueFresh && c.Command != "requeue" {
+		p := usageFailure("option_command_mismatch", "--fresh is supported by looper requeue")
+		p.Expected = map[string]any{"option": "--fresh", "command": "requeue"}
+		p.Observed = map[string]any{"option": "--fresh", "command": c.Command}
+		return p
+	}
+	if c.Command != "requeue" {
+		return nil
+	}
+	if c.RequeueTask == "" {
+		p := usageFailure("usage_invalid", "requeue names one blocked task by identifier")
+		p.Expected = map[string]any{"invocation": "looper requeue <task-id> [--fresh]"}
+		p.Observed = map[string]any{"invocation": "looper requeue", "task_id": "missing"}
+		return p
+	}
+	if c.Preview && (c.Wait || c.IdempotencyKey != "") {
+		p := usageFailure("option_conflict", "--preview is one read; --wait and --idempotency-key belong to a submission")
+		p.Observed = map[string]any{"--preview": true, "--wait": c.Wait, "--idempotency-key": c.IdempotencyKey != ""}
+		return p
+	}
+	return nil
+}
+
+// configModeNames lists the non-interactive configuration options for error
+// messages.
+const configModeOptionNames = "--set, --unset, --show, --scope, and --if-revision"
+
+// validateConfigModeFlags checks the non-interactive configuration options
+// against the command that received them and against each other. One command
+// addresses one scope with one mode: show and preview are reads, set and
+// unset are one patch, and the reset and live agent test stay separate.
+func validateConfigModeFlags(c Config) error {
+	options := []struct {
+		name  string
+		set   bool
+		value string
+	}{
+		{"--set", len(c.ConfigSets) > 0, ""},
+		{"--unset", len(c.ConfigUnsets) > 0, ""},
+		{"--show", c.ConfigShow, ""},
+		{"--scope", c.ConfigScope != "", c.ConfigScope},
+		{"--if-revision", c.ConfigIfRevision != "", c.ConfigIfRevision},
+	}
+	for _, option := range options {
+		if !option.set || c.Command == "config" {
+			continue
+		}
+		p := usageFailure("option_command_mismatch", option.name+" is supported by looper config")
+		p.Expected = map[string]any{"option": option.name, "command": "config"}
+		p.Observed = map[string]any{"option": option.name, "command": c.Command}
+		if option.value != "" {
+			p.Observed["value"] = clampString(option.value, 128)
+		}
+		return p
+	}
+	if c.Command != "config" {
+		return nil
+	}
+	if c.ConfigShow && (len(c.ConfigSets) > 0 || len(c.ConfigUnsets) > 0 || c.Reset || c.Preview || c.TestAgent != "") {
+		p := usageFailure("option_conflict", "--show is one read; it does not combine with patching, reset, preview, or the agent test")
+		p.Observed = map[string]any{"--show": true, "--set": len(c.ConfigSets) > 0, "--unset": len(c.ConfigUnsets) > 0, "--reset": c.Reset, "--preview": c.Preview, "--test-agent": c.TestAgent != ""}
+		return p
+	}
+	if c.Reset && (len(c.ConfigSets) > 0 || len(c.ConfigUnsets) > 0 || c.Preview) {
+		p := usageFailure("option_conflict", "--reset removes the saved profile; it does not combine with patch modes")
+		p.Observed = map[string]any{"--reset": true, "--set": len(c.ConfigSets) > 0, "--unset": len(c.ConfigUnsets) > 0, "--preview": c.Preview}
+		return p
+	}
+	if len(c.ConfigSets) > 0 && len(c.ConfigUnsets) > 0 {
+		setKeys := map[string]bool{}
+		for _, assignment := range c.ConfigSets {
+			setKeys[strings.SplitN(assignment, "=", 2)[0]] = true
+		}
+		for _, field := range c.ConfigUnsets {
+			if setKeys[field] {
+				p := usageFailure("option_conflict", "one field cannot be set and unset in the same command: "+field)
+				p.Observed = map[string]any{"field": field}
+				return p
+			}
+		}
+	}
+	if c.ConfigIfRevision != "" && c.ConfigScope != "machine" {
+		p := usageFailure("option_conflict", "--if-revision guards a machine catalog edit; it belongs to --scope machine")
+		p.Observed = map[string]any{"--if-revision": true, "--scope": orDefault(c.ConfigScope, "project")}
+		return p
+	}
+	return nil
 }
 
 // afterOptionCommand reports whether a command accepts --after: the journal
@@ -613,19 +785,26 @@ func validateEventQueryFlags(c Config) error {
 	return nil
 }
 
+// previewCommand reports whether a command serves a read-only --preview
+// beside its mutation: the recovery preview (AX-016), the publish preview,
+// the requeue preview, and the configuration patch preview.
+func previewCommand(command string) bool {
+	return command == "recovery" || command == "publish" || command == "requeue" || command == "config"
+}
+
 // validateRecoveryFlags checks the recovery options against the command that
 // received them. The preview and the checked application are the two
 // operations looper recovery serves (AX-016, AX-017): exactly one must be
 // selected, an application requires its preview token, and a token belongs to
 // an application alone.
 func validateRecoveryFlags(c Config) error {
-	if c.Preview && c.Command != "recovery" {
-		p := usageFailure("option_command_mismatch", "--preview is supported by looper recovery")
-		p.Expected = map[string]any{"option": "--preview", "command": "recovery"}
+	if c.Preview && !previewCommand(c.Command) {
+		p := usageFailure("option_command_mismatch", "--preview is supported by looper recovery, looper publish, looper requeue, and looper config")
+		p.Expected = map[string]any{"option": "--preview", "command": "recovery, publish, requeue, or config"}
 		p.Observed = map[string]any{"option": "--preview", "command": c.Command}
 		return p
 	}
-	if (c.RecoveryChoice != "" || c.RecoveryToken != "") && c.Command != "recovery" {
+	if (c.RecoveryChoice != "" || (c.RecoveryToken != "" && c.Command != "publish")) && c.Command != "recovery" {
 		p := usageFailure("option_command_mismatch", "--apply and --token are supported by looper recovery")
 		p.Expected = map[string]any{"option": "--apply, --token", "command": "recovery"}
 		p.Observed = map[string]any{"option": "--apply, --token", "command": c.Command}
@@ -744,7 +923,7 @@ func Parse(args []string) (Config, error) {
 		}
 		var v string
 		switch a {
-		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-task", "add-plan", "cancel", "amend", "events", "inspect", "recovery", "preflight", "runs", "requests", "wait", "help":
+		case "run", "status", "stop", "doctor", "tail", "version", "start", "tui", "attach", "config", "add-task", "add-plan", "cancel", "amend", "publish", "requeue", "events", "inspect", "recovery", "preflight", "runs", "requests", "wait", "help":
 			if c.Command == "help" && a != "help" {
 				// `looper help <command>`: the word names the block to serve,
 				// not a second command.
@@ -889,6 +1068,12 @@ func Parse(args []string) (Config, error) {
 		case "--preview":
 			c.Preview = true
 		case "--apply":
+			if c.Command == "publish" {
+				// The publish command applies one previewed operation; it has
+				// no enumerated choice to name.
+				c.PublishApply = true
+				continue
+			}
 			v, err = value()
 			if err != nil {
 				return c, err
@@ -899,6 +1084,43 @@ func Parse(args []string) (Config, error) {
 				return c, p
 			}
 			c.RecoveryChoice = v
+		case "--message":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			c.PublishMessage = v
+		case "--fresh":
+			c.RequeueFresh = true
+		case "--set":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			c.ConfigSets = append(c.ConfigSets, v)
+		case "--unset":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			c.ConfigUnsets = append(c.ConfigUnsets, v)
+		case "--show":
+			c.ConfigShow = true
+		case "--scope":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			if v != "project" && v != "machine" {
+				return c, optionValueInvalid("--scope", v, "project or machine")
+			}
+			c.ConfigScope = v
+		case "--if-revision":
+			v, err = value()
+			if err != nil {
+				return c, err
+			}
+			c.ConfigIfRevision = v
 		case "--token":
 			v, err = value()
 			if err != nil {
@@ -1075,6 +1297,15 @@ func Parse(args []string) (Config, error) {
 				c.CancelTask = a
 				continue
 			}
+			if c.Command == "requeue" {
+				if c.RequeueTask != "" {
+					p := usageFailure("usage_invalid", "requeue accepts one task ID")
+					p.Observed = map[string]any{"task_ids": 2}
+					return c, p
+				}
+				c.RequeueTask = a
+				continue
+			}
 			if c.Command == "wait" {
 				// A positional cannot name a predicate: the wait options are
 				// flags, so a bare word is a task-file path nobody asked for.
@@ -1145,6 +1376,15 @@ func Parse(args []string) (Config, error) {
 		return c, err
 	}
 	if err = validateInterruptFlags(c); err != nil {
+		return c, err
+	}
+	if err = validatePublishFlags(c); err != nil {
+		return c, err
+	}
+	if err = validateRequeueFlags(c); err != nil {
+		return c, err
+	}
+	if err = validateConfigModeFlags(c); err != nil {
 		return c, err
 	}
 	// Resolution starts here. Layer 1 is the built-in defaults; automatic

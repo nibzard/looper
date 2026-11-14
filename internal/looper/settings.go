@@ -333,12 +333,13 @@ const SettingsRequestVersion = 1
 // Request types share one transport. Settings requests live for one
 // controller session; plan-import requests carry durable receipts instead.
 const (
-	RequestTypeSettings   = "settings"
-	RequestTypePlanImport = "plan-import"
-	RequestTypeRequeue    = "requeue"
-	RequestTypeCancel     = "cancel"
-	RequestTypeAmend      = "amend"
-	RequestTypeRecovery   = "recovery"
+	RequestTypeSettings     = "settings"
+	RequestTypePlanImport   = "plan-import"
+	RequestTypeRequeue      = "requeue"
+	RequestTypeRequeueFresh = "requeue-fresh"
+	RequestTypeCancel       = "cancel"
+	RequestTypeAmend        = "amend"
+	RequestTypeRecovery     = "recovery"
 )
 
 // SettingsRequest is a typed controller request written atomically to
@@ -367,6 +368,11 @@ type SettingsRequest struct {
 	// stale preview without mutation.
 	RecoveryChoice string `json:"recovery_choice,omitempty"`
 	RecoveryToken  string `json:"recovery_token,omitempty"`
+	// AttemptsRevision carries the attempt-set revision one fresh requeue
+	// read (requeue-fresh): the controller refuses when the task's attempts
+	// changed since the caller inspected them, because retirement must name
+	// every reusable attempt.
+	AttemptsRevision string `json:"attempts_revision,omitempty"`
 	// SubmitterPID and SubmitterIdentity bind a session-scoped request to the
 	// process waiting for its acknowledgement. The startup sweep uses the
 	// same identity check controller liveness uses to sweep only requests

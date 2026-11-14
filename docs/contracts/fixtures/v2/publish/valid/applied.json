@@ -1,0 +1,30 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.publish.applied",
+  "request_id": "publish-7d31a2",
+  "idempotency_key": "release-2026-11-14",
+  "duplicate": false,
+  "branch": {
+    "name": "main",
+    "old_commit": "413502bd9c4c",
+    "new_commit": "b7810c4ee2a9"
+  },
+  "accepted_tree": "8a1f77c02e11",
+  "changes": 2,
+  "control_files": [
+    {
+      "path": "docs/to-do.json",
+      "role": "task-file",
+      "included": true,
+      "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "note": "tracked; the commit carries the accepted exported bytes"
+    }
+  ],
+  "journal": { "id": "publish-7d31a2", "state": "done" },
+  "retained": { "attempts": 2, "tasks": ["T018", "T034"] },
+  "resume": {
+    "command": "looper",
+    "note": "Resume the controller when more work should run; it accepts the published head and repeats no completed work."
+  }
+}

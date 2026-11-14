@@ -311,7 +311,7 @@ func (e *Engine) validateRunRepair(p runRepair) error {
 		}
 		retained := false
 		for _, a := range e.State.Attempts {
-			if a.Task.ID == id && a.Phase == "blocked" && a.Task.Contract() == t.Contract() {
+			if a.Task.ID == id && a.Phase == "blocked" && !attemptRetired(a) && a.Task.Contract() == t.Contract() {
 				if _, err := os.Stat(a.Worktree); err == nil {
 					retained = true
 				}

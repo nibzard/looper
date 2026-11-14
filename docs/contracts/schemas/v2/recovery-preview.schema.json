@@ -169,7 +169,7 @@
         "additionalProperties": false,
         "required": ["name", "status"],
         "properties": {
-          "name": { "enum": ["resume", "publish-retained", "restore-task-file", "import-backlog", "discard-retained"] },
+          "name": { "enum": ["resume", "publish-retained", "commit-published", "restore-task-file", "import-backlog", "discard-retained"] },
           "status": { "enum": ["available", "blocked", "unsafe", "unsupported"], "description": "`unsupported` answers a force action by refusing it; `unsafe` names the missing evidence that prevents a safe recommendation." },
           "preserves": { "$ref": "#/$defs/stringList" },
           "changes": { "$ref": "#/$defs/stringList" },

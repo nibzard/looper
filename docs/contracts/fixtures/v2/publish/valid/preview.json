@@ -1,0 +1,69 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.publish.preview",
+  "run": {
+    "root": "/home/user/project",
+    "store_id": "store-9f2c",
+    "store_epoch": 3,
+    "ref": "refs/looper/run-413502b",
+    "backlog_tasks": 12
+  },
+  "branch": {
+    "name": "main",
+    "old_commit": "413502bd9c4c",
+    "accepted_tree": "8a1f77c02e11",
+    "proposed_tree": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "changes": {
+    "count": 2,
+    "paths": ["internal/app/main.go", "internal/app/main_test.go"],
+    "omitted": 0
+  },
+  "control_files": [
+    {
+      "path": "docs/to-do.json",
+      "role": "task-file",
+      "included": true,
+      "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "note": "tracked; the commit carries the accepted exported bytes"
+    },
+    {
+      "path": "docs/to-do.schema.json",
+      "role": "task-schema",
+      "included": true,
+      "digest": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      "note": "tracked; the commit preserves the tracked schema bytes"
+    }
+  ],
+  "tracked_runtime": {
+    "count": 1,
+    "paths": [".looper/run-413502b/state.db"],
+    "omitted": 0
+  },
+  "index": {
+    "staged_count": 0,
+    "lock_present": false,
+    "digest": "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"
+  },
+  "identity": {
+    "author_name": "Example Owner",
+    "author_email": "owner@example.test",
+    "signing": "disabled",
+    "hooks": "not-invoked"
+  },
+  "guards": [
+    { "code": "head_baseline", "verdict": "pass", "detail": "the project HEAD matches the saved baseline (413502b on main)" },
+    { "code": "index_clean", "verdict": "pass", "detail": "the index holds no staged changes" }
+  ],
+  "refusals": [],
+  "publishable": true,
+  "journal": { "state": "none", "revision": 0 },
+  "retained": { "attempts": 2, "tasks": ["T018", "T034"] },
+  "token": "5df6e0e2761359d30a8275058e299fcc3ffa0935126229e0e6c07ab1c1b1a4ad",
+  "apply": "looper publish --apply --token 5df6e0e2761359d30a8275058e299fcc3ffa0935126229e0e6c07ab1c1b1a4ad --message \"Accept Looper work\" --contract v2 --json",
+  "detail": {
+    "changes_command": "git diff --name-only 413502b 8a1f77c -- . ':(exclude)docs/to-do.json' ':(exclude)docs/to-do.schema.json'",
+    "status_command": "looper status --contract v2 --json"
+  }
+}

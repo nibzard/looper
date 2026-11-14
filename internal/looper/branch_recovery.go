@@ -131,6 +131,11 @@ func planWritePaths(p *Plan, id string) (paths []string, listed bool) {
 func protectedScopePaths(s *State) (paths []string, wholeRepository bool) {
 	seen := map[string]bool{}
 	for _, a := range s.Attempts {
+		if attemptRetired(a) {
+			// A retired attempt holds evidence, not work: its write scope
+			// no longer pins the project baseline.
+			continue
+		}
 		if s.Plan == nil {
 			return nil, true
 		}

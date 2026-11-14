@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "looper/contracts/schemas/v2/publish.schema.json",
+  "title": "Looper checked publication (contract version 2)",
+  "description": "The two documents the publish command serves under contract version 2. `looper publish --preview --contract v2 --json` returns the read-only preview: it composes the exact commit tree from the accepted tree and the project HEAD, runs every guard, and binds a content-sensitive token to what it observed. `looper publish --apply --token <token> --contract v2 --json` returns the application receipt after re-deriving the token under the repository and Git index locks, writing one project commit, advancing the branch by compare-and-swap, installing the prepared index, and reconciling the saved baseline.",
+  "oneOf": [
+    { "$ref": "#/$defs/preview" },
+    { "$ref": "#/$defs/applied" }
+  ],
+  "$defs": {
+    "boundedString": { "type": "string", "minLength": 1, "maxLength": 257 },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+    "pathString": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "digestOrEmpty": { "type": "string", "maxLength": 128 },
+    "detailString": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "pathList": { "type": "array", "maxItems": 40, "items": { "$ref": "#/$defs/pathString" } },
+    "shortPathList": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/pathString" } },
+    "taskList": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/boundedString" } },
+    "controlFiles": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "role", "included", "digest", "note"],
+        "properties": {
+          "path": { "$ref": "#/$defs/pathString" },
+          "role": { "enum": ["task-file", "task-schema"] },
+          "included": { "type": "boolean" },
+          "digest": { "$ref": "#/$defs/digestOrEmpty" },
+          "note": { "$ref": "#/$defs/detailString" }
+        }
+      }
+    },
+    "guards": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "verdict", "detail"],
+        "properties": {
+          "code": { "$ref": "#/$defs/boundedString" },
+          "verdict": { "enum": ["pass", "fail", "unknown"] },
+          "detail": { "$ref": "#/$defs/detailString" }
+        }
+      }
+    },
+    "refusals": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 512 } },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "schema_version", "kind", "run", "branch", "changes", "control_files", "tracked_runtime", "index", "identity", "guards", "publishable", "journal", "retained", "detail"],
+      "properties": {
+        "contract_version": { "const": 2 },
+        "schema_version": { "const": 1 },
+        "kind": { "const": "looper.publish.preview" },
+        "run": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["root", "store_id", "store_epoch", "ref", "backlog_tasks"],
+          "properties": {
+            "root": { "$ref": "#/$defs/pathString" },
+            "store_id": { "$ref": "#/$defs/boundedString" },
+            "store_epoch": { "type": "integer", "minimum": 0 },
+            "ref": { "$ref": "#/$defs/boundedString" },
+            "backlog_tasks": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "branch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "old_commit", "accepted_tree", "proposed_tree"],
+          "properties": {
+            "name": { "$ref": "#/$defs/boundedString" },
+            "old_commit": { "$ref": "#/$defs/revision" },
+            "accepted_tree": { "$ref": "#/$defs/revision" },
+            "proposed_tree": { "$ref": "#/$defs/digest", "description": "Digest of the composed commit tree entries; not a Git object identifier until the application writes the tree." }
+          }
+        },
+        "changes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "paths", "omitted"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "paths": { "$ref": "#/$defs/pathList" },
+            "omitted": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "control_files": { "$ref": "#/$defs/controlFiles" },
+        "tracked_runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "paths", "omitted"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "paths": { "$ref": "#/$defs/shortPathList" },
+            "omitted": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "index": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["staged_count", "lock_present", "digest"],
+          "properties": {
+            "staged_count": { "type": "integer", "minimum": 0 },
+            "lock_present": { "type": "boolean" },
+            "digest": { "$ref": "#/$defs/digestOrEmpty" }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["author_name", "author_email", "signing", "hooks"],
+          "properties": {
+            "author_name": { "type": "string", "maxLength": 128 },
+            "author_email": { "type": "string", "maxLength": 257 },
+            "signing": { "enum": ["configured", "disabled"] },
+            "hooks": { "enum": ["not-invoked"] }
+          }
+        },
+        "guards": { "$ref": "#/$defs/guards" },
+        "refusals": { "$ref": "#/$defs/refusals" },
+        "publishable": { "type": "boolean" },
+        "journal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "revision"],
+          "properties": {
+            "state": { "enum": ["none", "prepared", "committed", "installed", "done", "conflict"] },
+            "revision": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "retained": { "$ref": "#/$defs/retained" },
+        "token": { "$ref": "#/$defs/digest", "description": "Digest binding the preview to the store, the saved run, the composed tree, the control files, the index, and the journal revision. Present only when every guard passed." },
+        "apply": { "type": "string", "maxLength": 512, "description": "The exact application command for this token." },
+        "detail": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["changes_command", "status_command"],
+          "properties": {
+            "changes_command": { "type": "string", "maxLength": 1024 },
+            "status_command": { "type": "string", "maxLength": 1024 }
+          }
+        }
+      }
+    },
+    "applied": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "schema_version", "kind", "request_id", "duplicate", "branch", "accepted_tree", "changes", "control_files", "journal", "retained", "resume"],
+      "properties": {
+        "contract_version": { "const": 2 },
+        "schema_version": { "const": 1 },
+        "kind": { "const": "looper.publish.applied" },
+        "request_id": { "$ref": "#/$defs/boundedString" },
+        "idempotency_key": { "type": "string", "maxLength": 128 },
+        "duplicate": { "type": "boolean", "description": "True when a caller key answered this application from the journal that recorded it." },
+        "branch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "old_commit", "new_commit"],
+          "properties": {
+            "name": { "$ref": "#/$defs/boundedString" },
+            "old_commit": { "$ref": "#/$defs/revision" },
+            "new_commit": { "$ref": "#/$defs/revision" }
+          }
+        },
+        "accepted_tree": { "$ref": "#/$defs/revision" },
+        "changes": { "type": "integer", "minimum": 0 },
+        "control_files": { "$ref": "#/$defs/controlFiles" },
+        "journal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/boundedString" },
+            "state": { "enum": ["done", "conflict"] }
+          }
+        },
+        "retained": { "$ref": "#/$defs/retained" },
+        "resume": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "note"],
+          "properties": {
+            "command": { "$ref": "#/$defs/boundedString" },
+            "note": { "$ref": "#/$defs/detailString" }
+          }
+        }
+      }
+    },
+    "retained": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "tasks"],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 0 },
+        "tasks": { "$ref": "#/$defs/taskList" }
+      }
+    }
+  }
+}

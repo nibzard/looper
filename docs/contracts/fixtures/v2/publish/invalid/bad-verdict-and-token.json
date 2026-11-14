@@ -1,0 +1,39 @@
+{
+  "contract_version": 2,
+  "schema_version": 1,
+  "kind": "looper.publish.preview",
+  "run": {
+    "root": "/home/user/project",
+    "store_id": "store-9f2c",
+    "store_epoch": 3,
+    "ref": "refs/looper/run-413502b",
+    "backlog_tasks": 12
+  },
+  "branch": {
+    "name": "main",
+    "old_commit": "413502bd9c4c",
+    "accepted_tree": "8a1f77c02e11",
+    "proposed_tree": "not-a-digest"
+  },
+  "changes": { "count": 2, "paths": ["internal/app/main.go"], "omitted": 0 },
+  "control_files": [],
+  "tracked_runtime": { "count": 0, "paths": [], "omitted": 0 },
+  "index": { "staged_count": 0, "lock_present": false, "digest": "" },
+  "identity": {
+    "author_name": "Example Owner",
+    "author_email": "owner@example.test",
+    "signing": "maybe",
+    "hooks": "not-invoked"
+  },
+  "guards": [
+    { "code": "index_clean", "verdict": "warning", "detail": "an invented verdict is not in the enum" }
+  ],
+  "publishable": false,
+  "journal": { "state": "none", "revision": 0 },
+  "retained": { "attempts": 0, "tasks": [] },
+  "token": "short",
+  "detail": {
+    "changes_command": "git diff",
+    "status_command": "looper status --contract v2 --json"
+  }
+}

@@ -31,6 +31,10 @@ const (
 	RecoveryChoiceRestoreTaskFile = "restore-task-file"
 	RecoveryChoiceImportBacklog   = "import-backlog"
 	RecoveryChoiceDiscardRetained = "discard-retained"
+	// RecoveryChoiceCommitPublished names the checked publication (OW-02).
+	// The recovery transport never applies it: the publication command owns
+	// the commit, its token, and its journal.
+	RecoveryChoiceCommitPublished = "commit-published"
 )
 
 // recoveryTokenPattern bounds the token one application accepts. The preview
@@ -171,6 +175,8 @@ func (e *Engine) applyRecoveryRequest(req *SettingsRequest) SettingsAck {
 		err = &recoveryRefusal{message: "the retained publication applies automatically when the run resumes; no separate publish operation exists. Run: looper"}
 	case RecoveryChoiceDiscardRetained:
 		err = &recoveryRefusal{message: "no supported discard exists; Looper never deletes retained work through recovery, and no force action is proposed"}
+	case RecoveryChoiceCommitPublished:
+		err = &recoveryRefusal{message: "the checked publication owns this operation; it composes the exact commit under its own preview token. Run: looper publish --preview --contract v2 --json"}
 	default:
 		err = &recoveryRefusal{message: fmt.Sprintf("unknown recovery choice %q; preview the supported choices with looper recovery --preview", req.RecoveryChoice)}
 	}

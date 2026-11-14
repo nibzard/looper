@@ -17,7 +17,7 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "type": {
-          "enum": ["add-task", "add-plan", "settings", "requeue", "stop", "cancel-task", "amend-task", "recovery"],
+          "enum": ["add-task", "add-plan", "settings", "requeue", "requeue-fresh", "stop", "cancel-task", "amend-task", "recovery"],
           "description": "Request types a controller can advertise in its capabilities. A type absent from the controller advertisement is refused before queueing."
         },
         "state": {

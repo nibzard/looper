@@ -51,15 +51,16 @@ func validateIdempotencyKey(key string) error {
 // excluded: a retry after a controller restart targets a new session and must
 // still match.
 type canonicalPayload struct {
-	Tasks          []Task                     `json:"tasks,omitempty"`
-	Fields         map[string]json.RawMessage `json:"fields,omitempty"`
-	Reset          bool                       `json:"reset,omitempty"`
-	PlanDigests    []string                   `json:"plan_digests,omitempty"`
-	TaskID         string                     `json:"task_id,omitempty"`
-	TaskRevision   string                     `json:"task_revision,omitempty"`
-	Cascade        bool                       `json:"cascade,omitempty"`
-	RecoveryChoice string                     `json:"recovery_choice,omitempty"`
-	RecoveryToken  string                     `json:"recovery_token,omitempty"`
+	Tasks            []Task                     `json:"tasks,omitempty"`
+	Fields           map[string]json.RawMessage `json:"fields,omitempty"`
+	Reset            bool                       `json:"reset,omitempty"`
+	PlanDigests      []string                   `json:"plan_digests,omitempty"`
+	TaskID           string                     `json:"task_id,omitempty"`
+	TaskRevision     string                     `json:"task_revision,omitempty"`
+	Cascade          bool                       `json:"cascade,omitempty"`
+	RecoveryChoice   string                     `json:"recovery_choice,omitempty"`
+	RecoveryToken    string                     `json:"recovery_token,omitempty"`
+	AttemptsRevision string                     `json:"attempts_revision,omitempty"`
 }
 
 // requestPayloadDigest digests one request's canonical payload. Plan imports
@@ -86,6 +87,7 @@ func requestPayloadDigest(req *SettingsRequest, planDigests []string) string {
 		Tasks: req.Tasks, Fields: req.Fields, Reset: req.Reset,
 		TaskID: req.TaskID, TaskRevision: req.TaskRevision, Cascade: req.Cascade,
 		RecoveryChoice: req.RecoveryChoice, RecoveryToken: req.RecoveryToken,
+		AttemptsRevision: req.AttemptsRevision,
 	})
 	if err != nil {
 		return ""

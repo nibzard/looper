@@ -42,7 +42,7 @@ var clientContractVersions = []int{ContractVersionLegacy, ContractVersionV2}
 // help order. docs/contracts/commands.json lists the same names; tests
 // cross-check this list, the parser, and the registry.
 var clientCommands = []string{
-	"run", "start", "tui", "attach", "add-task", "add-plan", "cancel", "amend", "status", "runs",
+	"run", "start", "tui", "attach", "add-task", "add-plan", "cancel", "amend", "publish", "requeue", "status", "runs",
 	"requests", "wait", "stop", "tail", "events", "inspect", "recovery", "doctor", "preflight", "version", "config", "help",
 }
 
@@ -51,26 +51,28 @@ var clientCommands = []string{
 // transports those operations use. The stop transport is the scoped stop
 // file rather than a request envelope, so it has no internal counterpart.
 const (
-	PublicRequestAddTask   = "add-task"
-	PublicRequestAddPlan   = "add-plan"
-	PublicRequestSettings  = "settings"
-	PublicRequestRequeue   = "requeue"
-	PublicRequestStop      = "stop"
-	PublicRequestCancel    = "cancel-task"
-	PublicRequestAmendTask = "amend-task"
-	PublicRequestRecovery  = "recovery"
+	PublicRequestAddTask      = "add-task"
+	PublicRequestAddPlan      = "add-plan"
+	PublicRequestSettings     = "settings"
+	PublicRequestRequeue      = "requeue"
+	PublicRequestRequeueFresh = "requeue-fresh"
+	PublicRequestStop         = "stop"
+	PublicRequestCancel       = "cancel-task"
+	PublicRequestAmendTask    = "amend-task"
+	PublicRequestRecovery     = "recovery"
 )
 
 // publicRequestNames maps internal envelope types to their public request
 // type names. The plan-import transport keeps its frozen version 1 name.
 var publicRequestNames = map[string]string{
-	RequestTypeAddTask:    PublicRequestAddTask,
-	RequestTypePlanImport: PublicRequestAddPlan,
-	RequestTypeSettings:   PublicRequestSettings,
-	RequestTypeRequeue:    PublicRequestRequeue,
-	RequestTypeCancel:     PublicRequestCancel,
-	RequestTypeAmend:      PublicRequestAmendTask,
-	RequestTypeRecovery:   PublicRequestRecovery,
+	RequestTypeAddTask:      PublicRequestAddTask,
+	RequestTypePlanImport:   PublicRequestAddPlan,
+	RequestTypeSettings:     PublicRequestSettings,
+	RequestTypeRequeue:      PublicRequestRequeue,
+	RequestTypeRequeueFresh: PublicRequestRequeueFresh,
+	RequestTypeCancel:       PublicRequestCancel,
+	RequestTypeAmend:        PublicRequestAmendTask,
+	RequestTypeRecovery:     PublicRequestRecovery,
 }
 
 // controllerRequestTypes returns the request types a controller built from
@@ -78,21 +80,22 @@ var publicRequestNames = map[string]string{
 func controllerRequestTypes() []string {
 	return []string{
 		PublicRequestAddTask, PublicRequestAddPlan, PublicRequestSettings,
-		PublicRequestRequeue, PublicRequestStop, PublicRequestCancel,
-		PublicRequestAmendTask, PublicRequestRecovery,
+		PublicRequestRequeue, PublicRequestRequeueFresh, PublicRequestStop,
+		PublicRequestCancel, PublicRequestAmendTask, PublicRequestRecovery,
 	}
 }
 
 // supportedEnvelopeTypes lists the internal request-envelope types a
 // controller built from this source claims and answers.
 var supportedEnvelopeTypes = map[string]bool{
-	RequestTypeAddTask:    true,
-	RequestTypePlanImport: true,
-	RequestTypeSettings:   true,
-	RequestTypeRequeue:    true,
-	RequestTypeCancel:     true,
-	RequestTypeAmend:      true,
-	RequestTypeRecovery:   true,
+	RequestTypeAddTask:      true,
+	RequestTypePlanImport:   true,
+	RequestTypeSettings:     true,
+	RequestTypeRequeue:      true,
+	RequestTypeRequeueFresh: true,
+	RequestTypeCancel:       true,
+	RequestTypeAmend:        true,
+	RequestTypeRecovery:     true,
 }
 
 // legacyBaseRequestTypes is the compatibility policy set: the request types

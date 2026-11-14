@@ -721,6 +721,10 @@ func (e *Engine) processControllerRequests(ctx context.Context) error {
 	if e.err != nil {
 		return e.err
 	}
+	e.processRequeueFreshRequests()
+	if e.err != nil {
+		return e.err
+	}
 	e.processPlanImports(ctx)
 	return e.err
 }

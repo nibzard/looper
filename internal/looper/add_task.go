@@ -189,13 +189,14 @@ func (e *Engine) processAddTaskRequests() {
 // in-memory-only task nor a staged receipt, mirroring the findingStage and
 // stagedImport patterns (AX-009).
 type stagedBacklogRequest struct {
-	backlog       Backlog
-	planSignature string
-	finished      bool
-	reviewedTip   string
-	attempts      []*Attempt
-	attemptPhases []string
-	requests      []*RequestRecord
+	backlog        Backlog
+	planSignature  string
+	finished       bool
+	reviewedTip    string
+	attempts       []*Attempt
+	attemptPhases  []string
+	attemptRetired []*AttemptRetired
+	requests       []*RequestRecord
 }
 
 func (s stagedBacklogRequest) rollback(e *Engine) {
@@ -207,6 +208,9 @@ func (s stagedBacklogRequest) rollback(e *Engine) {
 	for i, a := range s.attempts {
 		if i < len(s.attemptPhases) {
 			a.Phase = s.attemptPhases[i]
+		}
+		if i < len(s.attemptRetired) {
+			a.Retired = s.attemptRetired[i]
 		}
 	}
 	e.State.Requests = s.requests

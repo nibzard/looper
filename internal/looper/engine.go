@@ -630,6 +630,18 @@ func (e *Engine) initializeState(ctx context.Context) error {
 	}
 	if s != nil {
 		e.State = s
+		// A publication application that crashed before it reconciled the
+		// saved baseline completes before any comparison or dispatch runs
+		// (OW-04): the checks below then see the branch the publication
+		// moved, exactly like a clean resume after `looper publish`.
+		if j, _ := loadNewestPublishJournal(e.Dir); j != nil {
+			if _, err = resolvePublishJournal(e.Config, e.Dir, e.Repo, e.Store, s, j); err != nil {
+				return err
+			}
+			if j.State == publishConflict {
+				e.event("publish-conflict", "an interrupted publication stayed a preserved conflict: "+j.Conflict)
+			}
+		}
 		e.retainAcceptedTaskFile()
 		if s.ExportPending {
 			if err = e.export(); err != nil {
@@ -719,6 +731,9 @@ func (e *Engine) initializeState(ctx context.Context) error {
 			}
 			for _, a := range s.Attempts {
 				if a.Phase == "done" || a.Phase == "blocked" || a.Phase == "cancelled" {
+					continue
+				}
+				if attemptRetired(a) {
 					continue
 				}
 				if err = e.contract(a); err != nil {
@@ -1256,7 +1271,7 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 	}
 	var a *Attempt
 	for _, v := range e.State.Attempts {
-		if v.Task.ID == t.ID && v.Phase == "resume" {
+		if v.Task.ID == t.ID && v.Phase == "resume" && !attemptRetired(v) {
 			a = v
 			break
 		}
@@ -1264,7 +1279,7 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 	if a == nil {
 		for i := len(e.State.Attempts) - 1; i >= 0; i-- {
 			v := e.State.Attempts[i]
-			if v.Task.ID != t.ID || v.Phase != "blocked" || v.Task.Contract() != t.Contract() {
+			if v.Task.ID != t.ID || v.Phase != "blocked" || v.Task.Contract() != t.Contract() || attemptRetired(v) {
 				continue
 			}
 			if _, err := os.Stat(v.Worktree); err != nil {
@@ -1321,6 +1336,13 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 		}
 		a = &Attempt{ID: id, Task: t, Agent: e.Config.Agent, Base: e.State.Tip, Worktree: work, Directory: dir, Ref: "refs/looper-tasks/" + id, Phase: "running", Worktrees: []string{work}}
 		e.State.Attempts = append(e.State.Attempts, a)
+		// A retired attempt names the attempt that replaced it, so the
+		// evidence chain reads without the journal.
+		for _, v := range e.State.Attempts {
+			if v != a && v.Task.ID == t.ID && attemptRetired(v) && v.Retired.Successor == "" {
+				v.Retired.Successor = a.ID
+			}
+		}
 	}
 	a.Phase = "running"
 	e.State.Backlog.Task(t.ID).Status = "doing"

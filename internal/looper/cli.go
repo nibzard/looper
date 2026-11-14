@@ -27,6 +27,10 @@ Usage: looper [run] [task-file] [options]
        looper add-plan <path> [...] [--wait]
        looper cancel <task-id> [--cascade] [--json] [--wait]
        looper amend <task-id> <task.json> [--json] [--wait]
+       looper publish --preview [--json]
+       looper publish --apply --token <token> [--message <text>]
+                         [--idempotency-key <key>] [--json]
+       looper requeue <task-id> [--fresh] [--preview] [--json] [--wait]
        looper status [--json] [--full]
        looper runs [--limit N] [--json]
        looper requests [id] [--after <request-id>] [--limit N]
@@ -144,15 +148,30 @@ Options:
   --cascade             Cancel the live dependents of the cancelled task too
                     (looper cancel)
   --wait                Wait for the mutation's outcome (add-task, add-plan,
-                    cancel, amend, config, recovery, stop); bounded by
+                    cancel, amend, config, recovery, requeue, stop); bounded by
                     --wait-timeout; stop's wait ends when the drain's durable
                     result lands, bound to the stopped controller session
   --wait-timeout <s>    Seconds one --wait may run (default 30; add-plan 60);
                     a timeout leaves the request running
   --idempotency-key <k> Caller key that makes one mutation retry-safe
-                    (add-task, add-plan, cancel, amend, config, recovery): same
+                    (add-task, add-plan, cancel, amend, config, recovery,
+                    publish, requeue): same
                     key and content returns the original request, changed
                     content is rejected; 1-128 bytes, no control characters
+  --message <text>      Commit message of one publication application
+                    (looper publish --apply)
+  --fresh               Retire reusable attempts so the next dispatch starts a
+                    new attempt under the current worker role (looper requeue)
+  --set <key=value>     One explicit configuration assignment; repeatable
+                    (looper config)
+  --unset <key>         Remove one configuration field so it follows or
+                    defaults (looper config)
+  --show                Read the saved and effective configuration without a
+                    terminal (looper config)
+  --scope <name>        Configuration scope the edit addresses: project or
+                    machine (looper config; default project)
+  --if-revision <digest> Refuse a machine edit unless the catalog still holds
+                    the revision a script read (looper config --scope machine)
   --plain               Plain text only; no forms, color, or glyphs
   --no-animation        Dashboard without animated motion; status stays readable
   --foreground          Run the controller inside the dashboard, so exiting
@@ -231,6 +250,10 @@ func Main(args []string, out, stderr io.Writer) int {
 		return runCancel(c, out, stderr)
 	case "amend":
 		return runAmend(c, out, stderr)
+	case "publish":
+		return runPublish(c, out, stderr)
+	case "requeue":
+		return runRequeue(c, out, stderr)
 	case "tui":
 		return runTUI(args, c, out, stderr)
 	case "attach":

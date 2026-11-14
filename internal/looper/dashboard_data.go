@@ -369,3 +369,167 @@ func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
 	e.eventData("requeue", req.TaskID+" requeued after user confirmation", requeue.merge(nil))
 	return
 }
+
+// processRequeueFreshRequests claims and answers requeue-fresh envelopes.
+// It runs beside the ordinary requeue processing in the controller loop.
+func (e *Engine) processRequeueFreshRequests() {
+	for {
+		req, err := e.claimRequest(RequestTypeRequeueFresh)
+		if err != nil {
+			e.event("request-error", err.Error())
+			return
+		}
+		if req == nil {
+			return
+		}
+		ack := e.applyRequeueFreshRequest(req)
+		if err = writeJSON(filepath.Join(ackDir(e.Dir), req.ID+".json"), ack); err != nil {
+			e.err = err
+			return
+		}
+		os.Remove(filepath.Join(processingDir(e.Dir), req.ID+".json"))
+		if e.err != nil {
+			return
+		}
+	}
+}
+
+// applyRequeueFreshRequest retires every reusable attempt of one blocked
+// task and sets the task back to todo. The attempts keep their artifacts,
+// results, and history as evidence, but no selector resumes or reuses them:
+// the next dispatch creates a new attempt under the current worker role.
+// The task identity, contract, dependencies, and history stay untouched.
+func (e *Engine) applyRequeueFreshRequest(req *SettingsRequest) (ack SettingsAck) {
+	ack = SettingsAck{Version: SettingsRequestVersion, ID: req.ID, Session: e.controllerSessionID(), Status: AckError}
+	if previous, ok := e.acks[req.ID]; ok {
+		return previous
+	}
+	if replayed, ok := e.replayedAck(req); ok {
+		e.rememberAck(req.ID, replayed)
+		return replayed
+	}
+	if req.IdempotencyKey != "" {
+		if _, original, conflict := e.resolveIdempotencyKey(req, nil); original != nil {
+			ack = e.replayIdempotentAck(req, original)
+			return ack
+		} else if conflict != nil {
+			ack.Status = AckConflict
+			ack.Message = keyConflictMessage(req.IdempotencyKey, conflict, requestPayloadDigest(req, nil))
+			e.rejectRequestReceipt(req, ack)
+			return ack
+		}
+	}
+	refuse := func() SettingsAck {
+		e.rejectRequestReceipt(req, ack)
+		return ack
+	}
+	defer func() { e.rememberAck(req.ID, ack) }()
+	if req.Session != e.controllerSessionID() {
+		ack.Status = AckStale
+		ack.Message = "The controller session changed. Reload the task before requeuing."
+		return refuse()
+	}
+	t := e.State.Backlog.Task(req.TaskID)
+	if t == nil || t.Status != "blocked" || req.TaskRevision != hashJSON(t) {
+		ack.Status = AckConflict
+		ack.Message = "The task changed. Inspect its current state before requeuing."
+		return refuse()
+	}
+	for _, a := range e.State.Attempts {
+		if activeAttempt(a) {
+			ack.Status = AckConflict
+			ack.Message = "Wait until active work finishes before requeuing this task."
+			return refuse()
+		}
+	}
+	data, err := os.ReadFile(e.Config.Todo)
+	if err != nil {
+		ack.Message = err.Error()
+		return refuse()
+	}
+	if edit := e.classifyBacklog(data); edit.Changed && !edit.Equivalent {
+		ack.Status = AckConflict
+		ack.Message = "The task file changed. Wait for Looper to import the edit."
+		if e.inputPending {
+			ack.Message = "The task file needs correction before Looper can apply changes. Correct it to continue."
+		}
+		return refuse()
+	}
+	if t.Deferred() {
+		ack.Status = AckConflict
+		ack.Message = "Task is deferred. Meet its resume condition, then remove looper:deferred and set todo in the task file."
+		return refuse()
+	}
+	// Retirement must name every reusable attempt, so the attempt set the
+	// caller read is part of the contract.
+	if req.AttemptsRevision != "" && req.AttemptsRevision != attemptSetRevision(e.State, req.TaskID) {
+		ack.Status = AckConflict
+		ack.Message = "The task's attempts changed. Inspect the task before requeuing fresh."
+		return refuse()
+	}
+	staged := stagedBacklogRequest{
+		backlog: clone(e.State.Backlog), planSignature: e.State.PlanSignature,
+		finished: e.State.Finished, reviewedTip: e.State.ReviewedTip,
+		requests: append([]*RequestRecord{}, e.State.Requests...),
+	}
+	for _, a := range e.State.Attempts {
+		staged.attempts = append(staged.attempts, a)
+		staged.attemptPhases = append(staged.attemptPhases, a.Phase)
+		staged.attemptRetired = append(staged.attemptRetired, a.Retired)
+	}
+	rec := e.beginRequestReceipt(req)
+	rec.AffectedTasks = []string{req.TaskID}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	retired := 0
+	for _, a := range e.State.Attempts {
+		if a.Task.ID == req.TaskID && a.Phase == "blocked" && !attemptRetired(a) {
+			a.Retired = &AttemptRetired{RequestID: req.ID, At: now, Reason: "fresh_requeue"}
+			retired++
+		}
+	}
+	t.Status = "todo"
+	t.Blockers = nil
+	t.UnblockWhen = ""
+	t.UpdatedAt = now
+	e.State.Finished = false
+	e.State.PlanSignature = ""
+	ack.Status = AckApplied
+	ack.Message = fmt.Sprintf("Task requeued fresh. %d attempt(s) retired as evidence; the next dispatch starts clean.", retired)
+	rec.State = RequestApplied
+	rec.DecidedAt = now
+	rec.Summary, rec.Ack = ack.Message, &ack
+	if err = e.export(); err != nil {
+		staged.rollback(e)
+		ack.Status = AckError
+		ack.Message = err.Error()
+		e.failStagedRequest(rec, ack, err)
+		if saveErr := e.persistRequestReceipts(); saveErr != nil {
+			ack.Message = errors.Join(err, saveErr).Error()
+		}
+		e.err = err
+		return
+	}
+	ev := e.identity()
+	ev.TaskID = req.TaskID
+	ev.RequestID = req.ID
+	e.eventData("requeue-fresh", fmt.Sprintf("%s requeued fresh: %d attempt(s) retired", req.TaskID, retired), ev.merge(nil))
+	return
+}
+
+// attemptSetRevision digests the attempt evidence one task holds: identities,
+// phases, and retirement markers in order. A fresh requeue compares it so
+// retirement names every reusable attempt the caller saw.
+func attemptSetRevision(s *State, taskID string) string {
+	type row struct {
+		ID      string `json:"id"`
+		Phase   string `json:"phase"`
+		Retired bool   `json:"retired"`
+	}
+	rows := []row{}
+	for _, a := range s.Attempts {
+		if a.Task.ID == taskID {
+			rows = append(rows, row{ID: a.ID, Phase: a.Phase, Retired: attemptRetired(a)})
+		}
+	}
+	return digest(mustMarshal(rows))
+}

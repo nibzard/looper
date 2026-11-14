@@ -194,9 +194,29 @@
       "implemented": true
     },
     {
+      "name": "publish",
+      "invocation": ["publish", "--preview", "--contract", "v2", "--json"],
+      "summary": "Commit accepted work to the project branch through a checked operation: one read-only preview binds a token to the exact commit, index, control files, and saved run; --apply re-verifies the token under the repository and Git index locks, writes one project commit from the accepted tree, advances the branch by compare-and-swap, installs the prepared index without touching working files, and reconciles the saved baseline so a later resume passes its guards.",
+      "legacy": null,
+      "v2": "schemas/v2/publish.schema.json",
+      "streaming": false,
+      "owning_task": "OW-02",
+      "implemented": true
+    },
+    {
+      "name": "requeue",
+      "invocation": ["requeue", "T025", "--contract", "v2", "--json"],
+      "summary": "Requeue one blocked task through a checked request. Ordinary requeue keeps reusable partial implementation; --fresh submits a requeue-fresh request that retires every reusable attempt as retained evidence, preserves the task identity, contract, dependencies, and history, and lets the next dispatch create a new attempt under the current worker role (--preview reports the retirement read-only, --wait waits bounded, --idempotency-key makes retries return the original request, and a controller that does not advertise requeue-fresh is refused without queueing).",
+      "legacy": "schemas/legacy/settings-ack.schema.json",
+      "v2": "schemas/v2/request-receipt.schema.json",
+      "streaming": false,
+      "owning_task": "OW-08",
+      "implemented": true
+    },
+    {
       "name": "config",
       "invocation": ["config"],
-      "summary": "Configure machine agent commands and project roles. Online project changes return a settings receipt. The explicit --test-agent mode returns schemas/v2/agent-test.schema.json with --contract v2 --json and consumes agent usage.",
+      "summary": "Configure machine agent commands and project roles. Bare config opens the interactive editor; --show, --preview, --set, and --unset never need a terminal, and --scope machine edits the catalog outside any project. Online project changes return a settings receipt. The explicit --test-agent mode returns schemas/v2/agent-test.schema.json with --contract v2 --json and consumes agent usage.",
       "legacy": "schemas/legacy/settings-ack.schema.json",
       "v2": "schemas/v2/request-receipt.schema.json",
       "streaming": false,

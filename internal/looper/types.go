@@ -435,24 +435,41 @@ func (s Summary) Validate(id string) error {
 // resume, or cancelled (a resume attempt retired by task cancellation,
 // AX-019). Recovery coerces any other loaded value to ready or resume.
 type Attempt struct {
-	ID           string     `json:"id"`
-	Task         Task       `json:"task"`
-	Agent        string     `json:"agent"`
-	Base         string     `json:"base"`
-	Worktree     string     `json:"worktree"`
-	Directory    string     `json:"directory"`
-	Ref          string     `json:"ref"`
-	Phase        string     `json:"phase"`
-	ResultCommit string     `json:"result_commit,omitempty"`
-	Summary      *Summary   `json:"summary,omitempty"`
-	Verification *Candidate `json:"verification,omitempty"`
-	Repairs      int        `json:"repairs"`
-	Feedback     string     `json:"feedback,omitempty"`
-	FailureHash  string     `json:"failure_hash,omitempty"`
-	Repeats      int        `json:"repeats,omitempty"`
-	Diagnosed    bool       `json:"diagnosed,omitempty"`
-	Worktrees    []string   `json:"worktrees"`
+	ID           string          `json:"id"`
+	Task         Task            `json:"task"`
+	Agent        string          `json:"agent"`
+	Base         string          `json:"base"`
+	Worktree     string          `json:"worktree"`
+	Directory    string          `json:"directory"`
+	Ref          string          `json:"ref"`
+	Phase        string          `json:"phase"`
+	ResultCommit string          `json:"result_commit,omitempty"`
+	Summary      *Summary        `json:"summary,omitempty"`
+	Verification *Candidate      `json:"verification,omitempty"`
+	Repairs      int             `json:"repairs"`
+	Feedback     string          `json:"feedback,omitempty"`
+	FailureHash  string          `json:"failure_hash,omitempty"`
+	Repeats      int             `json:"repeats,omitempty"`
+	Diagnosed    bool            `json:"diagnosed,omitempty"`
+	Worktrees    []string        `json:"worktrees"`
+	Retired      *AttemptRetired `json:"retired,omitempty"`
 }
+
+// AttemptRetired marks one attempt as retired: the attempt keeps its
+// artifacts, results, and history as evidence, but no selector resumes,
+// reuses, or re-enters it. A fresh requeue sets it on every reusable
+// attempt of one task, so the next dispatch starts clean under the current
+// worker role.
+type AttemptRetired struct {
+	RequestID string `json:"request_id,omitempty"`
+	At        string `json:"at,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Successor string `json:"successor,omitempty"`
+}
+
+// attemptRetired reports whether one attempt is retired evidence that no
+// selector may reuse.
+func attemptRetired(a *Attempt) bool { return a != nil && a.Retired != nil }
 
 // ImportRecord is the durable receipt for one plan import. Receipts are
 // optional state fields: projects without imports serialize exactly as

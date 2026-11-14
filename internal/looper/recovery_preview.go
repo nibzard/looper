@@ -350,6 +350,7 @@ type recoveryEvidence struct {
 	staged           []string
 	workingChanges   []string
 	untracked        []string
+	offBranch        []string
 	publicationDiff  []string
 	localEdits       []string
 }
@@ -421,6 +422,13 @@ func (ev *recoveryEvidence) collectListings() {
 		}
 		if paths, err := readPaths(r.Root, "ls-files", "--others", "--exclude-standard", "-z"); err == nil {
 			ev.untracked = keep(paths)
+		}
+		// Accepted content the project branch still lacks names the checked
+		// publication (OW-04): the choice below points at it.
+		if ev.head != "" {
+			if paths, err := readPaths(r.Root, append([]string{"diff", "--name-only", "-z", ev.head, s.Published}, excludeArgs...)...); err == nil {
+				ev.offBranch = keep(paths)
+			}
 		}
 	}
 	if p := s.Publication; p != nil {
@@ -1131,6 +1139,33 @@ func recoveryChoices(ev *recoveryEvidence, doc *recoveryPreviewDocument, clamp f
 			publish.MissingEvidence = append(missing, clamp(orUnknown(pub.Unknown)))
 		}
 		choices = append(choices, publish)
+	}
+	// Committing accepted content the branch still lacks. The checked
+	// publication (OW-02) owns the operation; this choice names it, and the
+	// recovery application refuses it with the same pointer instead of
+	// applying a second transport.
+	if len(ev.offBranch) > 0 {
+		listed, total := boundPaths(ev.offBranch)
+		commit := recoveryChoice{
+			Name: "commit-published",
+			Preserves: clamped(
+				"every retained attempt, its artifacts, and its history",
+				"the task file and the runtime tree stay outside the project commit",
+				"working files never change"),
+			Changes: clamped(fmt.Sprintf("one project commit carries the accepted content on %d changed path(s): %s", total, strings.Join(listed, ", "))),
+			Apply: &recoveryApply{
+				Mode: "command", Description: clamp("The checked publication composes the exact commit under its own preview token and compare-and-swap; recovery applies nothing here."),
+				Command: "looper publish --preview --contract v2 --json",
+			},
+		}
+		switch {
+		case ev.owned:
+			commit.Status = "blocked"
+			commit.BlockedBy = clamped("a controller owns the repository; the publication runs on a stopped run (looper stop)")
+		default:
+			commit.Status = "available"
+		}
+		choices = append(choices, commit)
 	}
 	// Restoring the task file, when its guard refused. The checked
 	// application (AX-017) restores the accepted bytes itself, after it
