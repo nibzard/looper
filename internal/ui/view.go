@@ -99,6 +99,7 @@ type ViewCounters struct {
 	Total      int `json:"total"`
 	Ready      int `json:"ready"`
 	Blocked    int `json:"blocked"`
+	Cancelled  int `json:"cancelled,omitempty"`
 	InFlight   int `json:"in_flight"`
 	Checking   int `json:"checking"`
 	Integrated int `json:"integrated"`

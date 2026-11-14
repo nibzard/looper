@@ -554,7 +554,9 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				task := *t
 				m.workspace.requeuePending = true
 				m.message = "Fresh requeue request pending. Waiting for the controller."
-				return m, func() tea.Msg { return requeueMsg{taskID: task.ID, fresh: true, err: m.ctrl.RequeueFresh(task.ID, task.Revision)} }
+				return m, func() tea.Msg {
+					return requeueMsg{taskID: task.ID, fresh: true, err: m.ctrl.RequeueFresh(task.ID, task.Revision)}
+				}
 			}
 		}
 		return m, nil
@@ -976,6 +978,11 @@ func (m model) header() string {
 	var details []string
 	if m.snap != nil {
 		details = append(details, fmt.Sprintf("%d/%d complete", m.snap.Counters.Done, m.snap.Counters.Total))
+		// Cancelled work is closed, not owed. Naming it beside the fraction
+		// keeps a reader from counting it as outstanding effort.
+		if n := m.snap.Counters.Cancelled; n > 0 {
+			details = append(details, fmt.Sprintf("%d cancelled", n))
+		}
 		if n := m.snap.Counters.InFlight; n > 0 {
 			word := "workers"
 			if n == 1 {

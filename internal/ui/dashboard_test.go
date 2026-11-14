@@ -752,3 +752,23 @@ func TestBoardNamesDiagnosisConsultation(t *testing.T) {
 		}
 	}
 }
+
+// Cancelled work is closed, not owed. Both headers name it beside the
+// completion fraction so the gap cannot read as outstanding effort.
+func TestHeadersNameCancelledWork(t *testing.T) {
+	counters := ViewCounters{Done: 32, Total: 51, Blocked: 9, Cancelled: 9, InFlight: 1}
+	board := model{width: 120, height: 30, snap: &ViewSnapshot{Project: "demo", Counters: counters}}
+	header := ansi.Strip(board.orientationHeader())
+	if !strings.Contains(header, "32/51 complete · 9 cancelled · 1 implementing") {
+		t.Fatalf("board summary lacks cancelled: %s", header)
+	}
+	bare := model{width: 100, height: 30, snap: &ViewSnapshot{Counters: counters}}
+	if plain := ansi.Strip(bare.header()); !strings.Contains(plain, "32/51 complete · 9 cancelled") {
+		t.Fatalf("plain header lacks cancelled: %s", plain)
+	}
+	// Zero cancelled stays hidden.
+	board.snap.Counters.Cancelled = 0
+	if header = ansi.Strip(board.orientationHeader()); strings.Contains(header, "cancelled") {
+		t.Fatalf("zero cancelled must stay hidden: %s", header)
+	}
+}

@@ -45,7 +45,11 @@ func (m model) copyText() string {
 			b.WriteString("Project root: unavailable in this snapshot\n")
 		}
 		fmt.Fprintf(&b, "Event cursor: %d\n", v.EventCursor)
-		fmt.Fprintf(&b, "Looper · %s\nSession: %s\nSnapshot: %s\nGoal: %s\nOperation: %s\n%d/%d complete · %d active · %d blocked\n", v.Project, v.Session, v.Now, v.Goal, activityLabel(v, false), v.Counters.Done, v.Counters.Total, v.Counters.InFlight, v.Counters.Blocked)
+		fmt.Fprintf(&b, "Looper · %s\nSession: %s\nSnapshot: %s\nGoal: %s\nOperation: %s\n%d/%d complete · %d active · %d blocked", v.Project, v.Session, v.Now, v.Goal, activityLabel(v, false), v.Counters.Done, v.Counters.Total, v.Counters.InFlight, v.Counters.Blocked)
+		if v.Counters.Cancelled > 0 {
+			fmt.Fprintf(&b, " · %d cancelled", v.Counters.Cancelled)
+		}
+		b.WriteByte('\n')
 		if m.staleView || v.Stale {
 			b.WriteString("Snapshot is stale; current controller state is unknown.\n")
 		}

@@ -95,3 +95,11 @@ func TestHandoffBoundsLargeEvidence(t *testing.T) {
 		t.Fatal("missing diff excerpt marker")
 	}
 }
+
+func TestCopyNamesCancelledWork(t *testing.T) {
+	m := model{snap: &ViewSnapshot{Project: "demo", Counters: ViewCounters{Done: 32, Total: 51, Blocked: 9, Cancelled: 9, InFlight: 1}}}
+	text := m.copyText()
+	if !strings.Contains(text, "32/51 complete · 1 active · 9 blocked · 9 cancelled") {
+		t.Fatalf("handoff lacks cancelled: %s", text)
+	}
+}

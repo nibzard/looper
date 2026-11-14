@@ -194,3 +194,14 @@ func TestViewContractTypes(t *testing.T) {
 	}
 	_ = io.Discard
 }
+
+// Cancelled work is closed, not owed: the counters name it so a header
+// fraction's gap cannot read as outstanding effort.
+func TestSnapshotCountsCancelledWork(t *testing.T) {
+	e := snapshotEngine(t)
+	e.State.Backlog.Tasks[1].Status = "cancelled"
+	v := e.snapshot(false)
+	if v.Counters.Cancelled != 1 || v.Counters.Total != 4 {
+		t.Fatalf("counters wrong: %+v", v.Counters)
+	}
+}

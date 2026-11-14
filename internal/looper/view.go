@@ -17,7 +17,7 @@ func viewPath(dir string) string { return filepath.Join(dir, "view.json") }
 // snapshot copies the owner's presentation state. The UI never reads mutable
 // engine objects.
 func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
-	done, blocked, total := 0, 0, 0
+	done, blocked, cancelled, total := 0, 0, 0, 0
 	for _, t := range e.State.Backlog.Tasks {
 		if t.Marker() {
 			continue
@@ -28,6 +28,8 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 			done++
 		case "blocked":
 			blocked++
+		case "cancelled":
+			cancelled++
 		}
 	}
 	v := ui.ViewSnapshot{
@@ -53,7 +55,7 @@ func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
 	if e.State != nil {
 		v.Counters = ui.ViewCounters{
 			Done: done, Total: total, Ready: len(e.State.Backlog.Ready()),
-			Blocked: blocked, Integrated: e.State.Integrated,
+			Blocked: blocked, Cancelled: cancelled, Integrated: e.State.Integrated,
 		}
 		for _, a := range e.State.Attempts {
 			switch a.Phase {

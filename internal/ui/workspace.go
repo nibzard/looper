@@ -486,7 +486,14 @@ func (m model) orientationHeader() string {
 		operation += " · " + dimStyle.Render(plainText(v.ActivityDetail))
 	}
 	lines = append(lines, truncate(dimStyle.Render("Operation: ")+operation, m.width))
-	summary := strings.Join([]string{okStyle.Render(fmt.Sprintf("%d/%d complete", v.Counters.Done, v.Counters.Total)), busyStyle.Render(fmt.Sprintf("%d implementing", v.Counters.InFlight)), busyStyle.Render(fmt.Sprintf("%d checking", v.Counters.Checking)), blockedStyle.Render(fmt.Sprintf("%d blocked", v.Counters.Blocked)), textStyle.Render(fmt.Sprintf("%d ready", len(v.Ready)))}, dimStyle.Render(" · "))
+	summarySegments := []string{okStyle.Render(fmt.Sprintf("%d/%d complete", v.Counters.Done, v.Counters.Total))}
+	// Cancelled work is closed, not owed; naming it keeps the fraction's
+	// gap from reading as outstanding effort.
+	if v.Counters.Cancelled > 0 {
+		summarySegments = append(summarySegments, dimStyle.Render(fmt.Sprintf("%d cancelled", v.Counters.Cancelled)))
+	}
+	summarySegments = append(summarySegments, busyStyle.Render(fmt.Sprintf("%d implementing", v.Counters.InFlight)), busyStyle.Render(fmt.Sprintf("%d checking", v.Counters.Checking)), blockedStyle.Render(fmt.Sprintf("%d blocked", v.Counters.Blocked)), textStyle.Render(fmt.Sprintf("%d ready", len(v.Ready))))
+	summary := strings.Join(summarySegments, dimStyle.Render(" · "))
 	if m.width < 70 {
 		summary = fmt.Sprintf("%d/%d complete · %d active · %d blocked", v.Counters.Done, v.Counters.Total, len(v.Attempts), v.Counters.Blocked)
 	}
