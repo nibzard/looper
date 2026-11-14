@@ -221,6 +221,10 @@
         "task_id": { "type": "string" },
         "message": { "type": "string" },
         "action": { "type": "string" },
+        "reason_class": { "enum": ["operator", "deferred", "failure", "unknown"], "description": "The structured class of the blocked task this finding names; absent on findings without one. Operator and deferred are expected waiting and default to informational severity." },
+        "reason_code": { "type": "string", "maxLength": 64 },
+        "retry": { "enum": ["yes", "after-change", "no", "unknown"] },
+        "attempt_id": { "type": "string", "maxLength": 64 },
         "evidence": { "$ref": "#/$defs/evidence_reference" }
       }
     },

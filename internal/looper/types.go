@@ -13,19 +13,20 @@ import (
 
 // Task is an editable outcome. Attempts, not agents, own its execution state.
 type Task struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Priority    int      `json:"priority"`
-	Status      string   `json:"status"`
-	Details     string   `json:"details,omitempty"`
-	Steps       []string `json:"steps,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-	Files       []string `json:"files,omitempty"`
-	Blockers    []string `json:"blockers,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	UpdatedAt   string   `json:"updated_at,omitempty"`
-	CreatedAt   string   `json:"created_at,omitempty"`
-	UnblockWhen string   `json:"unblock_when,omitempty"`
+	ID          string       `json:"id"`
+	Title       string       `json:"title"`
+	Priority    int          `json:"priority"`
+	Status      string       `json:"status"`
+	Details     string       `json:"details,omitempty"`
+	Steps       []string     `json:"steps,omitempty"`
+	DependsOn   []string     `json:"depends_on,omitempty"`
+	Files       []string     `json:"files,omitempty"`
+	Blockers    []string     `json:"blockers,omitempty"`
+	BlockReason *BlockReason `json:"block_reason,omitempty"`
+	Tags        []string     `json:"tags,omitempty"`
+	UpdatedAt   string       `json:"updated_at,omitempty"`
+	CreatedAt   string       `json:"created_at,omitempty"`
+	UnblockWhen string       `json:"unblock_when,omitempty"`
 }
 
 type Backlog struct {
@@ -79,6 +80,18 @@ const backlogSchema = `{
           "details": { "type": "string" },
           "steps": { "type": "array", "items": { "type": "string" } },
           "blockers": { "type": "array", "items": { "type": "string" } },
+          "block_reason": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["class"],
+            "properties": {
+              "class": { "type": "string", "enum": ["operator", "deferred", "failure", "unknown"] },
+              "code": { "type": "string", "maxLength": 64 },
+              "retry": { "type": "string", "enum": ["yes", "after-change", "no", "unknown"] },
+              "attempt_id": { "type": "string", "maxLength": 64 },
+              "source": { "type": "string", "maxLength": 32 }
+            }
+          },
           "tags": { "type": "array", "items": { "type": "string" } },
           "files": { "type": "array", "items": { "type": "string" } },
           "depends_on": { "type": "array", "items": { "type": "string" } },
@@ -165,6 +178,9 @@ func (t Task) Contract() string {
 	t.Status = ""
 	t.Files = nil
 	t.Blockers = nil
+	// The current reason is controller metadata about dispatch, not an
+	// acceptance criterion; blockers above already sit outside the hash.
+	t.BlockReason = nil
 	t.UpdatedAt = ""
 	t.UnblockWhen = ""
 	// Finding identity is controller metadata, not an acceptance criterion.
@@ -414,13 +430,14 @@ type Finding struct {
 	Priority       int      `json:"priority"`
 }
 type Summary struct {
-	TaskID      string    `json:"task_id"`
-	Status      string    `json:"status"`
-	Summary     string    `json:"summary"`
-	Files       []string  `json:"files"`
-	Blockers    []string  `json:"blockers"`
-	Followups   []Finding `json:"followups,omitempty"`
-	UnblockWhen string    `json:"unblock_when,omitempty"`
+	TaskID      string       `json:"task_id"`
+	Status      string       `json:"status"`
+	Summary     string       `json:"summary"`
+	Files       []string     `json:"files"`
+	Blockers    []string     `json:"blockers"`
+	BlockReason *BlockReason `json:"block_reason,omitempty"`
+	Followups   []Finding    `json:"followups,omitempty"`
+	UnblockWhen string       `json:"unblock_when,omitempty"`
 }
 
 func (s Summary) Validate(id string) error {

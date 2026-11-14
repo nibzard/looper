@@ -121,6 +121,9 @@ func (e *Engine) holdQuarantined(id, reason string) bool {
 	}
 	t.Status = "blocked"
 	t.Blockers = mergeUnique(t.Blockers, []string{reason})
+	// The quarantine reason is typed at both callers: an invalid write path
+	// fixes by editing the task, so retry waits for that change (OW-09).
+	t.BlockReason = failureBlockReason(blockCodeInvalidWritePath, blockRetryAfterChange, "")
 	if t.UnblockWhen == "" {
 		t.UnblockWhen = "Fix the invalid path and set this task to todo."
 	}

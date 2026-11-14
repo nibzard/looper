@@ -189,6 +189,7 @@ Use temporary identifiers P1..Pn for additions; depends_on may reference them or
 		t.Status = "todo"
 		if t.Deferred() {
 			t.Status = "blocked"
+			t.BlockReason = deferredBlockReason()
 		}
 		proposal.Additions[i] = t
 	}

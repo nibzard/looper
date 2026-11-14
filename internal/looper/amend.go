@@ -106,7 +106,28 @@ func amendedFieldNames(original, applied Task) []string {
 	track("blockers", !equalStrings(original.Blockers, applied.Blockers))
 	track("tags", !equalStrings(original.Tags, applied.Tags))
 	track("unblock_when", original.UnblockWhen != applied.UnblockWhen)
+	track("block_reason", !equalBlockReason(original.BlockReason, applied.BlockReason))
 	return changed
+}
+
+func equalBlockReason(a, b *BlockReason) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// blockReasonClassForTags names the class a control tag fixes. A deferred or
+// operator gate is authoritative: an amendment may correct the code or the
+// retry guidance, never reclassify the barrier away from its tag.
+func blockReasonClassForTags(t Task) string {
+	if t.Deferred() {
+		return blockClassDeferred
+	}
+	if hasTaskTag(t, operatorTaskTag) {
+		return blockClassOperator
+	}
+	return ""
 }
 
 func equalStrings(a, b []string) bool {
@@ -249,6 +270,34 @@ func (e *Engine) applyAmendRequest(req *SettingsRequest) SettingsAck {
 		ack.Status = AckConflict
 		ack.Message = fmt.Sprintf("An amendment cannot change control tags: it %s. Edit the task file itself for that change; Looper imports it at a safe boundary.", strings.Join(changes, ", "))
 		return refuse()
+	}
+	// A blocked task accepts a corrected reason: the class and retry
+	// guidance must be explicit, the control tags keep their class, and the
+	// amendment records itself as the source (OW-09).
+	if !equalBlockReason(t.BlockReason, amended.BlockReason) {
+		if t.Status != "blocked" {
+			ack.Status = AckConflict
+			ack.Message = fmt.Sprintf("Task %s is %s; block_reason is corrected only on a blocked task.", req.TaskID, t.Status)
+			return refuse()
+		}
+		if amended.BlockReason == nil {
+			ack.Status = AckConflict
+			ack.Message = fmt.Sprintf("Task %s stays blocked; correct its reason instead of removing it. Cancel or requeue the task to end the barrier.", req.TaskID)
+			return refuse()
+		}
+		if err := validateBlockReasonStrict(amended.BlockReason); err != nil {
+			ack.Status = AckError
+			ack.Message = fmt.Sprintf("The amended block_reason is invalid: %v", err)
+			return refuse()
+		}
+		if class := blockReasonClassForTags(*t); class != "" && amended.BlockReason.Class != class {
+			ack.Status = AckConflict
+			ack.Message = fmt.Sprintf("Task %s carries a control tag that fixes the reason class to %s.", req.TaskID, class)
+			return refuse()
+		}
+		bounded := amended.BlockReason.bound()
+		bounded.Source = blockSourceAmend
+		amended.BlockReason = bounded
 	}
 	// The safe boundary (AX-020): work that holds this task's contract — a
 	// live worker, a check, a retained result, or restartable resume work —

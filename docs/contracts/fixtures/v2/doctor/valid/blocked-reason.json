@@ -1,0 +1,47 @@
+{
+  "contract_version": 2,
+  "schema_version": 2,
+  "kind": "looper.doctor",
+  "observation": {
+    "executable": { "release": "0.10.0", "revision": "5f2c9ab", "modified": false },
+    "build_mismatch": false,
+    "schema_version": 1,
+    "observed_at": "2026-11-14T10:41:02Z",
+    "controller_owned": false,
+    "view_matches_controller": false,
+    "workers": [],
+    "event_cursor": 41
+  },
+  "findings": [
+    {
+      "code": "task_deferred",
+      "severity": "info",
+      "task_id": "T003",
+      "message": "The task belongs to later work.",
+      "suggested_action": "The v0.10 release ships; remove looper:deferred and set todo when this condition is met.",
+      "reason_class": "deferred",
+      "reason_code": "deferred_condition",
+      "retry": "after-change"
+    },
+    {
+      "code": "task_blocked",
+      "severity": "warning",
+      "task_id": "T007",
+      "message": "The task reports an unmet prerequisite.",
+      "suggested_action": "Read blockers with looper inspect T007 --json.",
+      "reason_class": "failure",
+      "reason_code": "repair_limit_reached",
+      "retry": "no",
+      "attempt_id": "task-T007-2f0a"
+    }
+  ],
+  "requests": {
+    "pending": 0,
+    "waiting_on": []
+  },
+  "automatic_recovery": false,
+  "detail": {
+    "requests": "looper requests --contract v2 --json",
+    "status": "looper status --contract v2 --json"
+  }
+}

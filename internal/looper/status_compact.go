@@ -172,12 +172,16 @@ type statusRequests struct {
 }
 
 type statusFinding struct {
-	Code     string             `json:"code"`
-	Severity string             `json:"severity"`
-	TaskID   string             `json:"task_id,omitempty"`
-	Message  string             `json:"message"`
-	Action   string             `json:"action,omitempty"`
-	Evidence *statusEvidenceRef `json:"evidence,omitempty"`
+	Code        string             `json:"code"`
+	Severity    string             `json:"severity"`
+	TaskID      string             `json:"task_id,omitempty"`
+	Message     string             `json:"message"`
+	Action      string             `json:"action,omitempty"`
+	ReasonClass string             `json:"reason_class,omitempty"`
+	ReasonCode  string             `json:"reason_code,omitempty"`
+	Retry       string             `json:"retry,omitempty"`
+	AttemptID   string             `json:"attempt_id,omitempty"`
+	Evidence    *statusEvidenceRef `json:"evidence,omitempty"`
 }
 
 type statusEvidenceRef struct {
@@ -774,6 +778,25 @@ func statusFindingsFor(ev *statusEvidence, fit statusFit) []statusFinding {
 		}
 		if entry.Severity != "info" && entry.Severity != "warning" && entry.Severity != "error" {
 			entry.Severity = "info"
+		}
+		// A blocked-task finding carries the structured reason beside its
+		// text (OW-10). The operator and deferral classes are expected
+		// waiting, so their default severity is informational.
+		if f.TaskID != "" && ev.snap != nil && ev.snap.State != nil {
+			if t := ev.snap.State.Backlog.Task(f.TaskID); t != nil {
+				if r := t.effectiveBlockReason(); r != nil {
+					entry.ReasonClass = clampJSONString(r.Class, fit.stringMax)
+					entry.ReasonCode = clampJSONString(r.Code, fit.stringMax)
+					entry.Retry = clampJSONString(r.Retry, fit.stringMax)
+					entry.AttemptID = clampJSONString(r.AttemptID, fit.stringMax)
+					if entry.Severity == "warning" {
+						switch r.Class {
+						case blockClassOperator, blockClassDeferred:
+							entry.Severity = "info"
+						}
+					}
+				}
+			}
 		}
 		// A task-scoped finding names the read-only route into its record.
 		// An identifier too long for a route leaves the finding readable

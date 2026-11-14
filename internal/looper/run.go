@@ -911,6 +911,10 @@ func (e *Engine) refresh(held bool) error {
 	if err = e.Repo.Ref(e.State.Ref, seed); err != nil {
 		return err
 	}
+	// An import is an authorized mutation: blocked tasks that arrived
+	// without a structured reason get one derived from their control tags,
+	// and the rest stay unknown until typed evidence exists (OW-09).
+	normalizeImportedBlockReasons(&b)
 	e.State.Backlog = b
 	e.State.ExportHash = digest(data)
 	e.State.ExportSemantics = b.semanticFingerprint()
@@ -975,9 +979,14 @@ func (e *Engine) applyFinishedWorker(ctx context.Context, r workerResult, pendin
 		}
 		// A held worker failure journals its bounded summary (AX-021); the
 		// run-ending classes above were already journaled with the attempt
-		// identity a task filter matches.
+		// identity a task filter matches. The typed reason comes from the
+		// same summary, never from parsing the error text (OW-09).
 		e.workerFailureEvent(a, r.Err)
-		return e.hold(a, r.Err.Error())
+		reason := failureBlockReason(blockCodeUnknown, blockRetryUnknown, a.ID)
+		if s := failureOf(r.Err); s != nil {
+			reason = workerFailureBlockReason(a, s)
+		}
+		return e.holdReason(a, r.Err.Error(), reason)
 	}
 	a.Summary = r.Summary
 	a.ResultCommit = r.Commit

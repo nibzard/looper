@@ -220,6 +220,7 @@ func holdForOperator(t *Task) {
 	t.Status = "blocked"
 	t.Blockers = mergeUnique(t.Blockers, []string{"An operator must complete this prerequisite; coding workers cannot execute it."})
 	t.UnblockWhen = "Record evidence that the operator completed the action, then mark this task done. To delegate different work, explicitly change its contract and remove looper:operator."
+	t.BlockReason = operatorBlockReason()
 }
 
 func (t Task) Deferred() bool { return hasTaskTag(t, deferredTaskTag) }
@@ -232,6 +233,7 @@ func deferTask(t *Task, condition string) {
 	t.Status = "blocked"
 	t.Blockers = mergeUnique(t.Blockers, []string{"Deferred: " + condition})
 	t.UnblockWhen = condition + "; remove looper:deferred and set todo when this condition is met."
+	t.BlockReason = deferredBlockReason()
 }
 
 const taskClassificationInstructions = `Classify tasks by development round and preserve each round's acceptance requirements.

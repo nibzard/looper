@@ -218,11 +218,11 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 	}
 	a.FailureHash = signature
 	if a.Repairs >= e.Config.MaxRepairs {
-		return e.hold(a, "Repair limit reached. "+feedback)
+		return e.holdReason(a, "Repair limit reached. "+feedback, failureBlockReason(blockCodeRepairLimit, blockRetryNo, a.ID))
 	}
 	if a.Repeats >= 2 {
 		if a.Diagnosed {
-			return e.hold(a, "The same failure persists after a fresh diagnosis. "+feedback)
+			return e.holdReason(a, "The same failure persists after a fresh diagnosis. "+feedback, failureBlockReason(blockCodeRepeatedFailure, blockRetryNo, a.ID))
 		}
 		a.Diagnosed = true
 		if err := e.save(); err != nil {
@@ -231,7 +231,7 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 		if d, ok := e.diagnose(ctx, a, feedback); ok {
 			if d.RunRepair != nil {
 				e.State.PendingRunRepair = &pendingRunRepair{Identity: e.recoveryIdentity(), Proposal: d}
-				return e.hold(a, feedback)
+				return e.holdReason(a, feedback, failureBlockReason(blockCodeRunRepairProposed, blockRetryAfterChange, a.ID))
 			}
 			feedback = "An independent diagnosis by the review agent found this root cause: " + d.RootCause +
 				"\nEvidence: " + d.Evidence +
@@ -261,7 +261,7 @@ func (e *Engine) repair(ctx context.Context, a *Attempt, feedback string, out ch
 	if a.ResultCommit != "" {
 		if err = e.Repo.Merge(work, a.ResultCommit); err != nil {
 			e.Repo.Remove(work)
-			return e.hold(a, feedback+"\n"+mergeFailureFeedback("retained result", err))
+			return e.holdReason(a, feedback+"\n"+mergeFailureFeedback("retained result", err), failureBlockReason(blockCodeMergeFailed, blockRetryAfterChange, a.ID))
 		}
 	} else {
 		e.Repo.Remove(work)

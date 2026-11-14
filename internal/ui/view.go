@@ -132,6 +132,10 @@ type TaskView struct {
 	DependsOn   []string     `json:"depends_on,omitempty"`
 	WaitingOn   []string     `json:"waiting_on,omitempty"`
 	Blockers    []string     `json:"blockers,omitempty"`
+	ReasonClass string       `json:"reason_class,omitempty"`
+	ReasonCode  string       `json:"reason_code,omitempty"`
+	Retry       string       `json:"retry,omitempty"`
+	AttemptID   string       `json:"attempt_id,omitempty"`
 	UnblockWhen string       `json:"unblock_when,omitempty"`
 	Attempt     *AttemptView `json:"attempt,omitempty"`
 }

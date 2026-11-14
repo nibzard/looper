@@ -33,6 +33,18 @@
           "details": { "type": "string" },
           "steps": { "type": "array", "items": { "type": "string" } },
           "blockers": { "type": "array", "items": { "type": "string" } },
+          "block_reason": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["class"],
+            "properties": {
+              "class": { "type": "string", "enum": ["operator", "deferred", "failure", "unknown"] },
+              "code": { "type": "string", "maxLength": 64 },
+              "retry": { "type": "string", "enum": ["yes", "after-change", "no", "unknown"] },
+              "attempt_id": { "type": "string", "maxLength": 64 },
+              "source": { "type": "string", "maxLength": 32 }
+            }
+          },
           "tags": { "type": "array", "items": { "type": "string" } },
           "files": { "type": "array", "items": { "type": "string" } },
           "depends_on": { "type": "array", "items": { "type": "string" } },

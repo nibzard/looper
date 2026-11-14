@@ -818,6 +818,7 @@ func (e *Engine) applyProposal(proposal *importProposal) ([]string, []CoveredRef
 		t.Status = "todo"
 		if t.Deferred() {
 			t.Status = "blocked"
+			t.BlockReason = deferredBlockReason()
 		}
 		t.Priority = max(1, min(5, t.Priority))
 		deps := make([]string, 0, len(t.DependsOn))

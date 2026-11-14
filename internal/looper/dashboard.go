@@ -160,7 +160,8 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 		return writeStopRequest(dir, stopRequest{Session: info.Session, PID: info.PID})
 	}
 	controls.Drain = drain
-	controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision) }
+	controls.Requeue = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision, false) }
+	controls.RequeueFresh = func(taskID, revision string) error { return requeueTask(dir, info.Session, taskID, revision, true) }
 	controls.AddPlan = func(path string) (string, error) {
 		planPath, err := filepath.Abs(path)
 		if err != nil {
@@ -336,7 +337,14 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			if err != nil {
 				return err
 			}
-			return requeueTask(dir, session, taskID, revision)
+			return requeueTask(dir, session, taskID, revision, false)
+		}
+		controls.RequeueFresh = func(taskID, revision string) error {
+			session, err := attachment.currentSession()
+			if err != nil {
+				return err
+			}
+			return requeueTask(dir, session, taskID, revision, true)
 		}
 		controls.Drain = func() error {
 			session, err := attachment.currentSession()

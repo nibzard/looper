@@ -140,6 +140,10 @@ type inspectTaskContract struct {
 	Steps          []string       `json:"steps,omitempty"`
 	Tags           []string       `json:"tags,omitempty"`
 	Blockers       []string       `json:"blockers"`
+	ReasonClass    string         `json:"reason_class,omitempty"`
+	ReasonCode     string         `json:"reason_code,omitempty"`
+	Retry          string         `json:"retry,omitempty"`
+	AttemptID      string         `json:"attempt_id,omitempty"`
 	Details        inspectExcerpt `json:"details"`
 }
 
@@ -551,6 +555,12 @@ func inspectTaskContractOf(t *Task, fit inspectFit) inspectTaskContract {
 			break
 		}
 		c.Tags = append(c.Tags, clamp(tag))
+	}
+	if r := t.effectiveBlockReason(); r != nil {
+		c.ReasonClass = r.Class
+		c.ReasonCode = clamp(r.Code)
+		c.Retry = r.Retry
+		c.AttemptID = clamp(r.AttemptID)
 	}
 	return c
 }

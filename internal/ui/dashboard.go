@@ -46,6 +46,10 @@ type Controls struct {
 	Inspect    func(taskID string) (TaskDetail, error)
 	Statistics func() (StatisticsView, error)
 	Requeue    func(taskID, revision string) error
+	// RequeueFresh retires the task's reusable attempts instead of resuming
+	// them; the next dispatch starts a new attempt. Nil when the caller
+	// cannot submit requests.
+	RequeueFresh func(taskID, revision string) error
 	// Done reports that the local controller exited (controlling mode).
 	Done func() bool
 	// Cancel stops the local controller with retained work (controlling mode).
@@ -242,6 +246,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspace.requeuePending = false
 		if msg.err != nil {
 			m.err = msg.err.Error()
+		} else if msg.fresh {
+			m.message = msg.taskID + " requeued fresh. Retained attempts are retired; the next dispatch starts clean."
 		} else {
 			m.message = msg.taskID + " requeued. Retained work is available for reuse."
 		}
@@ -534,11 +540,22 @@ func (m model) dialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.dialog {
 	case "requeue":
 		m.dialog = ""
-		if strings.ToLower(msg.String()) == "y" && m.ctrl.Requeue != nil && m.workspace.requeueTask != nil {
-			t := *m.workspace.requeueTask
-			m.workspace.requeuePending = true
-			m.message = "Requeue request pending. Waiting for the controller."
-			return m, func() tea.Msg { return requeueMsg{taskID: t.ID, err: m.ctrl.Requeue(t.ID, t.Revision)} }
+		t := m.workspace.requeueTask
+		switch strings.ToLower(msg.String()) {
+		case "y":
+			if m.ctrl.Requeue != nil && t != nil {
+				task := *t
+				m.workspace.requeuePending = true
+				m.message = "Requeue request pending. Waiting for the controller."
+				return m, func() tea.Msg { return requeueMsg{taskID: task.ID, err: m.ctrl.Requeue(task.ID, task.Revision)} }
+			}
+		case "f":
+			if m.ctrl.RequeueFresh != nil && t != nil {
+				task := *t
+				m.workspace.requeuePending = true
+				m.message = "Fresh requeue request pending. Waiting for the controller."
+				return m, func() tea.Msg { return requeueMsg{taskID: task.ID, fresh: true, err: m.ctrl.RequeueFresh(task.ID, task.Revision)} }
+			}
 		}
 		return m, nil
 	case "exit":
@@ -1483,7 +1500,13 @@ func (m model) dialogView() string {
 	switch m.dialog {
 	case "requeue":
 		if t := m.workspace.requeueTask; t != nil {
-			return m.dialogBox("Requeue " + plainText(t.ID) + "?\n\nConfirm that its blocker is resolved.\nRetained work is available for reuse.\n\n[y] Requeue · [esc] Cancel")
+			body := "Confirm that its blocker is resolved.\nRetained work is available for reuse."
+			keys := "[y] Requeue"
+			if m.ctrl.RequeueFresh != nil {
+				body = "Confirm that its blocker is resolved.\nRetained work is reused on the next dispatch.\n[f] Start fresh retires it; the next attempt begins clean."
+				keys += " · [f] Start fresh"
+			}
+			return m.dialogBox("Requeue " + plainText(t.ID) + "?\n\n" + body + "\n\n" + keys + " · [esc] Cancel")
 		}
 	case "exit":
 		return m.dialogBox("Exit controller?\n\n [d] Drain, then exit\n [c] Interrupt; retain work\n [esc] Stay")

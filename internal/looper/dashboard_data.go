@@ -223,8 +223,12 @@ func (o *observer) inspect(id string) (ui.TaskDetail, error) {
 	return d, nil
 }
 
-func requeueTask(dir, session, id, revision string) error {
-	ack, err := submitSettingsRequest(dir, SettingsRequest{Version: SettingsRequestVersion, Type: RequestTypeRequeue,
+func requeueTask(dir, session, id, revision string, fresh bool) error {
+	reqType := RequestTypeRequeue
+	if fresh {
+		reqType = RequestTypeRequeueFresh
+	}
+	ack, err := submitSettingsRequest(dir, SettingsRequest{Version: SettingsRequestVersion, Type: reqType,
 		Session: session, TaskID: id, TaskRevision: revision}, 30*time.Second)
 	if err != nil {
 		return err
@@ -338,6 +342,7 @@ func (e *Engine) applyRequeueRequest(req *SettingsRequest) (ack SettingsAck) {
 	rec.AffectedTasks = []string{req.TaskID}
 	t.Status = "todo"
 	t.Blockers = nil
+	t.BlockReason = nil
 	t.UnblockWhen = ""
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	e.State.Finished = false
@@ -489,6 +494,7 @@ func (e *Engine) applyRequeueFreshRequest(req *SettingsRequest) (ack SettingsAck
 	}
 	t.Status = "todo"
 	t.Blockers = nil
+	t.BlockReason = nil
 	t.UnblockWhen = ""
 	t.UpdatedAt = now
 	e.State.Finished = false

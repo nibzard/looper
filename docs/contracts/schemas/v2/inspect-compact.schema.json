@@ -74,6 +74,10 @@
         "steps": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
         "tags": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
         "blockers": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "reason_class": { "enum": ["operator", "deferred", "failure", "unknown"], "description": "The structured class of the current dispatch barrier; absent unless the task is blocked." },
+        "reason_code": { "type": "string", "maxLength": 64 },
+        "retry": { "enum": ["yes", "after-change", "no", "unknown"], "description": "What may happen next: yes names a retry candidate, after-change names a required external change, no names a permanent failure, unknown defers to the recorded evidence." },
+        "attempt_id": { "type": "string", "maxLength": 64, "description": "The attempt the failure reason references, when one exists." },
         "details": { "$ref": "#/$defs/excerpt" }
       }
     },

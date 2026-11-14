@@ -161,6 +161,13 @@ func statusReport(c Config, snap *StoreSnapshot, timing TimingReport, statistics
 	state.Requests = nil
 	state.Cancellations = nil
 	state.StartupSeed = false
+	// The structured block reason is version 2 output (OW-10): the legacy
+	// and --full documents share this frozen shape and admit no
+	// block_reason key on nested tasks. The compact documents carry it.
+	state.Backlog.Tasks = append([]Task{}, state.Backlog.Tasks...)
+	for i := range state.Backlog.Tasks {
+		state.Backlog.Tasks[i].BlockReason = nil
+	}
 	return struct {
 		*State
 		Observation Observation       `json:"observation"`
@@ -210,6 +217,10 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 			return err
 		}
 		taskTiming := timing.task(t.ID)
+		// The legacy inspection document keeps the frozen task shape: the
+		// structured reason lives in the compact version 2 projection.
+		reported := t
+		reported.BlockReason = nil
 		report := struct {
 			Version  int                 `json:"schema_version"`
 			Task     Task                `json:"task"`
@@ -218,7 +229,7 @@ func inspectTask(c Config, store *Store, out io.Writer) error {
 			Checks   []CheckObservation  `json:"checks"`
 			Logs     []string            `json:"logs"`
 			Timing   TaskTimingReport    `json:"timing"`
-		}{observationVersion, t, attempts, workers, checks, logs, taskTiming}
+		}{observationVersion, reported, attempts, workers, checks, logs, taskTiming}
 		if c.JSON {
 			return json.NewEncoder(out).Encode(report)
 		}
@@ -342,7 +353,7 @@ func doctorJSON(c Config, out io.Writer) int {
 			SchemaVersion:     doctorCompactSchemaVersion,
 			Kind:              doctorCompactKind,
 			Observation:       o,
-			Findings:          findings,
+			Findings:          doctorFindingViews(findings, s),
 			Requests:          requests,
 			AutomaticRecovery: false,
 			Detail: doctorDetailRoutes{
@@ -385,16 +396,61 @@ const (
 
 // doctorCompactDocument is the doctor document under contract version 2:
 // the same observation and findings shape the legacy document carries, plus
-// the bounded pending-request summaries (AX-010) and their detail routes.
+// the bounded pending-request summaries (AX-010), the structured block
+// reasons (OW-10), and their detail routes.
 type doctorCompactDocument struct {
 	ContractVersion   int                   `json:"contract_version"`
 	SchemaVersion     int                   `json:"schema_version"`
 	Kind              string                `json:"kind"`
 	Observation       Observation           `json:"observation"`
-	Findings          []HealthFinding       `json:"findings"`
+	Findings          []doctorFindingView   `json:"findings"`
 	Requests          doctorRequestsSummary `json:"requests"`
 	AutomaticRecovery bool                  `json:"automatic_recovery"`
 	Detail            doctorDetailRoutes    `json:"detail"`
+}
+
+// doctorFindingView is the version 2 finding projection: the shared finding
+// plus the structured reason of a blocked task (OW-10). The legacy document
+// keeps the shared HealthFinding shape unchanged.
+type doctorFindingView struct {
+	Code        string `json:"code"`
+	Severity    string `json:"severity"`
+	TaskID      string `json:"task_id,omitempty"`
+	Message     string `json:"message"`
+	Action      string `json:"suggested_action"`
+	ReasonClass string `json:"reason_class,omitempty"`
+	ReasonCode  string `json:"reason_code,omitempty"`
+	Retry       string `json:"retry,omitempty"`
+	AttemptID   string `json:"attempt_id,omitempty"`
+}
+
+// doctorFindingViews projects findings for the version 2 document, joining
+// each blocked-task finding to the structured reason the saved state holds.
+// Operator and deferral classes are expected waiting: their default version
+// 2 severity is informational, so a monitor does not page on them.
+func doctorFindingViews(findings []HealthFinding, s *State) []doctorFindingView {
+	views := make([]doctorFindingView, 0, len(findings))
+	for _, f := range findings {
+		v := doctorFindingView{Code: f.Code, Severity: f.Severity, TaskID: f.TaskID, Message: f.Message, Action: f.Action}
+		if f.TaskID != "" && s != nil {
+			if t := s.Backlog.Task(f.TaskID); t != nil {
+				if r := t.effectiveBlockReason(); r != nil {
+					v.ReasonClass = r.Class
+					v.ReasonCode = clampJSONString(r.Code, 64)
+					v.Retry = r.Retry
+					v.AttemptID = clampJSONString(r.AttemptID, 64)
+					if v.Severity == "warning" {
+						switch r.Class {
+						case blockClassOperator, blockClassDeferred:
+							v.Severity = "info"
+						}
+					}
+				}
+			}
+		}
+		views = append(views, v)
+	}
+	return views
 }
 
 // doctorRequestsSummary names the pending work the run owes an outcome to:

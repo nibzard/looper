@@ -46,6 +46,7 @@ type taskDetailMsg struct {
 }
 type requeueMsg struct {
 	taskID string
+	fresh  bool
 	err    error
 }
 
@@ -919,6 +920,33 @@ func (m model) inspectorContent(width int) string {
 	}
 	add("Blockers", strings.Join(t.Blockers, "; "))
 	add("Recovery", t.UnblockWhen)
+	if t.ReasonClass != "" {
+		action := "Inspect the recorded evidence before acting."
+		switch t.ReasonClass {
+		case "operator":
+			action = "An operator action unblocks this task; waiting is expected."
+		case "deferred":
+			action = "This task waits for its resume condition; waiting is expected."
+		case "failure":
+			switch t.Retry {
+			case "yes":
+				action = "A retry may succeed; follow your retry policy."
+			case "after-change":
+				action = "Fix the recorded condition first; a plain retry cannot succeed."
+			case "no":
+				action = "The recorded failure is permanent; change the approach or cancel."
+			}
+		}
+		detail := t.ReasonClass
+		if t.ReasonCode != "" {
+			detail += " (" + t.ReasonCode + ")"
+		}
+		if t.AttemptID != "" {
+			detail += " · " + t.AttemptID
+		}
+		add("Reason", detail)
+		lines = append(lines, action, "")
+	}
 	if t.Deferred {
 		lines = append(lines, "Deferred work stays outside the worker queue until explicitly resumed.", "")
 	} else if t.Status == "blocked" {

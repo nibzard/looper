@@ -140,6 +140,9 @@ func attemptView(a *Attempt) ui.AttemptView {
 func taskView(t Task, b Backlog) ui.TaskView {
 	v := ui.TaskView{ID: t.ID, Title: t.Title, Status: t.Status, Deferred: t.Deferred(), Revision: hashJSON(t), Details: t.Details,
 		DependsOn: append([]string(nil), t.DependsOn...), Blockers: append([]string(nil), t.Blockers...), UnblockWhen: t.UnblockWhen}
+	if r := t.effectiveBlockReason(); r != nil {
+		v.ReasonClass, v.ReasonCode, v.Retry, v.AttemptID = r.Class, r.Code, r.Retry, r.AttemptID
+	}
 	for _, id := range t.DependsOn {
 		if dep := b.Task(id); dep == nil || dep.Status != "done" {
 			v.WaitingOn = append(v.WaitingOn, id)

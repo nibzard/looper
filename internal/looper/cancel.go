@@ -398,6 +398,7 @@ func (e *Engine) commitCancellation(rec *RequestRecord, ids []string) SettingsAc
 			continue
 		}
 		t.Status = "cancelled"
+		t.BlockReason = nil
 		t.UpdatedAt = now
 		cancelled = append(cancelled, id)
 		cancelledSet[id] = true

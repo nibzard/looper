@@ -1304,7 +1304,7 @@ func (e *Engine) start(ctx context.Context, t Task, out chan<- workerResult) (*A
 				}
 				if err = e.Repo.Merge(work, partial); err != nil {
 					e.Repo.Remove(work)
-					return a, e.hold(a, mergeFailureFeedback("retained partial implementation", err))
+					return a, e.holdReason(a, mergeFailureFeedback("retained partial implementation", err), failureBlockReason(blockCodeMergeFailed, blockRetryAfterChange, a.ID))
 				}
 				a.Worktree = work
 				a.Worktrees = append(a.Worktrees, work)
@@ -1386,10 +1386,17 @@ func (e *Engine) launch(ctx context.Context, a *Attempt, out chan<- workerResult
 	return nil
 }
 
+// hold blocks one attempt with a typed reason. The reason names who must
+// act and whether a retry can succeed, so reports stay machine-readable
+// (OW-09); the string keeps the human evidence.
 func (e *Engine) hold(a *Attempt, reason string) error {
+	return e.holdReason(a, reason, failureBlockReason(blockCodeUnknown, blockRetryUnknown, a.ID))
+}
+
+func (e *Engine) holdReason(a *Attempt, reason string, block *BlockReason) error {
 	a.Phase = "blocked"
 	a.Feedback = reason
-	a.Summary = &Summary{TaskID: a.Task.ID, Status: "blocked", Summary: "Work is retained for recovery.", Files: []string{}, Blockers: []string{reason}, UnblockWhen: "Resolve the recorded condition and set this task to todo."}
+	a.Summary = &Summary{TaskID: a.Task.ID, Status: "blocked", Summary: "Work is retained for recovery.", Files: []string{}, Blockers: []string{reason}, UnblockWhen: "Resolve the recorded condition and set this task to todo.", BlockReason: block}
 	return e.applyResult(a)
 }
 func (e *Engine) applyResult(a *Attempt) error {
@@ -1415,6 +1422,15 @@ func (e *Engine) applyResult(a *Attempt) error {
 	t.Files = mergeUnique(t.Files, usable)
 	t.Blockers = mergeUnique(t.Blockers, s.Blockers)
 	t.UnblockWhen = s.UnblockWhen
+	// Completion and cancellation end the barrier. A new blocked execution
+	// replaces the prior current reason: control tags stay authoritative, a
+	// typed reason from this execution comes next, and anything else stays
+	// unknown rather than guessing from stale blocker strings (OW-09).
+	if s.Status == "done" || s.Status == "cancelled" {
+		t.BlockReason = nil
+	} else if s.Status == "blocked" {
+		t.BlockReason = classifyBlockReason(t, s.BlockReason, blockSourceWorker)
+	}
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if s.Status == "done" {
 		a.Phase = "done"
