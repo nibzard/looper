@@ -140,6 +140,35 @@ blocked tasks and missing worker processes. Quiet output is informational.
 Exit code 1 means a diagnostic error; warnings return 0. The plain command
 also checks installation dependencies and the backlog.
 
+## Blocked-task reasons
+
+A blocked task carries one structured reason in the version 2 documents:
+`reason_class` (`operator`, `deferred`, `failure`, or `unknown`), a bounded
+`reason_code`, `retry` guidance, and the `attempt_id` the reason references.
+Doctor findings, compact status findings, and compact inspection expose the
+same fields. Free-text blockers stay as human evidence; Looper never parses
+them for the class. Control tags are authoritative: `looper:operator` yields
+`operator`, `looper:deferred` yields `deferred`, and both tags report
+`deferred` as the primary class. A blocked task without typed evidence
+reports `unknown` rather than a guess.
+
+Use this monitor policy on those fields:
+
+| Evidence | Monitor behavior |
+| --- | --- |
+| `operator` or `deferred` class | Show expected waiting. Do not page only because the status is blocked. |
+| `failure` class with `retry=yes` | Report a retry candidate. Apply the caller's retry policy. |
+| `failure` class with `retry=after-change` | Show the required change, such as billing or configuration repair. |
+| `failure` class with `retry=no` | Escalate the permanent failure without retrying. |
+| `unknown` class or `unknown` retry | Keep a warning and link to `looper inspect <task>`. |
+
+The class alone never authorizes an automatic retry: quota, billing,
+configuration, and permanent failures can all carry class `failure` while
+requiring different actions. The reason is the current primary barrier, not
+an exhaustive prerequisite list. Completion, cancellation, and requeue clear
+it; the event journal and attempt history keep the evidence. Legacy JSON
+output omits these fields everywhere, including nested tasks and `--full`.
+
 Controller ownership, process presence, and output activity are separate
 observations. `progress: "unknown"` means that output alone cannot prove
 useful progress. Log modification times measure output, including

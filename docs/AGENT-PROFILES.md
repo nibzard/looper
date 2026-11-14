@@ -32,6 +32,50 @@ remain authoritative. Each role can select a different profile of the same
 adapter, with independent model and effort values. The reviewer profile also
 handles planning, diagnosis, and product review.
 
+## Configure without a terminal
+
+`looper config` also works headless: `--show`, `--preview`, and `--set`
+never open a form and never need a terminal. `--show` and `--preview` create
+nothing — no runtime directory, no sidecar files, no Git reads that write.
+
+`--set` and `--unset` address public field names. Project scope takes
+`worker`, `reviewer`, `jobs`, `model`, `claude_model`, `effort`,
+`verify_command`, `setup_command`, and `review_every`. Machine scope takes
+`worker`, `reviewer`, and `agents.<name>.adapter`, `agents.<name>.command`,
+`agents.<name>.model`, and `agents.<name>.effort`. The `worker` and
+`reviewer` names are aliases of `agent` and `review_agent`. A new machine
+profile needs its adapter and command together:
+
+```sh
+looper config --scope machine \
+  --set agents.claude-alt.adapter=claude \
+  --set agents.claude-alt.command=/usr/local/bin/claude-alt
+looper config --set worker=claude-alt --set reviewer=claude
+```
+
+Machine scope works outside a Git repository, never opens a project, and
+edits the catalog under its own lock. Pass `--if-revision <digest>` to make
+the edit conditional on the catalog's current revision; a concurrent editor
+reports `catalog_changed` instead of overwriting. Project scope refuses the
+request-only options that belong to live submission, and machine scope
+refuses `--reset`, `--wait`, and `--idempotency-key`.
+
+`--preview` validates the whole patch before any write and reports each
+field's outcome and application boundary: saved for the next start, applied
+at the next dispatch boundary, overridden by a flag or environment setting,
+unchanged, or restart-required for machine definitions. A multi-field error
+writes nothing.
+
+Project edits go through the live controller when one runs, with the same
+receipt, wait, and caller key as every other mutation. Against a stopped run
+they save directly beside `profile.json` with a journal: an interrupted save
+is completed or reported on the next attempt, and a repeated `--set` after a
+crash replays to the same result instead of writing twice. Project edits
+keep the saved profile digest, session, receipts, and idempotency keys.
+
+A controller snapshots machine definitions when it starts. Machine edits
+apply to a running controller only after it restarts.
+
 ## Configuration locations
 
 Machine commands and defaults live at:

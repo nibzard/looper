@@ -108,6 +108,38 @@ for the machine document. No-run errors from other commands name the
 resolved project root, task file, and searched base and runtime locations,
 and point at `looper runs` for discovery.
 
+## Publish accepted work
+
+`looper publish --preview` composes the exact project commit Looper would
+create from a stopped run's accepted tree, runs every guard against it, and
+prints one read-only document. The preview changes no file, index entry, ref,
+or database record. It needs a stopped controller: a live run owns the branch.
+
+The commit contains one tree with the current `HEAD` as its parent. Every
+non-excluded path comes from the accepted tree. Runtime paths stay untracked.
+A tracked task file carries the accepted exported bytes; other tracked control
+files keep their tracked place. The preview lists every path the commit would
+change and names what it omits.
+
+The commit uses your Git identity and your configured signing. Hooks do not
+run, because the commit is written from an immutable tree. The preview states
+both facts before you apply anything.
+
+Each preview binds a content-sensitive token. `looper publish --apply --token
+<token>` re-verifies that token under the repository and index locks, then
+writes one project commit, advances your branch by compare-and-swap, installs
+the prepared index, and reconciles the saved baseline. A stale token — any
+change to the index, source trees, control files, branch, or saved run since
+the preview — is refused without changing anything. Add `--message` to set the
+commit message and `--idempotency-key` to make a retried apply safe.
+
+A journal carries every crashed operation to completion or a preserved
+conflict. Startup resolves that journal before any comparison runs, so an
+interrupted publication cannot leave the branch and the saved run
+disagreeing. After publication, the recovery preview names the
+`commit-published` state and points at the publication; `looper recovery
+--apply` refuses it, because the commit already carries the result.
+
 ## Resume after committing published work
 
 If you commit files that Looper has already published, restart with `looper`.

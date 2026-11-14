@@ -128,11 +128,39 @@ func chdirTemp(t *testing.T) string {
 
 // exampleArgs splits one `looper ...` example line into parser arguments.
 func exampleArgs(example string) ([]string, bool) {
-	fields := strings.Fields(example)
+	fields := splitQuoted(example)
 	if len(fields) == 0 || fields[0] != "looper" {
 		return nil, false
 	}
 	return fields[1:], true
+}
+
+// splitQuoted splits one example like a shell: double quotes keep a value
+// with spaces together, which is how an operator would type it.
+func splitQuoted(s string) []string {
+	var out []string
+	var current strings.Builder
+	inWord, quoted := false, false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			quoted = !quoted
+			inWord = true
+		case !quoted && (r == ' ' || r == '\t'):
+			if inWord {
+				out = append(out, current.String())
+				current.Reset()
+				inWord = false
+			}
+		default:
+			current.WriteRune(r)
+			inWord = true
+		}
+	}
+	if inWord {
+		out = append(out, current.String())
+	}
+	return out
 }
 
 // The registry, the capabilities document, and the help blocks name one

@@ -78,6 +78,41 @@ the backlog for inspection, never re-enter the ready set, and `looper
 status --contract v2` counts them under `work.counts.cancelled`. This
 command needs an active controller built with support for `cancel-task`.
 
+## Requeue blocked tasks during a run
+
+Use `looper requeue <task-id>` to return one blocked task to `todo` through
+the active controller. The command reads the task revision from your task
+file and sends it with the request: if the task changed, completed, or left
+the backlog since you read it, the controller refuses with a conflict and
+changes nothing. The task contract, dependencies, and history stay intact,
+and the retained attempt is reused on the next dispatch.
+
+Add `--fresh` to retire every reusable attempt as evidence instead. The
+attempts keep their artifacts, result commits, and history entries, but they
+are never resumed, reused, or re-entered. The next dispatch creates a new
+attempt under the current worker role, which is how you switch providers
+without losing the record:
+
+```sh
+looper stop
+looper config --set worker=claude-alt
+looper requeue T015 --fresh
+looper start
+```
+
+The task keeps its original ID, so dependent tasks stay connected. Use
+`--preview` first to see, read-only, which attempts a fresh application would
+retire. The dashboard offers the same choice: press **r** on a blocked task,
+then choose between requeue and **[f] Start fresh**.
+
+The fresh mode is a `requeue-fresh` request. A controller that does not
+advertise it is refused before any envelope is queued, so an older controller
+can never downgrade fresh mode to an ordinary retry. The command returns a
+receipt at once; query it with `looper requests <id>`, add `--wait` for one
+bounded wait, and pass `--idempotency-key` with the same semantics as
+`add-task`. A stopped run applies the requeue under the repository lock
+without launching agents.
+
 ## Amend tasks during a run
 
 Use `looper amend <task-id> <task.json>` to change one task contract through
