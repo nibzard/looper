@@ -30,8 +30,8 @@ bootstrap activity marker stays a fixed bullet instead of a spinner, and
 every status line, key, and refresh keeps its behavior. The option changes
 presentation only; `--json` output and normal execution are unchanged.
 
-![The dashboard: run state and progress in the header, working and blocked
-tasks, recent events](assets/tui.png)
+![The dashboard: run state and progress in the header, a blocked task with
+its reason, the scheduler state, and recent outcomes](assets/tui.png)
 
 | State | Color | Meaning |
 | --- | --- | --- |

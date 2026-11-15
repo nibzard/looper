@@ -470,3 +470,27 @@ Validation outcomes, 2026-11-14:
   build, and skill scripts passed in the same make run, and
   `package-smoke.sh` plus `skill-regression.py` pass separately. The
   failure class matches the documented budget flakes, not a regression.
+
+## README rewrite and figure recorder, 2026-11-15
+
+- The README is 177 lines. It leads with what Looper does, a five-step
+  quickstart with an example `PROJECT.md`, and what Looper does to the
+  repository. The configuration table and the exit codes moved, unchanged,
+  to `docs/configuration.md`. Two stale claims were fixed: "Looper does not
+  commit" now names `looper publish`, and the agent example uses real
+  profile names.
+- `scripts/record-demo.py` re-records `docs/assets/loop.gif` and
+  `docs/assets/tui.png` from a real `looper tui` run with a stub `claude`.
+  It uses a private tmux socket, a 120x26 pane, and a temporary `HOME`.
+  Run `make build` first. The October figures were a manual capture that
+  showed `codex` planning and the old key hints.
+- Recorder gotchas: unittest writes `__pycache__`, which fails the
+  changed-files check unless the project ignores it. A worker must report
+  `block_reason`, or the inspector shows `unknown (unknown)`. Killing tmux
+  does not stop a detached controller; the script interrupts through the
+  exit dialog.
+- Dashboard defects seen while recording, not fixed:
+  - The task view (`u`) opens with the cursor on the second row (T001),
+    not on the blocked task that sorts first.
+  - A multi-line blocker in the overview Attention section leaves about
+    ten blank lines under the first line.
