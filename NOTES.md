@@ -32,6 +32,19 @@ the end of this file. The full text is available in three places:
 
 ## Open items
 
+- Operator workflows implemented on 2026-11-14 from
+  [operator workflows plan](docs/OPERATOR-WORKFLOWS-PLAN.md). All four
+  features and the combined acceptance fixture are done; see the
+  implementation section at the end of this file. The 2026-11-14 operator
+  feedback assessment that drove the plan is satisfied: checked branch
+  handoff (`looper publish`), fresh attempt under the same task ID
+  (`looper requeue --fresh`), non-interactive configuration
+  (`looper config --set/--unset/--show/--preview`), and the structured
+  blocker reason (`block_reason`).
+
+- Operator feedback assessed on 2026-11-14 against current source; all four
+  priorities it raised are implemented as the packages above.
+
 - `T117` (todo): controller assembly cannot transport a tracked schema
   at the control-file path.
 - Blocked tasks, from `to-do.json`:
@@ -396,3 +409,64 @@ User documentation: [agent profiles](docs/AGENT-PROFILES.md).
   build differs from the executable.
 - Plain status labels the phase age as `last output … ago`. It is the
   time since the agent's last output, not the phase duration.
+
+## Operator workflows implemented, 2026-11-14
+
+Implementation of [operator workflows plan](docs/OPERATOR-WORKFLOWS-PLAN.md).
+OW-01 through OW-04 and OW-07/OW-08 landed in commit `9b3775e`
+(`looper publish` and `looper requeue --fresh`). The remainder landed
+after it:
+
+- OW-05/OW-06, headless configuration: `looper config` serves
+  `--show`, `--preview`, `--set`, `--unset`, project and machine scope,
+  `--if-revision`, and a stopped-project journal beside `profile.json`.
+  Public worker/reviewer aliases canonicalize before the payload digest,
+  so `worker=` and `agent=` share one idempotency identity. The version 2
+  document is `docs/contracts/schemas/v2/config.schema.json`. Core code:
+  `internal/looper/config_cmd.go`.
+- OW-08 leftover: the dashboard requeue dialog gained **[f] Start
+  fresh**; both dashboard control sites submit `requeue-fresh`.
+- OW-09/OW-10, structured blocker reasons: `Task.BlockReason`
+  (`class`, `code`, `retry`, `attempt_id`, `source`) with classification
+  from typed sources only, control tags authoritative, `Contract()` clear
+  while `hashJSON(task)` tracks reason edits. Version 2 doctor findings,
+  status findings, and compact inspection carry the reason; operator and
+  deferred downgrade to informational severity. Legacy documents omit the
+  field everywhere, including nested tasks and `--full`. `looper amend`
+  can correct reason metadata on an idle blocked task. Core code:
+  `internal/looper/block_reason.go`.
+- Schema decision: `to-do.schema.json` keeps `schema_version` 1 and gains
+  the optional `block_reason` (additive). Older Looper binaries decode
+  the file and ignore the field; an external validator pinned to the
+  pre-extension schema may reject it. Recorded in
+  `docs/AGENT-CONTRACT-MIGRATION.md` and the 0.11.0 release notes.
+- OW-11: combined acceptance fixture
+  `TestOperatorWorkflowAcceptanceFixture` runs all seven plan steps
+  (headless config, accepted work beside a typed quota failure,
+  publication, provider switch with fresh requeue, restart under the new
+  worker, doctor classes, second publication with clean resume). The
+  crash variants of steps 3 and 4 stay covered by the publish journal
+  tests and the requeue rollback test.
+- Documentation: publish section in `docs/recovery.md`, requeue section
+  in `docs/runtime-requests.md`, headless configuration in
+  `docs/AGENT-PROFILES.md`, monitor policy in `docs/observability.md`,
+  four change-log entries in `docs/AGENT-CONTRACT-MIGRATION.md`, and
+  `docs/release-notes/0.11.0.md` (prepared; no release published, no
+  installed binary replaced).
+
+Validation outcomes, 2026-11-14:
+
+- `go test ./... -count=1 -timeout 40m`: pass, after one guard fix. The
+  publish help example's quoted `--message "Accept completed work"` failed
+  `TestCommandHelpCoversTheSurface`, which split examples on raw
+  whitespace; the guard now splits shell-style, honoring double quotes.
+- `go test ./internal/contractschema -count=1`: pass.
+- `go test ./internal/looper -run 'Test(LegacyContract|Capabilities|ClientCommands)' -count=1 -timeout 30m`: pass.
+- `go test -race ./internal/looper -run 'Test(Publish|Requeue|Settings|AgentProfiles|Config)' -count=1 -timeout 40m`: pass.
+- `go test -race ./internal/looper -run 'TestOperatorWorkflow|TestRequeueFresh|TestBlockReason|TestControlTags|TestApplyResult' -count=1 -timeout 30m`: pass.
+- `make test`: the first run failed only in `scripts/runtime-test.py`
+  under host load (7 problems, 2 954 s against a ~380 s reference). The
+  same 73 runtime tests pass alone in 576 s; `go vet`, the installer,
+  build, and skill scripts passed in the same make run, and
+  `package-smoke.sh` plus `skill-regression.py` pass separately. The
+  failure class matches the documented budget flakes, not a regression.
