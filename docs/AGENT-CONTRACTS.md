@@ -56,6 +56,29 @@ AX-027 release gates pass. An unknown value is a usage error, not a fallback.
 selected. Compact is the default for version 2 status and inspection; it is
 not a truncation of an error, and it never emits invalid JSON.
 
+### Routine monitoring
+
+Agents and scripts that watch a run read the compact status, not the
+complete state:
+
+```
+looper status --contract v2 --json
+```
+
+The call returns one `looper.status.compact` document within the 8 KiB
+budget: project and run identity, `controller.state` (`starting`,
+`controlling`, `draining`, `stopped`, or `unknown`), work counts with a
+bounded active list, the waiting reason, bounded findings, the last durable
+transition, and `cursor.event_id`, the position event queries continue
+from. The `limits` and `detail` routes name what the document omitted and
+the exact command that returns it.
+
+Callers that need the detailed state — every task and attempt, the timing
+and usage statistics — pass `--full`: `looper status --contract v2 --full
+--json`. Plain `looper status --json` keeps its legacy format and serves
+that complete document under the default contract; the migration guide
+owns its default transition.
+
 ## Document rules
 
 1. A finite query returns exactly one JSON document on standard output. The
@@ -324,7 +347,17 @@ Each summary rides in the recorded payload under `failure` and carries:
   when the journal is unread.
 
 Cleanup failures keep their `resource-cleanup-error` notice with its
-unchanged message and gain the summary beside it. `worker_activity` events
+unchanged message and gain the summary beside it. Repeated identical cleanup
+failures are grouped per artifact within one controller session: the notice
+and the summary appear once, every tenth identical repeat journals one
+`resource-cleanup-summary` event with the repeat count, and the session's
+closing sweep states the repeats that have not reached the interval; a
+different artifact, or a changed error for the same artifact, reports on its
+own. Lease read and validate warnings group the same way: an unreadable or
+invalid `resources.json` keeps its `resource-cleanup-error` notice, identical
+repeats count silently by lease directory, the interval and closing summaries
+state the count, and a record that reads and validates again drops its group.
+`worker_activity` events
 add one bounded, scrubbed error line to "Tool reported an error", so severity
 is readable from the journal without opening a raw session log. A failure
 that ends a run maps onto the version 2 error document (`agent_failed`,

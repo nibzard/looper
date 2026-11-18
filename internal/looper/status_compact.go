@@ -781,7 +781,9 @@ func statusFindingsFor(ev *statusEvidence, fit statusFit) []statusFinding {
 		}
 		// A blocked-task finding carries the structured reason beside its
 		// text (OW-10). The operator and deferral classes are expected
-		// waiting, so their default severity is informational.
+		// waiting, so their default severity is informational. A circular
+		// condition is never expected waiting, so its warning survives the
+		// downgrade.
 		if f.TaskID != "" && ev.snap != nil && ev.snap.State != nil {
 			if t := ev.snap.State.Backlog.Task(f.TaskID); t != nil {
 				if r := t.effectiveBlockReason(); r != nil {
@@ -789,7 +791,7 @@ func statusFindingsFor(ev *statusEvidence, fit statusFit) []statusFinding {
 					entry.ReasonCode = clampJSONString(r.Code, fit.stringMax)
 					entry.Retry = clampJSONString(r.Retry, fit.stringMax)
 					entry.AttemptID = clampJSONString(r.AttemptID, fit.stringMax)
-					if entry.Severity == "warning" {
+					if entry.Severity == "warning" && f.Code != findingTaskCircular {
 						switch r.Class {
 						case blockClassOperator, blockClassDeferred:
 							entry.Severity = "info"

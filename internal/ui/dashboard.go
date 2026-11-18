@@ -212,7 +212,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case ViewSnapshot:
-		m.preserveTaskSelection()
 		m.acceptSnapshot(&msg)
 		m.staleView = false
 		m.trackBootstrap(&msg)
@@ -257,7 +256,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.ctrl.Poll != nil {
-			m.preserveTaskSelection()
 			if snap := m.ctrl.Poll(); snap != nil {
 				m.acceptSnapshot(snap)
 				m.staleView = false

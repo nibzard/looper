@@ -418,11 +418,18 @@ func overlaps(a, b Scope) bool {
 	return false
 }
 
+// Finding is one reported follow-up. Transition and Revision reconcile
+// recorded state instead of adding work: resume a blocked task whose condition
+// is satisfied, complete a task whose outcome already exists, or reassign a
+// wrong owner. Revision names the accepted revision the report verified, which
+// the engine compares against its own before applying either field.
 type Finding struct {
 	DeferUntil     string   `json:"defer_until,omitempty"`
 	Owner          string   `json:"owner,omitempty"`
 	Key            string   `json:"key,omitempty"`
 	ExistingTaskID string   `json:"existing_task_id,omitempty"`
+	Transition     string   `json:"transition,omitempty"`
+	Revision       string   `json:"revision,omitempty"`
 	Title          string   `json:"title"`
 	Details        string   `json:"details"`
 	Evidence       string   `json:"evidence"`

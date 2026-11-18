@@ -66,8 +66,11 @@ controller applies the request at its boundary; a stopped run applies under
 the repository lock without launching agents. Add `--contract v2 --json` for
 the machine document.
 
-`looper status --json` returns the saved state. `looper tail --json` reads
-events. `looper doctor` checks local dependencies and the backlog. Exit
+`looper status --contract v2 --json` returns the bounded compact status:
+the controller state, work counts, the waiting reason, and the event
+cursor. `looper status --contract v2 --full --json` keeps the complete
+saved state. `looper tail --json` reads events. `looper doctor` checks
+local dependencies and the backlog. Exit
 codes are 0 for a completed finite run or drained stop, 2 for blocked work
 or a dispatch limit, 1 for a controller failure, and 130 for interruption.
 

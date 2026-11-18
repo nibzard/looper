@@ -44,7 +44,11 @@ const (
 	blockCodeRunRepairProposed    = "run_repair_proposed"
 	blockCodeMergeFailed          = "merge_failed"
 	blockCodeInvalidWritePath     = "invalid_write_path"
-	blockCodeUnknown              = "unknown"
+	// blockCodeQuotaWindow marks a timed provider quota pause (T125): the
+	// window reopens, and the controller retries the held work within the
+	// operator's pause budget.
+	blockCodeQuotaWindow = "quota_window"
+	blockCodeUnknown     = "unknown"
 )
 
 // Bounds keep one reason inside response budgets. Code, source, and

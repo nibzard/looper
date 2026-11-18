@@ -33,6 +33,7 @@ const (
 	maxFailureContextBytes = 2048
 	maxFailureContextLines = 24
 	maxFailureCause        = 300
+	maxFailureAction       = 240
 	maxFailureEvidence     = 6
 	maxFailureMessage      = 240
 )
@@ -55,6 +56,7 @@ const (
 	outcomeLaunch        = "launch_failed"
 	outcomeAbsent        = "cleanup_already_absent"
 	outcomeInvalidResult = "invalid_result"
+	outcomeQuota         = "quota_window"
 	outcomeReported      = "error_reported"
 	outcomeCancelled     = "cancelled"
 	outcomeTimeout       = "timeout"
@@ -76,6 +78,7 @@ type FailureSummary struct {
 	Outcome    string            `json:"outcome"`
 	Cause      string            `json:"cause,omitempty"`
 	Context    string            `json:"context,omitempty"`
+	Action     string            `json:"action,omitempty"`
 	Evidence   []FailureEvidence `json:"evidence,omitempty"`
 }
 
@@ -181,6 +184,10 @@ func (s *FailureSummary) bound() *FailureSummary {
 	s.Outcome = clampString(sanitize(s.Outcome), 64)
 	s.Cause = clampString(scrubSecrets(sanitize(s.Cause)), maxFailureCause)
 	s.Context = clampContext(scrubSecrets(sanitize(s.Context)), maxFailureContextBytes)
+	// Action is the recovery step for failures that carry one (T136): a timed
+	// quota window names its resume and requeue paths. It stays empty for every
+	// class whose recovery is already the operation's ordinary retry or repair.
+	s.Action = clampString(scrubSecrets(sanitize(s.Action)), maxFailureAction)
 	if len(s.Evidence) > maxFailureEvidence {
 		s.Evidence = s.Evidence[:maxFailureEvidence]
 	}
@@ -291,13 +298,23 @@ func failureMessage(taskID string, s *FailureSummary) string {
 		operation = outcomeUnknown
 	}
 	b.WriteString(operation)
-	switch {
-	case s.ExitStatus != nil:
-		fmt.Fprintf(&b, " failed: exited %d", *s.ExitStatus)
-	case s.Signal != "":
-		fmt.Fprintf(&b, " failed: killed by %s", s.Signal)
-	default:
-		b.WriteString(" failed (" + s.Outcome + ")")
+	if s.Outcome == outcomeQuota {
+		// The quota diagnostic names its class up front: the provider's
+		// window closed, the work did not fail (T136). The exit status stays
+		// recorded beside the class instead of replacing it.
+		b.WriteString(" quota window")
+		if s.ExitStatus != nil {
+			fmt.Fprintf(&b, " (exited %d)", *s.ExitStatus)
+		}
+	} else {
+		switch {
+		case s.ExitStatus != nil:
+			fmt.Fprintf(&b, " failed: exited %d", *s.ExitStatus)
+		case s.Signal != "":
+			fmt.Fprintf(&b, " failed: killed by %s", s.Signal)
+		default:
+			b.WriteString(" failed (" + s.Outcome + ")")
+		}
 	}
 	cause := firstLine(s.Cause)
 	if cause == "" {

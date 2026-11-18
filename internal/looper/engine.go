@@ -74,6 +74,34 @@ type Engine struct {
 	// boundary does not repeat it session-wide (AX-021).
 	journaledFailure error
 
+	// quotaPauses tracks timed provider quota pauses by agent profile
+	// (T125). Owner-goroutine only, like the rest of the loop state. The map
+	// is session memory, but startup re-arms it from the quota-held tasks the
+	// saved state carries (restoreQuotaPauses, T146), so a restart keeps the
+	// retry time each held task's promise records; work the pause does not
+	// hold still rediscovers a closed window from the provider's next
+	// failure.
+	quotaPauses map[string]*providerPause
+
+	// quotaProgress is the integration count recorded with the last quota
+	// pause; a change means the window had reopened, so the next closure
+	// starts a fresh pause-budget cycle.
+	quotaProgress int
+
+	// quotaRestored marks that startup already rebuilt the quota pauses from
+	// the saved state (T146). initialize may run twice — Run initializes
+	// again behind a harness that pre-installs a plan — and a second pass
+	// must not re-arm or requeue what the first restored.
+	quotaRestored bool
+
+	// cleanupFailures groups repeated identical sweep warnings per artifact
+	// (T138 cleanup failures, T143 lease read and validate warnings), so a
+	// boundary that warns the same way again counts silently instead of
+	// journaling the same notice at every boundary. Owner-goroutine only,
+	// like the rest of the loop state; the session's final sweep summarizes
+	// what still warns.
+	cleanupFailures map[string]*cleanupFailureGroup
+
 	// assessDeadline overrides the fixed assessment deadline for tests of the
 	// full pipeline; zero keeps the production deadline. It is set before the
 	// run starts and never mutated while workers are live.
@@ -180,7 +208,7 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 		lock.Close()
 		return nil, nil, err
 	}
-	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, viewNotify: make(chan ui.ViewSnapshot, 1), checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs, sweptRequests: swept}
+	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, viewNotify: make(chan ui.ViewSnapshot, 1), checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs, sweptRequests: swept, quotaPauses: map[string]*providerPause{}}
 	// The presentation cursor starts at the retained store's committed
 	// high-water mark, so the first view a restart publishes points observers
 	// at a valid continuation position instead of the beginning of history.
@@ -506,6 +534,13 @@ func (e *Engine) initialize(ctx context.Context) error {
 	if e.err != nil {
 		return e.err
 	}
+	// A quota window that closed before the restart re-arms from the
+	// quota-held tasks the saved state carries (T146), so their recorded
+	// retry promise holds across the restart instead of stranding the work
+	// at a block nothing reopens.
+	if err := e.restoreQuotaPauses(); err != nil {
+		return err
+	}
 	// The startup sweep ran before the saved state existed; its removals
 	// become rejected receipts now that the receipt store is loaded.
 	e.recordRefusedRequests(e.sweptRequests)
@@ -595,12 +630,16 @@ func (e *Engine) initializeState(ctx context.Context) error {
 		}
 		// A fresh project reads project context and all explicitly supplied
 		// plans together, with a recoverable staging record.
+		importID := ""
 		if len(e.Config.Plans) > 0 {
-			if bootstrapPlans, err = e.bootstrapStartupPlans(identifier("import")); err != nil {
+			importID = identifier("import")
+			if bootstrapPlans, err = e.bootstrapStartupPlans(importID); err != nil {
 				return err
 			}
 		}
-		if err = e.bootstrap(ctx, bootstrapPlans); err != nil {
+		// A closed reviewer quota window waits out its window instead of
+		// ending the start (T141).
+		if err = e.bootstrapAndWait(ctx, bootstrapPlans, importID); err != nil {
 			return err
 		}
 	}

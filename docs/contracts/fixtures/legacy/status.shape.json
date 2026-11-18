@@ -44,6 +44,17 @@
           "string"
         ],
         "files": "empty array",
+        "followups": [
+          {
+            "details": "string",
+            "evidence": "string",
+            "existing_task_id": "string",
+            "key": "string",
+            "owner": "string",
+            "priority": "integer",
+            "title": "string"
+          }
+        ],
         "status": "string",
         "summary": "string",
         "task_id": "string",

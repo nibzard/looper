@@ -20,8 +20,8 @@ start would use. No agent runs.
 | `--verbose` | off | Print the run configuration at start |
 | `--no-animation` | off | Dashboard without animated motion; status stays readable |
 | `--foreground` | off | `looper tui` runs the controller in the dashboard; exiting stops the run |
-| `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure |
-| `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds |
+| `LOOPER_RATE_LIMIT_MAX` | `12` | Maximum agent invocations for a transient failure; also the quota-window pause budget, in runs and the startup bootstrap wait |
+| `LOOPER_RATE_LIMIT_DELAY` | `60` | Initial retry delay, in seconds; also the quota pause when the provider reports no reset time |
 | `LOOPER_GIT_INIT` | `1` | Create a Git repository for a project without one; `0` refuses |
 | `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |
 | `CODEX_BIN`, `CLAUDE_BIN`, `ZCODE_BIN` | `codex`, `claude`, `zcode` | Installed agent commands |

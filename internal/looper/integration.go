@@ -540,11 +540,12 @@ Exercise complete user workflows where possible. Compare the integrated product 
 not only task summaries. Verify suspected defects with code or executable evidence.
 Capture missing capabilities and missing ownership. Respect the project goal and exclusions.
 Do not modify any files, weaken checks, or invent unrelated improvements.
-Return JSON {"status":"reviewed","summary":"...","findings":[{"title":"...","details":"acceptance criteria","evidence":"observed facts and file or command","depends_on":[],"priority":1,"owner":"agent","key":"stable-outcome-key","existing_task_id":""}],"complete":false}.
+Return JSON {"status":"reviewed","summary":"...","findings":[{"title":"...","details":"acceptance criteria","evidence":"observed facts and file or command","depends_on":[],"priority":1,"owner":"agent","key":"stable-outcome-key","existing_task_id":"","transition":"","revision":""}],"complete":false}.
 Set complete true only when the intended goal is satisfied and no required work is blocked or unfinished.
+Reconcile recorded state instead of re-reporting it. When a finding confirms that a blocked task's condition is satisfied, that its outcome already exists, or that its owner is wrong, set transition to "resume", "complete", or "reassign", name existing_task_id, and set revision to %s, the revision this review verified. Looper applies the transition only against that revision, an idle task, and the current task contract. Report a gated or circular condition once: Looper escalates one operator decision for it.
 Report gaps as findings only. Do not edit the task file or add tasks yourself; Looper owns task changes and rejects a review that edits the backlog.
 Duplicate findings already tracked in the backlog must not become new tasks.
-The final review must cover the original goal and every applied import, including imports that added no new tasks.`+"\n"+findingInstructions, kind, e.State.Tip, c.Backlog)
+The final review must cover the original goal and every applied import, including imports that added no new tasks.`+"\n"+findingInstructions, kind, e.State.Tip, c.Backlog, e.State.Tip)
 	prompt += c.references()
 	prompt += "Read every document in the applied requirements index before declaring completion. Do not limit review to requirements selected by workers.\n"
 	if len(evidence) > 0 {

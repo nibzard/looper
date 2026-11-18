@@ -94,7 +94,7 @@ func styleFor(kind string) eventStyle {
 		return eventStyle{"↻", ansiYellow, ""}
 	case "blocker", "review-error", "hook-error", "diagnosis-error":
 		return eventStyle{"✗", ansiYellow, ""}
-	case "waiting", "limit", "stop":
+	case "waiting", "limit", "stop", "quota", "quota-resume":
 		return eventStyle{"⏸", ansiYellow, ""}
 	case "progress":
 		return eventStyle{"…", "", ""}

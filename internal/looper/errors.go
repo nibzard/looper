@@ -542,6 +542,12 @@ func failureErrorDoc(err error, s *FailureSummary) *PublicError {
 		{Description: "Read the bounded failure summaries with their exit statuses and evidence.", Command: failureQueryCommand},
 		{Description: "Read the retained evidence named above; it stays inside the Looper runtime directory."},
 	}
+	if s.Action != "" {
+		// The failure's own recovery action leads the list (T136): a timed
+		// quota window names its resume and requeue paths before the generic
+		// evidence queries.
+		p.Actions = append([]ErrorAction{{Description: s.Action}}, p.Actions...)
+	}
 	return p
 }
 
@@ -562,14 +568,16 @@ func failureErrorCode(s *FailureSummary) string {
 }
 
 // failureRetry maps the failure's own classification onto retry guidance:
-// transient failures retry as-is, account and request-shape failures repeat
-// identically until the input changes, and everything else retries after a
-// change.
+// transient failures retry as-is, a timed quota window retries once it
+// reopens, account and request-shape failures repeat identically until the
+// input changes, and everything else retries after a change.
 func failureRetry(err error, s *FailureSummary) string {
 	var agent *AgentError
 	if errors.As(err, &agent) {
 		switch agent.Kind {
 		case "transient":
+			return retryYes
+		case failureQuota:
 			return retryYes
 		case "configuration", "invalid_request":
 			return retryNo

@@ -63,6 +63,18 @@ Looper records new evidence in the task-linked event journal without reopening
 completed work or changing an active worker's acceptance criteria.
 Keys persist as `looper:finding:<key>` tags in the existing backlog format.
 
+A finding can also reconcile recorded state. Set `transition` to `resume`,
+`complete`, or `reassign`, name `existing_task_id`, and set `revision` to the
+revision the report verified. `resume` returns a blocked task to `todo` when
+its condition is satisfied. `complete` closes a task whose outcome already
+exists, so no worker implements it again. `reassign` proposes an ownership
+correction. Looper applies a transition only against the revision it accepted,
+an idle task, and the current task contract. Operator gates, deferrals,
+ownership changes, and conditions that name the blocked task itself stay with
+the operator: Looper escalates one decision task, keyed by the target task,
+and later reports only add evidence to it. A plain finding that reaches a
+blocked task twice without changing anything escalates the same way.
+
 Operator follow-ups enter the backlog as blocked with a `looper:operator`
 tag. They stay outside the worker queue even if a generic retry sets them
 to `todo`. Legacy tasks that explicitly assign an action to an operator
@@ -73,7 +85,8 @@ permission to act outside the original task's authority.
 
 When an external prerequisite is missing, a blocked task records the reason
 and an unblock condition. Resolve it, then change the task to `todo` while
-Looper is idle. Looper reuses its partial work. It does not repeatedly
+Looper is idle. A review that confirms the condition does the same through a
+`resume` transition. Looper reuses its partial work. It does not repeatedly
 dispatch blocked tasks without that change. Editing a retained task's
 requirements starts a fresh attempt.
 
@@ -108,7 +121,19 @@ task result, emits a `resource-cleanup-error` event, and journals a bounded
 `failure` summary with the script's exit status, its own log excerpt, and the
 retained evidence; a cleanup that failed only on already-absent paths reports
 the outcome `cleanup_already_absent`, so it never reads as a failure of the
-cleanup logic itself. The wrapper runs the script under `set -e`; the
+cleanup logic itself. Repeated identical failures are grouped per artifact
+within a controller session: the notice and the failure summary appear once,
+every tenth identical repeat emits one `resource-cleanup-summary` event with
+the repeat count, and the session's closing sweep states the repeats that
+have not reached the interval. A different artifact, or a changed error for
+the same artifact, reports on its own. Cleanup keeps retrying at every
+boundary either way, and a later success clears the lease as before. An
+unreadable or invalid `resources.json` warns the same way: the warning
+appears once per controller session, identical repeats group by lease
+directory, every tenth repeat and the closing sweep state the count in one
+`resource-cleanup-summary` event, and a record that reads and validates
+again drops its group. The
+wrapper runs the script under `set -e`; the
 documented check-before-remove idiom `[ -d path ] && rm -rf path` survives a
 clean path when commands follow it, but a script whose final command is that
 idiom reports its own status 1 with nothing left to remove, and plain Bash

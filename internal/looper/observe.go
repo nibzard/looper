@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/nibzard/looper/internal/ui"
 )
@@ -168,6 +170,25 @@ func statusReport(c Config, snap *StoreSnapshot, timing TimingReport, statistics
 	for i := range state.Backlog.Tasks {
 		state.Backlog.Tasks[i].BlockReason = nil
 	}
+	// A reconciliation proposal's transition and revision (T124) are input
+	// the finding application consumed; the frozen document admits no such
+	// key inside a retained summary's follow-ups. The saved state keeps
+	// them, because recovery replays the retained result and re-applies its
+	// findings. Readers see the outcome on the task and in the journal.
+	state.Attempts = append([]*Attempt{}, state.Attempts...)
+	for i, a := range state.Attempts {
+		if a == nil || a.Summary == nil || len(a.Summary.Followups) == 0 {
+			continue
+		}
+		attempt, summary := *a, *a.Summary
+		summary.Followups = append([]Finding{}, summary.Followups...)
+		for j := range summary.Followups {
+			summary.Followups[j].Transition = ""
+			summary.Followups[j].Revision = ""
+		}
+		attempt.Summary = &summary
+		state.Attempts[i] = &attempt
+	}
 	return struct {
 		*State
 		Observation Observation       `json:"observation"`
@@ -258,6 +279,225 @@ type HealthFinding struct {
 	Action   string `json:"suggested_action"`
 }
 
+// findingTaskCircular names a blocked task whose resume condition requires
+// the task itself (QUICK-WINS-PLAN section 1, T135). It keeps warning
+// severity under the operator and deferral reason classes: expected waiting
+// ends where only the blocked task's own progress could satisfy the
+// condition.
+const findingTaskCircular = "task_circular_condition"
+
+// selfRequirementWords put a blocked task's own identifier in requirement
+// position: the condition waits on, needs, or is gated at that task.
+// "before" is absent on purpose — "T090 must land before this task starts"
+// names T090 as the prerequisite and this task as the consequence.
+var selfRequirementWords = map[string]bool{
+	"for": true, "until": true, "on": true, "by": true, "after": true, "when": true,
+	"need": true, "needs": true, "require": true, "requires": true,
+	"await": true, "awaits": true, "awaiting": true,
+}
+
+// selfProgressWords name the events a blocked task's own clause can require:
+// the task starting, beginning, landing, or becoming unblocked. Completion
+// words stay out — "T077 outcome verified complete" reports an outcome, and
+// a resume consequence ("T027 resumes") follows an external prerequisite.
+var selfProgressWords = map[string]bool{
+	"start": true, "starts": true, "started": true, "starting": true,
+	"begin": true, "begins": true, "began": true, "beginning": true,
+	"unblock": true, "unblocks": true, "unblocked": true, "unblocking": true,
+	"finish": true, "finishes": true, "finished": true,
+	"land": true, "lands": true, "landed": true, "landing": true,
+	"ship": true, "ships": true, "shipped": true,
+}
+
+// consequenceConnectors mark the identifier as the later, explained event:
+// "T085 lands before T027 starts" and "the prerequisites land, then T027
+// begins" mention the task to say what follows, not what is required.
+var consequenceConnectors = map[string]bool{"then": true, "before": true}
+
+// externalCues introduce an event the task waits for instead of itself.
+var externalCues = map[string]bool{"when": true, "once": true, "after": true, "until": true}
+
+// The subject-position check reads a bounded window: the recorded shapes
+// keep the progress word within four words of the identifier ("T045 art
+// direction pass starts"), and the bound keeps an unrelated verb deep in a
+// long clause from turning a mention into a warning.
+const selfProgressWindow = 4
+
+// wordRune reports whether r can appear inside an identifier.
+func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// wholeIdentifier reports whether s[at:end] stands as one word: neither
+// neighboring rune belongs to an identifier, so T040 does not match the
+// T0401 it sits inside.
+func wholeIdentifier(s string, at, end int) bool {
+	if at > 0 {
+		if r, _ := utf8.DecodeLastRuneInString(s[:at]); wordRune(r) {
+			return false
+		}
+	}
+	if end < len(s) {
+		if r, _ := utf8.DecodeRuneInString(s[end:]); wordRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// lastWord returns the last identifier run in s: the word that would touch
+// an identifier written at the end of s.
+func lastWord(s string) string {
+	runes := []rune(s)
+	end := len(runes)
+	for end > 0 && !wordRune(runes[end-1]) {
+		end--
+	}
+	start := end
+	for start > 0 && wordRune(runes[start-1]) {
+		start--
+	}
+	return string(runes[start:end])
+}
+
+// firstWords returns the first n identifier runs in s, in order; n of zero
+// or less returns every word.
+func firstWords(s string, n int) []string {
+	var words []string
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool { return !wordRune(r) }) {
+		words = append(words, part)
+		if n > 0 && len(words) == n {
+			break
+		}
+	}
+	return words
+}
+
+// mentionRequiresTask reports whether one occurrence of a blocked task's
+// identifier, at lowered[at:], requires the task itself. Two shapes count:
+// the identifier in requirement position ("waits for T027 to start"), and
+// the identifier in subject position with its own progress as the event
+// ("T027 starts implementation", "T066 is unblocked"). A mention that
+// follows a consequence connector, an external clause, or an external cue
+// explains what happens after a prerequisite and never counts.
+func mentionRequiresTask(lowered string, at int, id string) bool {
+	prefix, rest := lowered[:at], lowered[at+len(id):]
+	if selfRequirementWords[lastWord(prefix)] {
+		return true
+	}
+	// A possessive mention modifies another noun — "the environment that
+	// T065's unblock condition requires" gates on the environment.
+	if strings.HasPrefix(rest, "'") || strings.HasPrefix(rest, "’") {
+		return false
+	}
+	if consequenceConnectors[lastWord(prefix)] || followsExternalClause(prefix) || cueInFirstWords(rest) {
+		return false
+	}
+	return progressWordInWindow(rest)
+}
+
+// progressWordInWindow reports whether one of the first words after the
+// identifier names the task's own progress as the required event. A word
+// followed by a colon labels the clause that follows, and a passive "by"
+// names the external agent that delivers the event — "T052 unblocks: an
+// Android device is attached" and "T130, itself unblocked by T118's push"
+// gate on that agent, not on the task — so neither counts.
+func progressWordInWindow(rest string) bool {
+	words := 0
+	for at := 0; at < len(rest) && words < selfProgressWindow; {
+		r, size := utf8.DecodeRuneInString(rest[at:])
+		if !wordRune(r) {
+			at += size
+			continue
+		}
+		end := at
+		for end < len(rest) {
+			r, size = utf8.DecodeRuneInString(rest[end:])
+			if !wordRune(r) {
+				break
+			}
+			end += size
+		}
+		if selfProgressWords[rest[at:end]] && !progressWordIsLabel(rest, end) {
+			return true
+		}
+		words++
+		at = end
+	}
+	return false
+}
+
+// progressWordIsLabel reports whether the word ending at rest[end] names
+// something other than the task's own required event: a colon that labels
+// the following clause, or a "by" that names the delivering agent.
+func progressWordIsLabel(rest string, end int) bool {
+	after := strings.TrimLeft(rest[end:], " \t")
+	if strings.HasPrefix(after, ":") {
+		return true
+	}
+	next := firstWords(after, 1)
+	return len(next) == 1 && next[0] == "by"
+}
+
+// followsExternalClause reports whether the identifier starts a new clause
+// after a comma or semicolon whose preceding text carries an external cue,
+// as in "after the operator grants access, T027 ...".
+func followsExternalClause(prefix string) bool {
+	trimmed := strings.TrimRight(prefix, " \t")
+	if !strings.HasSuffix(trimmed, ",") && !strings.HasSuffix(trimmed, ";") {
+		return false
+	}
+	for _, w := range firstWords(trimmed, 0) {
+		if externalCues[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// cueInFirstWords reports whether an external cue governs the identifier's
+// own clause, as in "T027 starts verification when the migration lands".
+func cueInFirstWords(rest string) bool {
+	for _, w := range firstWords(rest, selfProgressWindow+2) {
+		if externalCues[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// circularResumeCondition returns the blocker or resume condition that
+// requires the blocked task itself to start, finish, or become unblocked.
+// No independent prerequisite can satisfy such a condition, so the task
+// cannot leave the queue — the recorded Charlie shapes (delivery audit
+// 2026-11-17) are "Waits for T027 to start implementation", "T027 starts
+// implementation", and "T066 is unblocked". A condition that names another
+// task, or one that mentions this task only as the work that follows an
+// external prerequisite ("after the operator grants access, T027 resumes"),
+// reports nothing. The reconcile guard (circularCondition in findings.go)
+// stays broader on purpose: an automatic transition escalates on any
+// mention of the task itself, while this warning must stay quiet when the
+// recorded condition is honest.
+func circularResumeCondition(t Task) string {
+	if t.Status != "blocked" || t.ID == "" {
+		return ""
+	}
+	id := strings.ToLower(t.ID)
+	for _, condition := range append(append([]string{}, t.Blockers...), t.UnblockWhen) {
+		lowered := strings.ToLower(condition)
+		for search := 0; ; {
+			at := strings.Index(lowered[search:], id)
+			if at < 0 {
+				break
+			}
+			at += search
+			search = at + len(id)
+			if wholeIdentifier(lowered, at, at+len(id)) && mentionRequiresTask(lowered, at, id) {
+				return condition
+			}
+		}
+	}
+	return ""
+}
+
 func diagnose(o Observation, s *State) []HealthFinding {
 	f := []HealthFinding{}
 	if o.ControllerOwned && !o.ViewMatchesController {
@@ -280,6 +520,17 @@ func diagnose(o Observation, s *State) []HealthFinding {
 				f = append(f, HealthFinding{Code: "task_deferred", Severity: "info", TaskID: t.ID, Message: "The task belongs to later work.", Action: t.UnblockWhen})
 			} else if t.Status == "blocked" {
 				f = append(f, HealthFinding{Code: "task_blocked", Severity: "warning", TaskID: t.ID, Message: "The task reports an unmet prerequisite.", Action: "Read blockers with looper inspect " + t.ID + " --json."})
+			}
+			// The circular warning rides beside the class finding, deferral
+			// included: a deferred task can still record a condition only
+			// its own implementation can satisfy. Doctor reports it and
+			// changes nothing — the operator edits the task file.
+			if condition := circularResumeCondition(t); condition != "" {
+				f = append(f, HealthFinding{
+					Code: findingTaskCircular, Severity: "warning", TaskID: t.ID,
+					Message: fmt.Sprintf("The resume condition requires task %s itself, so no independent prerequisite can satisfy it: %s", t.ID, sanitize(condition)),
+					Action:  "Record an independent prerequisite in the task file, or correct the task state; Looper imports the edit at a safe boundary. Cancel the task with looper cancel " + t.ID + " when the work is no longer needed.",
+				})
 			}
 		}
 		for _, a := range s.Attempts {
@@ -427,7 +678,9 @@ type doctorFindingView struct {
 // doctorFindingViews projects findings for the version 2 document, joining
 // each blocked-task finding to the structured reason the saved state holds.
 // Operator and deferral classes are expected waiting: their default version
-// 2 severity is informational, so a monitor does not page on them.
+// 2 severity is informational, so a monitor does not page on them. A
+// circular condition is never expected waiting, so its warning survives the
+// downgrade.
 func doctorFindingViews(findings []HealthFinding, s *State) []doctorFindingView {
 	views := make([]doctorFindingView, 0, len(findings))
 	for _, f := range findings {
@@ -439,7 +692,7 @@ func doctorFindingViews(findings []HealthFinding, s *State) []doctorFindingView 
 					v.ReasonCode = clampJSONString(r.Code, 64)
 					v.Retry = r.Retry
 					v.AttemptID = clampJSONString(r.AttemptID, 64)
-					if v.Severity == "warning" {
+					if v.Severity == "warning" && f.Code != findingTaskCircular {
 						switch r.Class {
 						case blockClassOperator, blockClassDeferred:
 							v.Severity = "info"

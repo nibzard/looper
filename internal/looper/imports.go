@@ -580,6 +580,12 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 	if e.inputPending {
 		return
 	}
+	if e.quotaPaused(e.Config.ReviewAgent) {
+		// The analysis agent shares the reviewer profile: a closed quota
+		// window keeps queued imports waiting for the reopened boundary
+		// instead of spending a rejected invocation on every pass (T125).
+		return
+	}
 	for _, record := range e.State.Imports {
 		if record.Status != ImportQueued && record.Status != ImportWaiting && record.Status != ImportPlanning {
 			continue

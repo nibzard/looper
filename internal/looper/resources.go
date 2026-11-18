@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +18,36 @@ import (
 
 const resourceLeaseFile = "resources.json"
 const resourceCleanupFile = "cleanup-resources.sh"
+
+// cleanupSummaryInterval bounds how long one artifact's repeated identical
+// sweep warning stays silent (T138, T143): after a warning was reported in
+// full, every interval-th identical repeat journals one summary event with
+// the repeat count, and the session's final sweep summarizes the repeats
+// that have not reached the interval yet.
+const cleanupSummaryInterval = 10
+
+// sweepWarningKind distinguishes which sweep warning a group counts, because
+// a summary states what actually repeated: a cleanup run that failed (T138),
+// an ownership record the sweep could not read, or one that failed validation
+// (T143). The cleanup summary keeps its pinned wording.
+type sweepWarningKind uint8
+
+const (
+	warnCleanupFailure sweepWarningKind = iota
+	warnLeaseRead
+	warnLeaseInvalid
+)
+
+// cleanupFailureGroup counts one artifact's identical sweep warnings between
+// reports: the warning class the count belongs to, the error text the count
+// belongs to, how often that error repeated in this controller session, and
+// the count a warning or summary already announced.
+type cleanupFailureGroup struct {
+	kind     sweepWarningKind
+	cause    string
+	count    int
+	reported int
+}
 
 // ResourceLease records the operation that owns registered temporary resources.
 // Cleanup scripts must be idempotent and check resource ownership before removal.
@@ -168,13 +199,18 @@ func (e *Engine) sweepResources() {
 		}
 		var lease ResourceLease
 		if err := readJSON(path, &lease); err != nil {
-			e.event("resource-cleanup-error", fmt.Sprintf("Cannot read resource ownership in %s: %v", path, err))
+			if e.repeatSweepWarning(warnLeaseRead, filepath.Dir(path), err) {
+				e.event("resource-cleanup-error", fmt.Sprintf("Cannot read resource ownership in %s: %v", path, err))
+			}
 			return nil
 		}
 		if err := validResourceLease(lease, filepath.Dir(path)); err != nil {
-			e.event("resource-cleanup-error", err.Error())
+			if e.repeatSweepWarning(warnLeaseInvalid, filepath.Dir(path), err) {
+				e.event("resource-cleanup-error", err.Error())
+			}
 			return nil
 		}
+		e.clearLeaseWarning(filepath.Dir(path))
 		if lease.Status == "cleaned" || lease.Status == "active" && resourceOwnerAlive(lease) {
 			return nil
 		}
@@ -187,12 +223,98 @@ func (e *Engine) sweepResources() {
 			}
 		}
 		if err := cleanResourceLease(&lease); err != nil {
-			e.event("resource-cleanup-error", fmt.Sprintf("Temporary resources remain in %s: %v. Cleanup retries at the next completion or restart.", lease.Directory, err))
-			e.cleanupFailureEvent(lease, err)
+			if e.repeatSweepWarning(warnCleanupFailure, lease.Directory, err) {
+				e.event("resource-cleanup-error", fmt.Sprintf("Temporary resources remain in %s: %v. Cleanup retries at the next completion or restart.", lease.Directory, err))
+				e.cleanupFailureEvent(lease, err)
+			}
+		} else {
+			e.clearCleanupFailure(lease.Directory)
 		}
 		return nil
 	})
 	if err != nil {
 		e.event("resource-cleanup-error", err.Error())
+	}
+}
+
+// repeatSweepWarning groups one artifact's repeated identical warnings from
+// the resource sweep (T138 cleanup failures, T143 lease read and validate
+// warnings). It returns true when this warning must be reported in full: the
+// artifact's first warning of the controller session, or its first warning
+// after the error changed, because a changed cause is new information.
+// Identical repeats return false and only count; every cleanupSummaryInterval
+// repeats, and the session's final sweep through summarizeCleanupFailures,
+// journal one summary event with the repeat count instead. The sweep keeps
+// retrying at every boundary either way.
+func (e *Engine) repeatSweepWarning(kind sweepWarningKind, dir string, err error) bool {
+	if e.cleanupFailures == nil {
+		e.cleanupFailures = map[string]*cleanupFailureGroup{}
+	}
+	group := e.cleanupFailures[dir]
+	if group == nil || group.kind != kind || group.cause != err.Error() {
+		e.cleanupFailures[dir] = &cleanupFailureGroup{kind: kind, cause: err.Error(), count: 1, reported: 1}
+		return true
+	}
+	group.count++
+	if group.count-group.reported >= cleanupSummaryInterval {
+		e.event("resource-cleanup-summary", cleanupSummaryMessage(kind, dir, group.count, group.cause))
+		group.reported = group.count
+	}
+	return false
+}
+
+// clearCleanupFailure forgets one artifact's failure group after its cleanup
+// succeeded: the lease is cleaned, and a later failure of the same artifact is
+// a new episode that reports on its own.
+func (e *Engine) clearCleanupFailure(dir string) {
+	delete(e.cleanupFailures, dir)
+}
+
+// clearLeaseWarning forgets one artifact's read or validate warning group once
+// its ownership record reads and validates again: the record recovered, so a
+// later problem of the same artifact is a new episode that reports on its own.
+// Cleanup-failure groups survive here, because only a cleanup run that
+// succeeded clears them.
+func (e *Engine) clearLeaseWarning(dir string) {
+	if group := e.cleanupFailures[dir]; group != nil && group.kind != warnCleanupFailure {
+		delete(e.cleanupFailures, dir)
+	}
+}
+
+// summarizeCleanupFailures closes the session's warning groups at shutdown:
+// every artifact whose warning repeated since its last report journals one
+// summary with the session's repeat count, so a run states each failing
+// artifact once instead of once per retry.
+func (e *Engine) summarizeCleanupFailures() {
+	if len(e.cleanupFailures) == 0 {
+		return
+	}
+	dirs := make([]string, 0, len(e.cleanupFailures))
+	for dir := range e.cleanupFailures {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	for _, dir := range dirs {
+		group := e.cleanupFailures[dir]
+		if group.count <= group.reported {
+			continue
+		}
+		e.event("resource-cleanup-summary", cleanupSummaryMessage(group.kind, dir, group.count, group.cause))
+		group.reported = group.count
+	}
+}
+
+// cleanupSummaryMessage states one artifact's repeat count beside the error
+// that repeated. The cleanup wording is pinned by tests (T138); the lease
+// read and validate wordings name the record problem the same way their
+// first warning does (T143).
+func cleanupSummaryMessage(kind sweepWarningKind, dir string, count int, cause string) string {
+	switch kind {
+	case warnLeaseRead:
+		return fmt.Sprintf("Cannot read resource ownership in %s after %d identical warnings this session: %s. The sweep retries at the next completion or restart.", dir, count, cause)
+	case warnLeaseInvalid:
+		return fmt.Sprintf("Cannot validate resource ownership in %s after %d identical warnings this session: %s. The sweep retries at the next completion or restart.", dir, count, cause)
+	default:
+		return fmt.Sprintf("Temporary resources remain in %s after %d identical cleanup failures this session: %s. Cleanup retries at the next completion or restart.", dir, count, cause)
 	}
 }

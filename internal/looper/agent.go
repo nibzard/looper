@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,10 @@ type AgentError struct {
 	// Summary is the bounded public evidence this failure carries (AX-021).
 	// Error() keeps its historical text; the summary rides beside it.
 	Summary *FailureSummary
+	// Retry is the provider's own reset time for a timed quota failure,
+	// parsed where the provider supplies one. It is zero for every other
+	// kind (T125).
+	Retry time.Time
 }
 
 func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
@@ -154,8 +159,8 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		}
 		var launchErr *LaunchError
 		if errors.As(err, &launchErr) {
-			return nil, &AgentError{"invalid_request", fmt.Sprintf("%v; see %s and %s", err, filepath.Join(dir, "prompt.txt"), filepath.Join(dir, "invocation.json")),
-				(&FailureSummary{
+			return nil, &AgentError{Kind: "invalid_request", Detail: fmt.Sprintf("%v; see %s and %s", err, filepath.Join(dir, "prompt.txt"), filepath.Join(dir, "invocation.json")),
+				Summary: (&FailureSummary{
 					Operation: opLaunch, Tool: tool + " [" + launchErr.Stage + "]", Outcome: outcomeLaunch,
 					Cause: launchErr.Err.Error(),
 					Evidence: []FailureEvidence{
@@ -215,14 +220,31 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 			if reportedError {
 				outcome = outcomeReported
 			}
-			return nil, &AgentError{failure, detail, (&FailureSummary{
+			retry := time.Time{}
+			summary := &FailureSummary{
 				Operation: operation, Tool: tool, ExitStatus: exitOf(code), Signal: signal,
 				Outcome: outcome, Cause: cause, Evidence: agentEvidence,
-			}).bound()}
+			}
+			if failure == failureQuota {
+				// The provider names its own reset where it supplies one. The
+				// controller waits out the window; this retry loop never does
+				// (T125).
+				retry, _ = quotaResetTime(message, time.Now())
+				if retry.IsZero() {
+					retry, _ = quotaResetTime(err.Error(), time.Now())
+				}
+				// The diagnostic itself reports the quota failure: its class,
+				// the provider's reset wording in the cause, and the recovery
+				// action. The provider's text stays as reported, including a
+				// timestamp without a time zone (T136).
+				summary.Outcome = outcomeQuota
+				summary.Action = quotaRecoveryAction(retry)
+			}
+			return nil, &AgentError{Kind: failure, Detail: detail, Retry: retry, Summary: summary.bound()}
 		}
 		invalidResult := func(detail string) *AgentError {
 			zero := 0
-			return &AgentError{"invalid_result", detail, (&FailureSummary{
+			return &AgentError{Kind: "invalid_result", Detail: detail, Summary: (&FailureSummary{
 				Operation: operation, Tool: tool, ExitStatus: &zero, Outcome: outcomeInvalidResult,
 				Cause: detail, Evidence: agentEvidence,
 			}).bound()}
@@ -240,7 +262,7 @@ func (a Agent) run(ctx context.Context, kind, cwd, dir, prompt string, summary b
 		}
 		return data, nil
 	}
-	return nil, &AgentError{"transient", "retry limit reached", (&FailureSummary{
+	return nil, &AgentError{Kind: "transient", Detail: "retry limit reached", Summary: (&FailureSummary{
 		Operation: operationOf(role), Tool: toolName, Outcome: outcomeRetryLimit,
 		Cause:    "every attempt failed transiently; the last error decided nothing new",
 		Evidence: []FailureEvidence{{Kind: "file", Reference: filepath.Join(dir, "invocation.json")}},
@@ -372,7 +394,20 @@ func extractObject(b []byte) (json.RawMessage, error) {
 var transientFailure = regexp.MustCompile(`(?i)\b(?:http|status|error|code)\b[^0-9\n]{0,16}\b(?:429|500|502|503|504|529)\b|rate.?limit|too many requests|bad gateway|service unavailable|gateway timeout|overloaded|connection (?:reset|refused|dropped)|network (?:error|unreachable|timeout)|temporarily unavailable|econnreset|econnrefused|etimedout|socket hang up`)
 var configurationFailure = regexp.MustCompile(`(?i)\b(?:http|status|error|code)\b[^0-9\n]{0,16}\b(?:401|403)\b|unauthorized|authentication|permission denied|invalid api key|credit balance|billing|quota|usage limit|not supported when using|model .{0,60} not supported`)
 
+// Timed quota exhaustion (T125). A closed usage window reports itself as a
+// plan limit that will reset: the subscription five-hour wording, or the
+// observed "Request rejected (429)" rejection that carries a usage limit and
+// a reset time. These recur identically until the window reopens, so they
+// are neither configuration an operator can fix nor ordinary execution
+// failure. Quota text without a timed shape ("this account quota is
+// exhausted", billing, credit) keeps the configuration class above: no reset
+// exists, so an operator must act.
+var quotaFailure = regexp.MustCompile(`(?i)request rejected\s*\(\s*429\s*\)|usage limit.{0,160}reset|limit will reset|five[\s-]?hour usage limit`)
+
 func classifyFailure(s string) string {
+	if quotaFailure.MatchString(s) {
+		return failureQuota
+	}
 	if transientFailure.MatchString(s) {
 		return "transient"
 	}
@@ -380,6 +415,107 @@ func classifyFailure(s string) string {
 		return "configuration"
 	}
 	return "execution"
+}
+
+// quotaRecoveryAction states the recovery action a timed quota failure
+// carries in its diagnostic (T136): the window closed, the work is retained,
+// and no in-run retry is scheduled. The controller resumes the retained work
+// when the window reopens; past the operator's pause budget the action names
+// the manual resume (rerun after the reset) and the requeue path. The
+// provider's own reset wording stays in the cause; this line only renders the
+// parsed reset for quick reading, and a zone-free timestamp keeps the
+// wall-clock digits the provider printed.
+func quotaRecoveryAction(retry time.Time) string {
+	if retry.IsZero() {
+		return "Provider quota window with no reset reported; work is retained and no in-run retry is scheduled. Looper waits the configured pause; rerun Looper after the window reopens or requeue the held task (looper requeue)."
+	}
+	return fmt.Sprintf("Provider quota window; work is retained and no in-run retry is scheduled. Looper resumes it at %s; past the pause budget, rerun Looper after the reset or requeue the held task (looper requeue).",
+		retry.Local().Format("2006-01-02 15:04:05"))
+}
+
+// quotaResetTime extracts the provider's reset time from a timed quota
+// message (T125). The agent process shares the controller's clock, so
+// zone-free wall-clock and clock-time values resolve on the local clock;
+// zone-stamped values keep their zone. A clock time already past beyond the
+// tolerance names the next day; inside it the past value stands, and the
+// pause falls back to the rate-limit wait (T145). The reported text stays
+// untouched in the pause and the hold evidence: provider clocks have been
+// observed to differ from controller clocks, so no outage duration is
+// derived from this value.
+
+// quotaResetPastTolerance bounds how far a reported reset clock may already
+// have passed before the next-day reading applies (T145). The provider clock
+// differs from the controller clock by seconds to minutes, and the failure
+// text arrives moments after the provider wrote it, so a clock inside the
+// tolerance names a window that just reopened: the pause applies its
+// existing rate-limit fallback wait instead of parking the work for a day.
+const quotaResetPastTolerance = 10 * time.Minute
+
+var quotaResetStamp = regexp.MustCompile(`\b(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)\b`)
+var quotaResetClock = regexp.MustCompile(`(?i)\b(?:reset|resume|retry|reopen)[^\n]{0,32}?(\d{1,2}:\d{2}(?::\d{2})?\s?(?:am|pm)?)\b`)
+var quotaResetRelative = regexp.MustCompile(`(?i)\b(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)[,\s]+)*(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s))?)`)
+var quotaResetUnit = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)`)
+
+func quotaResetTime(s string, now time.Time) (time.Time, bool) {
+	for _, m := range quotaResetStamp.FindAllStringSubmatch(s, -1) {
+		if t, err := time.Parse(time.RFC3339, m[1]); err == nil {
+			return t, true
+		}
+		for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
+			if t, err := time.ParseInLocation(layout, m[1], time.Local); err == nil {
+				return t, true
+			}
+		}
+	}
+	for _, m := range quotaResetClock.FindAllStringSubmatch(s, -1) {
+		// time.Parse matches the AM/PM marker case-sensitively; providers
+		// print both cases.
+		value := strings.TrimSpace(m[1])
+		if n := len(value); n > 2 {
+			value = value[:n-2] + strings.ToUpper(value[n-2:])
+		}
+		for _, layout := range []string{time.Kitchen, "15:04", "15:04:05"} {
+			t, err := time.Parse(layout, value)
+			if err != nil {
+				continue
+			}
+			date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).
+				Add(time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute + time.Duration(t.Second())*time.Second)
+			if !date.After(now) {
+				if now.Sub(date) <= quotaResetPastTolerance {
+					// A reset already past by seconds to minutes is
+					// provider clock skew or delivery delay, not a window
+					// that closes tomorrow (T145). The past value reaches
+					// the pause, whose existing rate-limit fallback wait
+					// reopens it imminently.
+					return date, true
+				}
+				date = date.AddDate(0, 0, 1)
+			}
+			return date, true
+		}
+	}
+	for _, m := range quotaResetRelative.FindAllStringSubmatch(s, -1) {
+		delay := time.Duration(0)
+		for _, part := range quotaResetUnit.FindAllStringSubmatch(m[1], -1) {
+			value, err := strconv.ParseFloat(part[1], 64)
+			if err != nil {
+				continue
+			}
+			switch part[2][0] {
+			case 'h':
+				delay += time.Duration(value * float64(time.Hour))
+			case 'm':
+				delay += time.Duration(value * float64(time.Minute))
+			case 's':
+				delay += time.Duration(value * float64(time.Second))
+			}
+		}
+		if delay > 0 {
+			return now.Add(delay), true
+		}
+	}
+	return time.Time{}, false
 }
 
 // streamErrorMessage returns the agent's own failure text from the tail of an

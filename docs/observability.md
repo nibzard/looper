@@ -31,9 +31,17 @@ or an interruption cancels nothing: the request, task, and controller keep
 their state. Mutation receipts and the compact status document name the
 exact wait that observes their outcome.
 
-`status --json` includes the saved state and an `observation` object with
-`schema_version: 1`. It reports controller ownership, the published view,
-session matching, and observations for active attempts.
+The `status` sections below describe the complete status document. Plain
+`looper status --json` serves it under the legacy default, and `looper
+status --contract v2 --full --json` serves it under version 2. For routine
+monitoring, read the compact document instead: `looper status --contract v2
+--json` returns the controller state, work counts, the waiting reason, and
+the event cursor within 8 KiB, and its `detail.full` route names the
+complete document.
+
+The complete `status --json` includes the saved state and an `observation`
+object with `schema_version: 1`. It reports controller ownership, the
+published view, session matching, and observations for active attempts.
 
 Use `looper --version --json` to read the executable's release, Git revision,
 and modified-source flag. `observation.controller.build` identifies a live
@@ -122,7 +130,16 @@ query:
 A failed check also retains its summary as `failure.json` beside its logs.
 A cleanup that failed only on already-absent paths reports the outcome
 `cleanup_already_absent`, which stays distinguishable from an exit failure of
-the cleanup logic itself.
+the cleanup logic itself. Repeated identical cleanup failures are grouped per
+artifact within a controller session: the first failure reports the
+`resource-cleanup-error` notice and the failure summary once, every tenth
+identical repeat journals one `resource-cleanup-summary` event with the repeat
+count, and the session's closing sweep states the repeats that have not
+reached the interval. A changed error for the same artifact reports at once.
+Cleanup keeps retrying at every boundary either way. Lease read and validate
+warnings group the same way: an unreadable or invalid `resources.json` warns
+once per controller session, and the interval and closing summaries state the
+repeat count by lease directory.
 
 A `shutdown` event records the controller session, reason, exit code, optional
 error, and last event ID. Reasons include `complete`, `drained`, `cancelled`,
@@ -139,6 +156,19 @@ verification records, and local log paths. Unknown task IDs return an error.
 blocked tasks and missing worker processes. Quiet output is informational.
 Exit code 1 means a diagnostic error; warnings return 0. The plain command
 also checks installation dependencies and the backlog.
+
+A blocked task whose resume condition requires the task itself reports the
+`task_circular_condition` finding with the condition text and guidance to
+record an independent prerequisite or correct the task state. No
+independent work can satisfy such a condition. Two textual shapes count:
+the identifier in requirement position (`waits for T027 to start`) and the
+identifier in subject position with its own progress as the event
+(`T027 starts implementation`, `T066 is unblocked`). A condition that names
+another task, or one that mentions the task only as the work that follows
+an external prerequisite (`after the operator grants access, T027
+resumes`; `T085 must land before T027 starts`), is not circular and
+reports nothing. A condition that names no identifier is also outside the
+check. Doctor reports the state and never edits the backlog.
 
 ## Blocked-task reasons
 
@@ -157,7 +187,9 @@ Use this monitor policy on those fields:
 | Evidence | Monitor behavior |
 | --- | --- |
 | `operator` or `deferred` class | Show expected waiting. Do not page only because the status is blocked. |
+| `task_circular_condition` finding | Escalate. Only the blocked task's own progress could satisfy the condition, so the class beside it never makes this expected waiting. |
 | `failure` class with `retry=yes` | Report a retry candidate. Apply the caller's retry policy. |
+| `failure` class with `code=quota_window` | Show expected waiting. The controller already pauses the provider and retries at the recorded reset time, including across a controller restart (`quota-restore` event). |
 | `failure` class with `retry=after-change` | Show the required change, such as billing or configuration repair. |
 | `failure` class with `retry=no` | Escalate the permanent failure without retrying. |
 | `unknown` class or `unknown` retry | Keep a warning and link to `looper inspect <task>`. |
@@ -168,6 +200,52 @@ requiring different actions. The reason is the current primary barrier, not
 an exhaustive prerequisite list. Completion, cancellation, and requeue clear
 it; the event journal and attempt history keep the evidence. Legacy JSON
 output omits these fields everywhere, including nested tasks and `--full`.
+
+One retry is controller-owned: a timed provider quota window (the
+subscription five-hour limit, or the observed `Request rejected (429)`
+rejection with a reset time) pauses the affected provider instead of ending
+the run. The controller journals a `quota` event with the provider's reset
+text and a `retry_at` deadline, holds the affected work with
+`code=quota_window`, and requeues it automatically when the window reopens.
+The failure summary the same window journals is itself a quota diagnostic
+(`looper events --contract v2 --json --kind failure`): outcome
+`quota_window`, the provider's reset wording in the cause, and an `action`
+string naming the resume time and the requeue path. The pause budget is the
+operator's rate-limit policy
+(`LOOPER_RATE_LIMIT_MAX` windows without progress, `LOOPER_RATE_LIMIT_DELAY`
+when the provider reports no reset); past the budget the work stays blocked
+for an operator. Untimed quota text, invalid credentials, and unsupported
+configuration keep their run-ending classes.
+
+A reported reset clock that is already past by a small margin is provider
+clock skew or delivery delay, not a window that closes tomorrow: inside a
+ten-minute past tolerance the pause applies the rate-limit fallback wait
+and reopens imminently. Every human quota line — the `quota` pause event,
+the in-run waiting line, and the bootstrap wait line — names the date
+beside the clock whenever the retry lands on another day, so an operator
+can tell which day the wait ends.
+
+The same wait covers startup bootstrap: a closed reviewer window during a
+fresh start no longer ends the start with the reset text. The start waits
+out the window and bootstraps when it reopens, so a detached start keeps
+its readiness and queryable seed while the `quota` events explain the wait.
+`looper stop` during the wait ends the start cleanly, and a task file
+written while the window is closed is adopted instead of overwritten. Past
+the pause budget the start ends for an operator rerun, keeping the manual
+path.
+
+The recorded retry also survives a restart: a controller stopped inside a
+quota window re-arms the pause at startup from the quota-held tasks in the
+saved state — their typed `quota_window` reason, the blocked attempt's agent
+profile, and the `unblock_when` promise — and journals a `quota-restore`
+event with the same `profile` and `retry_at` keys. A window whose recorded
+time already passed resumes at the restart's first boundary; a hold whose
+promise recorded no time is requeued at startup, and a still-closed window
+re-arms from the provider's next failure. While such work remains held, the
+controller waits on the quota line (naming the profile and its retry clock)
+instead of the generic changed-requirements line. A restart also starts a
+fresh pause-budget cycle, because the previous session's window count lived
+only in its memory.
 
 Controller ownership, process presence, and output activity are separate
 observations. `progress: "unknown"` means that output alone cannot prove

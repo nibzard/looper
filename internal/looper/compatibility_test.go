@@ -61,7 +61,11 @@ func contractScenario(t *testing.T) Config {
 		Attempts: []*Attempt{
 			{ID: "task-bare", Task: tasks[0], Agent: "claude", Base: "base", Directory: root, Ref: "ref", Phase: "blocked", Repairs: 0, Worktrees: []string{},
 				ResultCommit: "result-commit",
-				Summary:      &Summary{TaskID: "T1", Status: "blocked", Summary: "needs the decision", Files: []string{}, Blockers: []string{"needs an owner decision"}, UnblockWhen: "The owner records the decision."},
+				Summary: &Summary{TaskID: "T1", Status: "blocked", Summary: "needs the decision", Files: []string{}, Blockers: []string{"needs an owner decision"}, UnblockWhen: "The owner records the decision.",
+					// A retained result keeps the reconciliation proposal its
+					// worker reported, because recovery replays it (T124); the
+					// frozen document must keep hiding both keys.
+					Followups: []Finding{{Title: "Release the held decision", Details: "The condition holds.", Evidence: "the gate file exists", Owner: "agent", Key: "held-decision", ExistingTaskID: "T1", Transition: "resume", Revision: "tip", DependsOn: []string{}, Priority: 1}}},
 				Verification: &Candidate{Base: "base", Commit: "commit", Tree: "tree", AttemptID: "task-bare", OK: false, Feedback: "verify failed"}},
 			{ID: "task-live", Task: tasks[1], Agent: "claude", Base: "base", Directory: work, Ref: "ref", Phase: "running", Repairs: 1, Worktrees: []string{"wt-1"},
 				Feedback: "verify failed", FailureHash: "hash", Repeats: 1, Diagnosed: true},
@@ -336,10 +340,12 @@ func marshalShape(shape any) string {
 // request receipts (AX-009), a decided cancellation waiting on active work
 // survives a restart in the saved state (AX-019), and a detached start saves
 // the startup seed for its whole bootstrap window (AX-022). The frozen
-// legacy status document must keep hiding all four. A leak here fails the
-// frozen schema, whose additionalProperties false admits no such keys. The
-// version 2 --full route serves the same complete document, so it hides
-// them too.
+// legacy status document must keep hiding all four, and the T124 repair adds
+// the nested pair: a retained result keeps the transition and revision its
+// worker proposed so recovery can replay it, while the frozen follow-up shape
+// admits neither key. A leak here fails the frozen schema, whose
+// additionalProperties false admits no such keys. The version 2 --full route
+// serves the same complete document, so it hides them too.
 func TestLegacyStatusOmitsSavedStateMachinery(t *testing.T) {
 	c := contractScenario(t)
 	_, dir := projectPaths(c)
@@ -364,6 +370,20 @@ func TestLegacyStatusOmitsSavedStateMachinery(t *testing.T) {
 	if !snap.State.StartupSeed {
 		t.Fatal("the scenario must save a state that carries the startup seed marker")
 	}
+	proposals := 0
+	for _, a := range snap.State.Attempts {
+		if a == nil || a.Summary == nil {
+			continue
+		}
+		for _, f := range a.Summary.Followups {
+			if f.Transition != "" && f.Revision != "" {
+				proposals++
+			}
+		}
+	}
+	if proposals == 0 {
+		t.Fatal("the scenario must save a state that carries a reconciliation proposal")
+	}
 	for _, route := range []struct {
 		name string
 		c    Config
@@ -387,10 +407,41 @@ func TestLegacyStatusOmitsSavedStateMachinery(t *testing.T) {
 				t.Errorf("%s emits %s; the key is saved-state machinery and stays out of the frozen document: %s", route.name, key, out.Bytes())
 			}
 		}
+		for _, key := range nestedFindingKeys(doc) {
+			t.Errorf("%s emits %s inside a retained follow-up; the proposal keys stay out of the frozen document: %s", route.name, key, out.Bytes())
+		}
 		if err := contractschema.ValidateJSON(readLegacySchema(t, "status"), out.Bytes()); err != nil {
 			t.Errorf("%s does not match its frozen schema: %v", route.name, err)
 		}
 	}
+}
+
+// nestedFindingKeys lists the reconciliation proposal keys one complete
+// status document leaked into its retained attempts' follow-ups.
+func nestedFindingKeys(doc map[string]json.RawMessage) []string {
+	var attempts []json.RawMessage
+	if err := json.Unmarshal(doc["attempts"], &attempts); err != nil {
+		return nil
+	}
+	var leaked []string
+	for _, raw := range attempts {
+		var attempt struct {
+			Summary *struct {
+				Followups []map[string]json.RawMessage `json:"followups"`
+			} `json:"summary"`
+		}
+		if json.Unmarshal(raw, &attempt) != nil || attempt.Summary == nil {
+			continue
+		}
+		for _, followup := range attempt.Summary.Followups {
+			for _, key := range []string{"transition", "revision"} {
+				if _, ok := followup[key]; ok {
+					leaked = append(leaked, key)
+				}
+			}
+		}
+	}
+	return leaked
 }
 
 // TestContractDocumentsStayDeterministic guards the fixture scenario itself:

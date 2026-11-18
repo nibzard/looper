@@ -43,6 +43,10 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		e.wg.Wait()
 		if e.State != nil {
 			e.sweepResources()
+			// The session's closing sweep summarizes every artifact whose
+			// cleanup failure repeated since its last report (T138), so the
+			// journal ends with one count per failing artifact.
+			e.summarizeCleanupFailures()
 		}
 		// A failure that ends the run is journaled as its bounded summary
 		// (AX-021) before the shutdown record, so the cause stays retrievable
@@ -86,6 +90,15 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		e.uncleanPreviousNote = previous
 	}
 	if err := e.initialize(ctx); err != nil {
+		if errors.Is(err, errBootstrapDrained) {
+			// A drain request ended the startup quota wait: bootstrap created
+			// no work, so the drain completes here instead of at a loop
+			// boundary (T141).
+			e.journalUncleanPreviousNote(true)
+			exitReason = "drained"
+			code, err := e.bootstrapDrainExit()
+			return code, err
+		}
 		e.journalUncleanPreviousNote(true)
 		return 1, err
 	}
@@ -209,6 +222,12 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			heldResults = nil
 			backlogHold = false
 			continue
+		}
+		// A quota window that reopened resumes its provider before any gate
+		// reads the pause (T125). A held backlog imports its edit first; the
+		// resume mutates the exported task file.
+		if err := e.expireQuotaPauses(backlogHold); err != nil {
+			return 1, err
 		}
 		// Settings requests and plan imports apply at loop boundaries,
 		// including idle polling. Synchronous planning and review above are
@@ -444,20 +463,29 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				continue
 			}
 			// A due review precedes planning, exactly as on the idle path,
-			// including reviews the integration counters made due.
-			if e.reviewDue() {
+			// including reviews the integration counters made due. A closed
+			// reviewer quota window defers both (T125).
+			if e.reviewDue() && !e.quotaPaused(e.Config.ReviewAgent) {
 				// Persist before launching: cancellation must retain the review.
 				e.State.ReviewPending = true
 				if err := e.save(); err != nil {
 					return 1, err
 				}
 				if err := e.review(ctx, false); err != nil {
+					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
+						continue
+					}
 					return 1, e.retainedRecoveryError("review", len(pending), err)
 				}
 				reviewFailures = 0
 			}
-			if err := e.plan(ctx); err != nil {
-				return 1, e.retainedRecoveryError("planning", len(pending), err)
+			if !e.quotaPaused(e.Config.ReviewAgent) {
+				if err := e.plan(ctx); err != nil {
+					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
+						continue
+					}
+					return 1, e.retainedRecoveryError("planning", len(pending), err)
+				}
 			}
 		}
 		busy := live || len(pending) > 0
@@ -502,9 +530,26 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			if e.drainingNow() {
 				continue
 			}
+			if e.quotaHoldsWork() {
+				// A closed quota window is the only barrier at this boundary
+				// (T125). Sleep the poll interval instead of spinning; the
+				// boundary above resumes the provider when it reopens.
+				message := e.quotaWaitMessage()
+				if lastProgress != message {
+					e.event("waiting", message)
+					lastProgress = message
+				}
+				if !e.idleWait(ctx, e.Config.Poll) {
+					return 130, ctx.Err()
+				}
+				continue
+			}
 			if len(e.State.Backlog.Ready()) == 0 {
 				recovered, err := e.recoverRun(ctx)
 				if err != nil {
+					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
+						continue
+					}
 					return 1, err
 				}
 				if recovered {
@@ -520,13 +565,19 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			}
 			ready := e.State.Backlog.Ready()
 			final := len(ready) == 0
-			if e.reviewDue() || (final && e.State.ReviewedTip != e.State.Tip) {
+			if !e.quotaPaused(e.Config.ReviewAgent) && (e.reviewDue() || (final && e.State.ReviewedTip != e.State.Tip)) {
 				// Persist before launching: cancellation must retain the review.
 				e.State.ReviewPending = true
 				if err := e.save(); err != nil {
 					return 1, err
 				}
 				if err := e.review(ctx, final); err != nil {
+					// A closed reviewer quota window pauses the review and
+					// retries it after the reset; it is not a review failure
+					// and must not spend the failure budget (T125).
+					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
+						continue
+					}
 					reviewFailures++
 					e.event("review-error", err.Error())
 					var agent *AgentError
@@ -572,8 +623,13 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				e.event("limit", "Dispatch limit reached; all active work is retained or integrated.")
 				return 2, nil
 			}
-			if err := e.plan(ctx); err != nil {
-				return 1, err
+			if !e.quotaPaused(e.Config.ReviewAgent) {
+				if err := e.plan(ctx); err != nil {
+					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
+						continue
+					}
+					return 1, err
+				}
 			}
 		}
 		milestoneRoom := func() bool {
@@ -583,7 +639,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		// attempts, repairs, checks, and publications keep reaching their
 		// boundary above, the import applies at the first free one, and
 		// dispatch resumes against the expanded backlog only after that.
-		if !draining && !backlogHold && !e.importDispatchHold() && !e.State.ReviewPending && milestoneRoom() && (e.Config.Limit == 0 || attempted < e.Config.Limit) {
+		if !draining && !backlogHold && !e.importDispatchHold() && !e.quotaPaused(e.Config.Agent) && !e.State.ReviewPending && milestoneRoom() && (e.Config.Limit == 0 || attempted < e.Config.Limit) {
 			capacity := e.capacity
 			if len(pending)+len(checks) > e.Config.Checks {
 				capacity = max(1, capacity-1)
@@ -727,6 +783,30 @@ func (e *Engine) processControllerRequests(ctx context.Context) error {
 	}
 	e.processPlanImports(ctx)
 	return e.err
+}
+
+// bootstrapDrainExit completes a drain request that ended the startup
+// bootstrap wait (T141). Bootstrap created no task file, attempts, or
+// baseline, so unlike the loop's drain there is nothing to retain: the
+// request records its applied receipt when the saved state can hold one — a
+// detached start holds its startup seed — the request file is removed, and
+// the start exits cleanly. The project stays fresh; the next start
+// bootstraps again.
+func (e *Engine) bootstrapDrainExit() (int, error) {
+	message := "Stopped during startup bootstrap; no work was started. Run looper to start again."
+	if req := e.drainingRequest(); req != nil {
+		e.recordStopRequest(req, RequestApplied, message, "")
+		if e.State != nil {
+			if err := e.save(); err != nil {
+				return 1, err
+			}
+		}
+		if err := os.Remove(stopRequestPath(e.Dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 1, fmt.Errorf("remove completed drain request: %w", err)
+		}
+	}
+	e.event("stop", message)
+	return 0, nil
 }
 
 // drainExit completes a drain request. The request is consumed only after
@@ -982,6 +1062,13 @@ func (e *Engine) applyFinishedWorker(ctx context.Context, r workerResult, pendin
 		// identity a task filter matches. The typed reason comes from the
 		// same summary, never from parsing the error text (OW-09).
 		e.workerFailureEvent(a, r.Err)
+		if errors.As(r.Err, &agent) && agent.Kind == failureQuota {
+			// A closed quota window pauses the provider and holds the
+			// attempt with the provider's reset text; the controller requeues
+			// the task when the window reopens (T125).
+			e.pauseOnQuota(r.Err, a.Agent)
+			return e.holdQuota(a, agent)
+		}
 		reason := failureBlockReason(blockCodeUnknown, blockRetryUnknown, a.ID)
 		if s := failureOf(r.Err); s != nil {
 			reason = workerFailureBlockReason(a, s)

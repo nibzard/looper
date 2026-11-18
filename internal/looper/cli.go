@@ -815,6 +815,15 @@ func doctor(c Config, out io.Writer) int {
 		code = 1
 	} else {
 		fmt.Fprintf(out, "Backlog: %d tasks, %d ready\n", len(b.Tasks), len(b.Ready()))
+		// A circular resume condition keeps a blocked task out of the queue
+		// while nothing else can release it (QUICK-WINS-PLAN section 1).
+		// The warning reports the state; doctor never edits the backlog.
+		for _, t := range b.Tasks {
+			if condition := circularResumeCondition(t); condition != "" {
+				fmt.Fprintf(out, "  Warning: task %s requires itself to resume: %s\n", t.ID, sanitize(condition))
+				fmt.Fprintln(out, "  Fix: record an independent prerequisite or correct the task state in", c.Todo)
+			}
+		}
 	}
 	// The bounded pending-request summary (AX-010): a plain doctor caller
 	// learns what the run owes an outcome to without the JSON document. The

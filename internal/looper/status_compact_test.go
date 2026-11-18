@@ -542,7 +542,7 @@ func TestStatusCompactDistinguishesControllerCases(t *testing.T) {
 		f.save(t, &State{
 			Version: 2, Root: f.root, Todo: f.c.Todo, Head: "head", Branch: "main",
 			Ref: "refs/looper/" + session, Tip: "tip", Published: "published",
-			Backlog: Backlog{Version: 1, Sources: []string{}, Tasks: []Task{}},
+			Backlog:  Backlog{Version: 1, Sources: []string{}, Tasks: []Task{}},
 			Attempts: []*Attempt{}, StartupSeed: true,
 		})
 		_, doc, _ := runStatusCompact(t, "--contract", "v2", "--json")

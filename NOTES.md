@@ -489,8 +489,772 @@ Validation outcomes, 2026-11-14:
   `block_reason`, or the inspector shows `unknown (unknown)`. Killing tmux
   does not stop a detached controller; the script interrupts through the
   exit dialog.
-- Dashboard defects seen while recording, not fixed:
+- Dashboard defects seen while recording, fixed 2026-11-18 in T132 (see
+  the "Dashboard figure defects fixed" section below):
   - The task view (`u`) opens with the cursor on the second row (T001),
     not on the blocked task that sorts first.
   - A multi-line blocker in the overview Attention section leaves about
     ten blank lines under the first line.
+
+## Public-launch cleanup review, 2026-11-15
+
+The repository at `github.com/nibzard/looper` is already public. Review
+of the tracked tree, the pushed refs, and the published tags:
+
+- No `.looper` directory is tracked anywhere, on `main`, or in any
+  pushed ref. The reported "two `.looper` dirs" were in the public
+  `nibzard/ohya` repository: two `looper_<hash>/tNNN` runtime
+  directories (five check logs) committed by accident because ohya's
+  `.gitignore` lacks the `looper_*/` entry this repository has. That
+  repository's remote also published a `refs/looper/run-*` state ref
+  and a merged `looper-parked-docs` branch. Fixed on 2026-11-15:
+  ohya commit `af02a90` removes the directories and ignores
+  `looper_*/`; both internal refs were deleted from the ohya remote.
+  Three `refs/notes/*` refs (82 notes, scanned clean of private
+  strings) remain published there pending an owner decision.
+  Separately, contract
+  fixtures and tests here embed literal paths such as
+  `/home/user/.looper/alpha-b17f/runtime`; about 50 tracked files
+  mention `.looper` and 35 mention `/home/user`.
+- No LICENSE file exists. A public launch needs a license decision.
+- Private project names (Alpha, Bravo, Charlie, Delta,
+  Echo) and the `claude-alt`/alt-provider provider details appear in
+  tracked files: `NOTES.md` (27 lines), `UNATTENDED-RECOVERY-PLAN.md`,
+  `docs/research/MONITORING-ACTIONS-2026-10-12.md`, fixtures under
+  `docs/contracts`, and tests.
+- Pushed to the public remote: `refs/notes/{adr,context,design,todo}`
+  with 65 notes; 8 lines in the blobs carry private names or
+  `/home/user` paths.
+- Published tags carry the old internal `NOTES.md`: 42 private-name
+  lines at `v0.8.3`, 27 at `v0.10.0`. Scrubbing them needs a history
+  rewrite or tag deletion; decide before promoting the repository.
+- Two tracked symlinks are broken: `.claude/skills/release-runbook` and
+  `.codex/skills/release-runbook` point to a missing
+  `skills/release-runbook`.
+- Commit metadata includes `reviewer <reviewer@example.com>` (21
+  commits) and one commit with a personal Gmail address; fixing needs
+  the same history rewrite.
+- Root and `docs/` hold internal working documents next to user docs:
+  `EXPERIMENT-PLAN.md`, `UNATTENDED-RECOVERY-PLAN.md`,
+  `AUTONOMOUS-AGENTS.md`, `PRODUCT.md`, and in `docs/` the seven
+  `*-PLAN.md`/review/prep files plus `docs/research/` (22 files).
+  `MANIFESTO.md` is linked from the README Development section.
+- No secrets found: no API keys, tokens, or private keys in the tracked
+  tree. All regex hits were `task-<hex>` false positives.
+- No CI workflows exist (`.github/` is absent).
+
+Proposed order: pick the license; scrub `main` (private names, notes
+refs, broken symlinks, internal-doc moves); then decide on the history
+rewrite for tags and commit metadata. Fixture paths are byte-pinned, so
+neutralizing them also regenerates fixtures and their tests.
+
+
+## Delivery audit, 2026-11-17
+
+Research only. See [the delivery audit](/notes/looper-delivery-audit-2026-11-17.md)
+for runtime evidence, Codex review references, proposed changes, and open questions.
+
+- Six retained projects show 455 integrations at the initial observation.
+  Charlie adds integration 456 during the audit: T090 fixes the hidden player,
+  with 1,135 passing cases in its retained verification log.
+- Main current gap: reviews cannot reconcile existing blocked/deferred tasks.
+  Ohya T093 readiness appears in seven reviews before it starts. Charlie
+  T077 is reported delivered seven times and remains blocked. Source confirms
+  findings.go only reopens idle done/todo coding tasks; it preserves blocks.
+- Circular conditions keep Charlie T027, T040, and T066 out of the queue.
+  Core progression, brewing, and saves remain incomplete despite green checks.
+- Current 0.11.0 reviews stop both Ohya and Charlie on timed provider quotas
+  classified as configuration failures. Observed 429 wording misses the
+  transient pattern; usage-limit wording matches configuration.
+- Concurrent note/demo edits and commits still stop safe publication. Ohya
+  remains stopped at event 12757 with verified T140 work retained. Guards
+  preserve competing edits; recovery remains an operator cost.
+- Cleanup errors repeat across a few artifacts. External resource leakage
+  is unverified. Historical Alpha import flooding is guarded in current
+  source; do not list it as an established current defect.
+- Runs, project backlogs, binaries, and session data remain unchanged.
+  Four Papercut reports record reconciliation, quota, cleanup, and large
+  legacy status output. No implementation or restart was performed.
+
+## Review reconciliation implemented, 2026-11-18 (T124)
+
+Implements audit finding 1: findings can now reconcile blocked, deferred,
+and wrongly owned tasks instead of only recording evidence.
+
+- `Finding` gains `transition` (`resume`, `complete`, `reassign`) and
+  `revision`. The review prompt names the verified revision and the three
+  transitions. The worker prompt teaches none of it: the 4 KiB worker prompt
+  budget has about 170 bytes of headroom, and a worker cannot know the
+  accepted revision mid-flight, so its transition would be refused anyway.
+- Guards, in order: existing target, revision equals the accepted revision
+  the stage records (`e.State.Tip`), no attempt holds the contract (the same
+  boundary `amendHoldsContract` draws), then the gate checks. `resume` also
+  requires every dependency done. Transitions change only fields outside
+  `Contract()`, so retained work keeps its acceptance identity.
+- `resume` sets an idle blocked task to `todo` and clears blockers,
+  `unblock_when`, and `block_reason`. `complete` closes a task whose outcome
+  exists without a worker; repeats on the done task record evidence only.
+  Completed work is never reopened by a transition.
+- Operator gates, deferrals, ownership changes, and a blocked task whose own
+  condition names itself are escalated, not applied: one operator decision
+  task keyed `looper:finding:reconcile-<task>`, with the refusal reason and
+  a concrete action (task-file edit at a safe boundary, or `looper cancel`).
+  Later reports add evidence to it, never a second decision.
+- Plain agent findings that repeat against a blocked agent task (its key tag
+  already recorded, no state change) escalate the same decision once.
+  Operator-owned findings and gated tasks keep the blocked task itself as
+  their stable action, so `TestFindingKeyDeduplicatesRenamedBlocker` and
+  `TestFindingReferencesExistingTask` keep one task.
+- A report against a decision task records evidence only: the decision task
+  carries a `looper:finding:reconcile-<id>` tag, and such a target never
+  escalates a second decision about the decision.
+- Tests: `internal/looper/reconcile_test.go` (16 cases, including the real
+  review path with a stub agent and the staged rollback beside a failed
+  export). Validation: focused runs pass; the full package suite and
+  `make test` results are recorded below.
+- Second defect class caught while implementing: a retained worker summary
+  keeps its proposal so recovery can replay it, and the complete status
+  document embeds attempts inline, so `transition`/`revision` would have
+  leaked into `attempts[].summary.followups[]` — the frozen legacy status
+  schema pins that shape with `additionalProperties: false` (the
+  T100/T118/T122 class). `statusReport` now clears both keys on the
+  projection copy, the frozen-shape scenario carries a proposal, and the
+  shape fixtures were re-recorded with `-update-contract-fixtures`. Legacy
+  `inspect` leaves them visible: its schema keeps attempt items open.
+
+Validation, 2026-11-18:
+
+- `go test ./... -count=1 -timeout 40m`: pass (looper package 549 s).
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- `go test -race ./internal/looper -run TestReconcil`: pass.
+- `python3 scripts/runtime-test.py` after `make build`: 73 tests pass in
+  278 s. The installer, package-smoke, and skill scripts of `make test` were
+  not rerun; this change touches the engine and documents only.
+
+Limits found while implementing, not fixed here:
+
+- Circular detection is textual: a condition that names the blocked task's
+  own ID. Charlie T040's wording ("waits for save work to resume") carries
+  no ID and is not detected; a review must still name it.
+- A worker follow-up that carries a transition must report the accepted
+  revision, which a worker cannot know mid-flight; such reports are refused
+  with a journal note. Reviews, which learn the revision from the prompt,
+  are the intended source.
+
+## Timed quota pause implemented, 2026-11-18 (T125)
+
+Implements audit finding 3: timed provider quota exhaustion no longer stops
+a controller as a configuration failure. Core code:
+`internal/looper/quota.go`, classification in `internal/looper/agent.go`.
+
+- `classifyFailure` gains a `quota` kind, checked first. Two shapes match:
+  the five-hour usage-limit wording with a reset, and the observed
+  `API Error: Request rejected (429)` rejection (Ohya event 12262, Charlie
+  event 8271 both carry `Usage limit reached for 5 hour. Your limit will
+  reset at <wall clock>`). Untimed quota text ("this account quota is
+  exhausted", billing, credit) stays `configuration`: no reset exists, so an
+  operator must act. Ordinary rate limits stay `transient`.
+- `quotaResetTime` parses the provider's reset as reported: zone-free wall
+  clocks and clock times resolve on the local clock (the agent process
+  shares the controller's clock), zoned timestamps keep their zone, and
+  `in 2h 6m` style relatives add to now. A clock time already past names
+  tomorrow. The reported text is retained verbatim in the pause event and
+  the hold blockers; no outage duration is derived from it.
+- `AgentError` carries the parsed `Retry`. The in-run transient retry loop
+  never retries a quota window; the controller owns the wait.
+- The controller pauses the affected agent profile
+  (`Engine.quotaPauses`): dispatch gates on the worker profile, review,
+  planning, and queued plan imports gate on the reviewer profile. Worker
+  attempts hold with `block_reason` code `quota_window` (class `failure`,
+  retry `yes`) and the provider's reset text; `quota` and `quota-resume`
+  journal events carry `profile`, `retry_at`, `reset_text`, and `windows`.
+- At each loop boundary `expireQuotaPauses` resumes reopened windows and
+  requeues the quota-held tasks with the accepted-requeue transition (only
+  fields outside `Contract()`). Pauses live for the session; a restart
+  rediscovers a closed window from the provider's next failure because
+  quota-held tasks and pending reviews persist in the saved state.
+  Erratum, 2026-11-18 (T146): that rediscovery claim held only for work a
+  restart actually dispatches. A quota-held task is blocked, so nothing
+  dispatches it and no provider failure can re-arm the pause; a restart
+  mid-window stranded the held task past the recorded retry until an
+  operator requeued it. Startup now re-arms the pause from the saved
+  state's held tasks — see the T146 section.
+- Spending policy reuses the existing rate-limit knobs:
+  `LOOPER_RATE_LIMIT_MAX` bounds consecutive quota windows without an
+  integration (past it, work stays blocked for an operator), and
+  `LOOPER_RATE_LIMIT_DELAY` is the pause when the provider reports no reset.
+  One wait is capped at 24 h, so a weekly window costs one probe per day.
+- Startup bootstrap still exits on a quota error with the reset text in the
+  message: no loop exists to hold the pause before the first task file
+  exists. Queued imports wait for the reviewer window instead of failing.
+
+Tests: `internal/looper/quota_test.go` (classification and reset shapes, the
+stub-agent acceptance routes, the budget boundary, and the credential stop).
+The OW-11 fixture's untimed quota case keeps its configuration class and its
+single attempt. Docs updated: `docs/observability.md` (monitor policy),
+`docs/configuration.md` (env scope), `docs/AGENT-CONTRACT-MIGRATION.md`
+(change-log row).
+
+## Circular-blocker doctor warning implemented, 2026-11-18 (T135)
+
+Implements QUICK-WINS-PLAN section 1: `looper doctor` now warns about a
+blocked task whose resume condition requires the task itself. Core code:
+`internal/looper/observe.go`, text output in `internal/looper/cli.go`.
+
+- The finding code is `task_circular_condition`, severity warning. It rides
+  beside `task_deferred` or `task_blocked`, because a deferred task can
+  record a condition only its own implementation can satisfy (the audit's
+  Charlie T027/T066 shape). Doctor changes nothing; the exit code policy
+  for warnings is unchanged (legacy warnings return 0, version 2 exits 0).
+- Detection is textual, bounded, and covers both recorded shapes: the
+  identifier in requirement position (for, until, on, by, after, when,
+  need, require, await directly before it) and the identifier in subject
+  position with its own progress as the required event ("T027 starts
+  implementation", "T066 is unblocked"). Honest mentions stay quiet:
+  consequence connectors ("then", "before"), an external clause before a
+  comma ("after the operator grants access, T027 resumes"), an external
+  cue after the identifier ("T027 starts verification when the migration
+  lands"), a possessive mention ("T065's unblock condition"), a passive
+  deliverer ("itself unblocked by T118's push"), and a colon label
+  ("T052 unblocks: a device is attached"). Verified against the retained
+  Charlie and Ohya backlogs: Charlie warns on T027, T033, T038, T040,
+  T045, T049, T050, T054, T055, and T066 — every one a "starts
+  implementation"/"is unblocked" deferral — and Ohya warns on T040 alone;
+  both audit circular classes are covered with no false positives found.
+- The finding keeps warning severity beside operator and deferral reason
+  classes in version 2 doctor and compact status (`doctorFindingViews`,
+  `statusFindingsFor`): expected waiting ends where only the blocked task's
+  own progress could satisfy the condition. Monitor policy row added to
+  `docs/observability.md`.
+- The T124 reconcile guard in `findings.go` stays broader on purpose: it
+  escalates on any mention of the task itself, because an automatic
+  transition must err toward the operator, while this warning must stay
+  quiet on honest conditions.
+- Plain text reads the task file (`c.Todo`); JSON doctor diagnoses the
+  saved state, as it always has. A condition that names no identifier at
+  all (Charlie T040's summary "waits for save work to resume") stays
+  outside the check, as documented for T124.
+
+Tests: `internal/looper/circular_condition_test.go` (detection table, legacy
+JSON, version 2 JSON with the deferral exemption, plain text with the
+unchanged task file, compact status).
+
+Validation, 2026-11-18:
+
+- The detector was also replayed against the retained Charlie and Ohya
+  saved states (read-only); the warnings it produced are listed above.
+- `go test -race ./internal/looper -run 'TestCircularResumeCondition|
+  TestDoctorWarnsOnCircularResumeCondition|TestCompactStatusKeepsCircularWarning'`:
+  pass.
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- `go test ./... -count=1 -timeout 40m`: the looper package ran 2 326 s
+  under host load and failed two timing tests, `TestAddTaskRequestWhileWorkerRuns`
+  (run timed out) and `TestCancelDuringAssessmentResumesVerification`
+  (assessment never started); both pass alone in about two seconds, the
+  documented budget-flake class (see T108), not a regression. Every other
+  package and test passed.
+- End-to-end with the built CLI on a fixture carrying the real retained
+  conditions: text doctor warns for the circular shapes, stays quiet for
+  the colon-label, external-cue, and consequence shapes, exits 0, and
+  leaves the task file byte-identical.
+
+## Quota failure diagnostics implemented, 2026-11-18 (T136)
+
+Implements QUICK-WINS-PLAN section 2's reporting patch on top of T125's pause
+machinery: the agent failure classification itself now reports a timed quota
+failure as a diagnostic. Core code: `internal/looper/agent.go` (diagnostic
+construction and the action text), `internal/looper/failure.go` (the summary
+field, outcome code, and message rendering), `internal/looper/errors.go`
+(the error document action).
+
+- A `quota`-classified agent failure's bounded summary (AX-021) gains
+  outcome `quota_window` and an `action` string: work is retained, no
+  in-run retry is scheduled, Looper resumes at the parsed reset, and past
+  the pause budget the operator reruns Looper after the window or requeues
+  the held task (`looper requeue`). A rejection without a reset names the
+  configured wait instead of a time. The provider's reset wording stays in
+  `cause` exactly as reported — timestamps without a time zone included —
+  and no outage duration is derived from it.
+- The human failure line renders `<operation> quota window (exited N):
+  <reset text>` instead of a bare exit failure, so plain `looper events`
+  self-diagnoses. The version 2 error document leads `next_actions` with
+  the failure's own action, which is what the startup bootstrap exit path
+  shows: no loop exists there to hold a pause, so the operator sees the
+  resume step in the error itself.
+- Every other class is unchanged: invalid credentials stay
+  `configuration`, ordinary rate limits stay `transient`, and their
+  summaries keep empty `action` and byte-identical rendering. Existing
+  fixtures do not change; the new keys ride only on the new class.
+- Acceptance reconciliation with T125: the plan text proposed keeping the
+  stop-and-retain behavior, but T125 landed first with the wider scope the
+  plan section now records (profile pause, automatic requeue at the recorded
+  reset within `LOOPER_RATE_LIMIT_MAX` windows). The criteria hold as
+  written at the classification layer: a stub emitting the observed message
+  produces the quota diagnostic with reset text and action; credentials and
+  rate limits keep their classes; a quota failure retains work and burns no
+  in-run retry (the controller, not the retry loop, owns the wait).
+- `status_compact_test.go` was committed unformatted at HEAD (a T135
+  leftover); `gofmt -w` realigned one struct field.
+- Race repaired in T125's pause gates, found by the full-suite run: a quota
+  deadline that rolls over mid-iteration opened the review gate before the
+  loop boundary consumed the pause, so the restarted review raced ahead of
+  its own `quota-resume` event (`TestReviewQuotaPauseResumesAutomatically`
+  failed about one run in six with "no quota-resume event"). `quotaPaused`
+  now keeps a pause closed until `expireQuotaPauses` consumes it at the
+  boundary, and `quotaWaitMessage` names the same records, so the resume
+  journal and the requeue always precede any gate. Verified with 60
+  consecutive review-route runs and 5× the other quota routes.
+
+Tests: `internal/looper/quota_test.go` gained the T136 agent-level cases
+(observed message with reset, rejection without reset, credentials and rate
+limits) and controller-level assertions that the journaled worker failure
+summary carries the quota outcome and action.
+
+Validation, 2026-11-18:
+
+- `go test ./internal/looper -run 'TestAgentQuota|TestClassifyTimedQuota|
+  TestQuotaResetTime' -count=1`: pass.
+- `go test ./internal/looper -run 'TestWorkerQuotaPauseResumesAutomatically|
+  TestReviewQuotaPauseResumesAutomatically|TestPlanningQuotaPauseResumes|
+  TestCredentialFailureStillStopsTheRun|TestQuotaPauseBudgetHoldsWorkForOperator'
+  -count=1`: pass.
+- `go test ./internal/looper -run 'TestAgentFailure|TestFailure|TestError|
+  TestEvents|TestLegacyContract|TestPublicError' -count=1` and
+  `go test ./internal/contractschema -count=1`: pass.
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- After the gate repair: `TestReviewQuotaPauseResumesAutomatically -count=60`
+  and the other four quota routes at `-count=5`: pass.
+- `go test ./internal/looper -count=1 -timeout 40m`: pass (567.7 s). The
+  first run, before the gate repair, failed only
+  `TestReviewQuotaPauseResumesAutomatically` with "no quota-resume event";
+  the repair above closes that race. Every other package passed then too.
+- `make build` then `python3 scripts/runtime-test.py`: 73 tests pass in
+  268 s. The installer, package-smoke, and skill scripts of `make test`
+  were not rerun; this change touches the engine and documents only.
+
+## Compact status in agent examples implemented, 2026-11-18 (T137)
+
+Implements QUICK-WINS-PLAN section 3: the agent-facing monitoring examples
+now teach the bounded compact status and link to `--full`. Documentation
+only; no code, schema, or document shape changed.
+
+- `docs/AGENT-CONTRACTS.md` gains a "Routine monitoring" subsection under
+  Contract versions: the compact call, the document it returns
+  (`controller.state` with its five values, `cursor.event_id`, limits and
+  detail routes), the `--full` route for the detailed state, and the
+  statement that plain `looper status --json` keeps its legacy format.
+- `docs/observability.md` now says its `status` sections describe the
+  complete document, names both transports that serve it (plain `--json`
+  under the legacy default, `--contract v2 --full --json` under version 2),
+  and routes routine monitoring to the compact document.
+- `docs/recovery.md` and `.agents/AGENTS.md` (root `AGENTS.md` symlinks to
+  it) use the compact call for their monitoring examples and name `--full`.
+- Already correct, unchanged: `looper help status` (`internal/looper/help.go`)
+  leads with `looper status --contract v2 --json` and teaches `--full`;
+  `skills/looper-diagnose` teaches the compact call with detail routes;
+  `docs/AGENT-CONTRACT-MIGRATION.md` keeps the compatibility table.
+- Legacy examples stay only where they explain compatibility, per the plan.
+
+Example run (built CLI 0.11.1-dev.11, stub agent, private base directory
+under the task resource prefix): a live controller returned
+`controller.state: "controlling"` with the in-flight attempt and
+`cursor.event_id: 11` in 1 812 bytes; after the run finished, the stopped
+document reported `controller.state: "stopped"` and cursor 19 in
+1 342 bytes. Both validate against
+`docs/contracts/schemas/v2/status-compact.schema.json`. Plain
+`looper status --json` returned the complete legacy document (7 033 bytes
+on this two-task fixture), validates against the frozen legacy schema, and
+carries no `contract_version` or `kind` key; `--contract v2 --full --json`
+served the same document shape (only `observation.observed_at` differed
+between the two captures). This is the bounded contrast the 2026-11-17
+audit Papercut recorded: the retained projects returned about 750 KiB from
+plain `status --json`.
+
+Validation, 2026-11-18:
+
+- `go test ./internal/contractschema -count=1`: pass.
+- `go test ./internal/looper -run 'TestCommandHelp|TestSkill' -count=1`:
+  pass (help and skill guards).
+- `go test ./internal/looper -run 'TestLegacyContract|TestCommandSurface|
+  TestStatusCompact|TestCompactStatus' -count=1`: pass.
+
+## Cleanup failure grouping implemented, 2026-11-18 (T138)
+
+Implements QUICK-WINS-PLAN section 4: repeated identical resource-cleanup
+failures group per artifact inside one controller session. Core code:
+`internal/looper/resources.go` (grouping, summaries), one Engine field in
+`engine.go`, and the closing sweep call in `run.go`'s shutdown defer.
+
+- The first cleanup failure of an artifact reports exactly as before: the
+  unchanged `resource-cleanup-error` notice (its message is pinned by
+  `TestCleanupFailuresDistinguishAbsentPathsFromExitFailures`) and the
+  bounded `failure` summary (AX-021). Identical repeats journal neither;
+  `cleanupFailures` counts them per artifact directory. The 2026-11-17
+  audit counted 224 identical notices for three Ohya artifacts; a session
+  now emits one notice plus summaries.
+- Summaries: every 10th identical repeat (`cleanupSummaryInterval`) and the
+  session's closing sweep (after the final `sweepResources` in the `Run`
+  defer) journal one `resource-cleanup-summary` event with the session's
+  repeat count — `Temporary resources remain in <dir> after N identical
+  cleanup failures this session: <err>. Cleanup retries at the next
+  completion or restart.` A summary without new repeats is itself noise, so
+  the closing sweep stays quiet when nothing repeated since the last report.
+- A different artifact keeps its own group. A changed error on the same
+  artifact reports at once in full, because a changed cause is new
+  information; the new cause's count restarts at its first failure.
+- Cleanup behavior is untouched: every sweep boundary still re-runs
+  `cleanResourceLease`, a failing lease stays `cleanup_pending` with its
+  error, and a later success marks it `cleaned` and drops the group, so a
+  new failure of the same artifact is a new episode that warns again. The
+  group map is owner-goroutine session state, like `quotaPauses`; nothing
+  persists, and a new session starts fresh counts (its first failure warns).
+- Scope kept bounded to the plan: the lease read/validate error paths in the
+  same walk (unreadable `resources.json`, invalid lease) are not grouped;
+  the plan and audit evidence name cleanup failures, and those paths have
+  no structured event or repeat evidence. The walk-level error stays
+  ungrouped because it is not artifact-scoped. T143 later grouped the
+  read/validate paths with the same mechanism.
+
+Tests: `internal/looper/resources_test.go` gained five cases (one warning
+pair plus a correct closing count, the interval bound, per-artifact and
+changed-error separation, success clearing the lease and resetting the
+group, and the real `Run` path through a stub-agent session), plus two
+read helpers.
+
+Built-CLI demo (stub agent, two planted leases whose scripts fail, one
+runtime under the task resource prefix, read back with `looper events
+--json`): two sessions over two failing artifacts journaled 4 notices, 4
+cleanup failure summaries, and 4 closing summaries ("after 2 identical
+cleanup failures this session" — each session swept twice); the session
+after the scripts were fixed journaled 0 cleanup events and both leases
+read `cleaned`.
+
+Validation, 2026-11-18:
+
+- `go test ./internal/looper -count=1 -timeout 40m`: pass (569.9 s; the
+  full-repo run below is the same package under the same build).
+- `go test ./... -count=1 -timeout 40m`: pass (looper 568.4 s).
+- `go test -race ./internal/looper -run 'TestRepeatedCleanupFailures|
+  TestCleanupFailureInterval|TestCleanupFailureGroups|TestCleanupSuccessClears|
+  TestRunSummarizesRepeated|TestCleanupFailuresDistinguish|TestWorkerCleansResources|
+  TestCancelledCheckRetains' -count=1`: pass.
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- `make build` then `python3 scripts/runtime-test.py`: 73 tests pass in
+  286 s. The installer, package-smoke, and skill scripts of `make test`
+  were not rerun; this change touches the engine and documents only.
+
+## Startup bootstrap quota wait implemented, 2026-11-18 (T141)
+
+Closes the T125 limit: a timed quota window during startup bootstrap no
+longer ends the start. Core code: `internal/looper/quota.go`
+(`bootstrapAndWait`, `waitBootstrapQuota`), the call in `initializeState`,
+and the drain exit in `run.go`.
+
+- Design choice: a startup wait, not a scheduled restart. The wait keeps
+  the AX-022 readiness contract unchanged — the detached seed stays
+  queryable through the whole window, the parent already reported ok, and
+  the `quota`/`waiting` events stream like every journal line. A scheduled
+  restart would need a new launcher owner and could not answer `looper
+  stop` between exits.
+- `bootstrapAndWait` retries bootstrap after each window. Each closure
+  records the same provider pause the loop records (`profile`, `retry_at`,
+  `reset_text`, `windows`); the pause is consumed on this goroutine (no
+  loop boundary exists yet), so a later closure counts a fresh window. The
+  pause budget mirrors `expireQuotaPauses`: past `LOOPER_RATE_LIMIT_MAX`
+  windows without an integration the start ends for an operator with the
+  provider's reset text and the T136 recovery action in the error.
+- The wait watches three exits: cancellation (SIGINT) ends the start at
+  once (exit 130); a drain request ends it cleanly — `bootstrapDrainExit`
+  records the applied stop receipt in the saved state (the detached seed
+  holds it), removes the request, journals `stop`, and the session records
+  a drained exit 0; and a task file the operator supplies is adopted
+  (bootstrap exists to create it), never overwritten. The adoption drops
+  the bootstrap staging record of supplied plans, so the ordinary startup
+  import analyzes them against the operator's backlog.
+- The adoption path leaves the recorded pause open: the provider window is
+  still closed, so the loop the adoption reaches gates review and planning
+  on it until `expireQuotaPauses` reopens it. Untimed quota text and
+  credentials never reach the wait; their classes still end the start.
+- Every startup guard is untouched and still runs before bootstrap: plan
+  validation, saved-identity checks, the missing-task-file refusal, the
+  strict parse, and the seed-adoption logic. A drain that arrives during
+  the bootstrap agent call itself (not the wait) still waits for the first
+  loop boundary, exactly as `TestStopWaitDuringStartupDrainsAtFirstBoundary`
+  pins.
+
+Tests: `internal/looper/quota_startup_test.go` — the resume route (one
+closure, one `quota-resume`, two bootstrap attempts, the once run completes
+over the bootstrapped backlog), the budget boundary (2 closures, 1
+`budget_spent` notice, exit 1 naming the budget and the reset text, no task
+file), the drain (exit 0, drained session, applied receipt in the seed,
+stop file removed), cancellation (exit 130, no task file), and the
+operator-file adoption (file adopted with the plan rerouted to the ordinary
+import, staging record removed, run completes after the window it still
+waited out).
+
+Validation, 2026-11-18:
+
+- `go test ./internal/looper -run 'TestBootstrapQuota' -count=5`: pass;
+  `-race -count=2`: pass.
+- The T125/T136 quota routes, the AX-022 startup and stop-wait suites, and
+  the bootstrap/daemon/import/legacy groups: pass.
+- `go test ./internal/looper -count=1 -timeout 40m`: pass (630 s), and
+  `go test ./... -count=1 -timeout 40m`: pass (looper 625.5 s).
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+  `go test ./internal/contractschema -count=1`: pass.
+- `make build` then `python3 scripts/runtime-test.py`: 73 tests pass in
+  283 s. The installer, package-smoke, and skill scripts of `make test` were
+  not rerun; this change touches the engine startup path and documents only.
+
+Limit left open, not fixed here: a task file that appears while the
+bootstrap agent call itself runs (a window of minutes, unchanged by this
+task) is still overwritten by the completed bootstrap result. The quota wait
+— the window this task enlarged to hours — adopts it instead.
+
+## Broken release-runbook symlinks removed, 2026-11-18 (T131)
+
+- Commit `a09e08d` renamed `skills/release-runbook` to
+  `skills/github-release` and left `.claude/skills/release-runbook` and
+  `.codex/skills/release-runbook` pointing at the removed path. They were
+  the only broken links in the tracked tree (`find . -xtype l` outside
+  `.git`).
+- Removed both links instead of restoring a target. Every script and
+  document references `skills/github-release` directly, and
+  `docs/install.md` calls `release-runbook` an old name that users remove.
+  The emptied `.claude/` directory went with them; a fresh clone never
+  had it. `.codex/skills/looper-live-test` stays: it is a real tracked
+  directory that `scripts/skill-regression.py` exercises.
+- Nothing referenced the links. A search over the Go sources, scripts,
+  `Makefile`, and the installers finds no `release-runbook` or
+  `.claude/skills` use.
+- Validation: `find . -xtype l -not -path './.git/*'` lists nothing;
+  `scripts/skill-regression.py`, `scripts/skill-install-test.py`
+  (10 tests), and `go test ./internal/looper -run 'TestSkill' -count=1`
+  pass. The remaining root links (`AGENTS.md`, `CLAUDE.md`) resolve.
+
+## Lease read/validate warning grouping implemented, 2026-11-18 (T143)
+
+Closes the T138 scope limit: the sweep's lease read and validate warnings
+group per artifact exactly like cleanup failures. Core code:
+`internal/looper/resources.go` (`repeatSweepWarning` replacing
+`repeatCleanupFailure`, `clearLeaseWarning`, the kind-tagged
+`cleanupFailureGroup`), one comment in `engine.go`. `run.go` is untouched —
+the closing sweep in the `Run` defer already calls
+`summarizeCleanupFailures`, which now summarizes these groups too.
+
+- First occurrence reports exactly as before: the unchanged
+  `resource-cleanup-error` notice (`Cannot read resource ownership in
+  <path>: <err>` for a record that cannot parse or be read, the validation
+  error text for an invalid record). Identical repeats count silently per
+  lease directory, every `cleanupSummaryInterval` repeats and the session's
+  closing sweep journal one `resource-cleanup-summary` event with the
+  session's repeat count — `Cannot read resource ownership in <dir> after N
+  identical warnings this session: <err>. The sweep retries at the next
+  completion or restart.` / `Cannot validate resource ownership in <dir>
+  …`. The cleanup-failure summary keeps its pinned T138 bytes.
+- Group identity is (directory, kind, cause): a changed problem — unreadable
+  becomes invalid, or the error text changes — reports at once because a
+  changed cause is new information, and the new cause's count restarts.
+- Recovery drops the group: a record that reads and validates again ends its
+  episode (`clearLeaseWarning` after validation succeeds), so a later
+  problem of the same artifact reports in full. Cleanup-failure groups
+  survive that clear — only a cleanup run that succeeded clears them — or
+  the clear would re-report a persistently failing cleanup at every sweep.
+- Scope stays as the task records it: the read/validate paths journal no
+  structured `failure` summary (T138 left them without one), and the
+  walk-level error stays ungrouped because it is not artifact-scoped.
+
+Tests: `internal/looper/resources_test.go` gained four cases (read repeats
+with one notice, no failure summary, and one closing count; validate repeats
+whose recovered record drops the group and whose new episode reports; the
+interval bound with a changed problem reporting immediately; and the real
+`Run` shutdown path through a stub-agent session), plus two lease fixtures.
+The T138 suite is unchanged and passes: cleanup grouping keeps its exact
+counts, and the pinned notice and summary messages still match.
+
+Validation, 2026-11-18:
+
+- `go test ./... -count=1 -timeout 40m`: pass (looper 631.5 s).
+- `go test -race ./internal/looper -run 'TestRepeatedCleanupFailures|
+  TestCleanupFailureInterval|TestCleanupFailureGroups|TestCleanupSuccessClears|
+  TestRunSummarizesRepeated|TestCleanupFailuresDistinguish|TestWorkerCleansResources|
+  TestCancelledCheckRetains|TestRepeatedLeaseReadWarnings|
+  TestRepeatedLeaseValidateWarnings|TestLeaseWarningInterval' -count=1`: pass.
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- `make build` then `python3 scripts/runtime-test.py`: 73 tests pass in
+  305 s. The installer, package-smoke, and skill scripts of `make test`
+  were not rerun; this change touches the engine sweep and documents only.
+
+## Past quota reset clock and dated retry lines, 2026-11-18 (T145)
+
+Fixes the T125 parse defect the backlog recorded: a provider reset clock
+already past by seconds to minutes (provider clock skew or delivery delay —
+the incident message read "reset at 11:37" at 11:39:28 local) rolled to
+tomorrow and parked work for up to 24 hours. Core code:
+`internal/looper/agent.go` (the tolerance), `internal/looper/quota.go`
+(the dated lines).
+
+- `quotaResetTime`'s clock branch keeps a reported clock that is past by
+  at most `quotaResetPastTolerance` (10 minutes) on today instead of
+  rolling it to the next day. The past value reaches `pauseOnQuota`,
+  whose existing "zero or already passed" branch applies the
+  rate-limit fallback wait (`LOOPER_RATE_LIMIT_DELAY`), so the pause
+  reopens imminently. A clock past beyond the tolerance still names
+  tomorrow, and dated timestamps keep their reported value — the same
+  past-value shape a zone-free stamp already produced.
+- `quotaRetryClock(retry, now)` renders every human quota line: the clock
+  alone while the retry lands today (byte-identical to the old text), and
+  `2006-01-02 15:04:05` — the layout the T136 recovery action already
+  uses — the moment it does not. Wired into the three lines the finding
+  named: the `quota` pause event, the in-run waiting line
+  (`quotaWaitMessage`), and the bootstrap wait line
+  (`waitBootstrapQuota`). Payload keys and the RFC3339 `retry_at` value
+  are unchanged.
+- Scope kept tight: `quotaRecoveryAction` and the held attempt's
+  `UnblockWhen` keep rendering a parsed past reset as reported (the
+  pinned T136 fixture already carries a yesterday stamp there); the
+  pause event names the deadline the controller actually honors.
+
+Tests: `TestQuotaResetTimeShapes` gained the minutes-past and
+tolerance-boundary shapes; `TestQuotaRetryClockNamesTheDateWhenNotToday`
+pins the renderer; `TestQuotaPastClockReopensImminently` is the incident
+route (one pause, retry_at one fallback wait after the event, resume,
+completion); `TestQuotaMessagesNameTheDateWhenRetryIsNotToday` and
+`TestBootstrapQuotaWaitNamesTheDateWhenRetryIsNotToday` pin the dated
+lines through the real loop and startup paths. With the tolerance
+temporarily zeroed, the shape and route tests fail on the rolled date and
+the parked task, so the coverage catches the defect class.
+
+End-to-end with the built CLI (stub bootstrap failing once, private base
+directory under the task resource prefix): the incident message
+"…Your limit will reset at 12:26" read at 12:28:50 local journaled
+`retry_at` nine seconds out (the configured fallback), printed "the start
+waits and retries at 12:28:59" with no date, and the start completed in
+15 s. A reset reported 25 hours out journaled tomorrow's deadline and
+both the pause event and the bootstrap wait line named the date;
+`looper stop --wait` still drained the start cleanly.
+
+Validation, 2026-11-18:
+
+- `go test ./internal/looper -count=1 -timeout 40m`: pass (790.6 s).
+- The quota, failure, events, legacy-contract, bootstrap, daemon, and
+  stop-wait groups named in the T136/T141 notes: pass.
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- `go test ./... -count=1 -timeout 40m`: see the full-suite line in the
+  task report.
+
+## Dashboard figure defects fixed, 2026-11-18 (T132)
+
+Both defects recorded on 2026-11-15 while re-recording the README figures
+are fixed in `internal/ui`.
+
+- Task-view cursor. The workspace selection materialized from the head of
+  the first task list and then never moved, so a task that blocked later
+  and sorted first left `u` opening on the stale second row. An unset
+  selection is now implicit: the overview marker and the task table follow
+  the ordered head on every snapshot. Navigation and `enter` (inspect) pin
+  the selection, and a pinned selection still survives reordering until
+  its task disappears, so `preserveTaskSelection` and its snapshot/tick
+  call sites are gone.
+- Attention-row blank lines. A blocker is free agent text and can span
+  lines. `ansi.Truncate` in charmbracelet/x v0.2.3 stops collecting
+  printable cells at the width limit but keeps writing non-printable
+  bytes, so every newline survived as a blank display line: a blocker
+  wider than the terminal rendered its first line, the ellipsis, then a
+  column of blank lines. `taskRow` now flattens free text to one display
+  line (`plainText` plus whitespace collapse) before the width clamp,
+  matching how every other row builder sanitizes agent text. The full
+  blocker stays readable in the inspector.
+
+Verification, 2026-11-18:
+
+- New pinned tests `TestWorkspaceTaskViewOpensOnSortingHead` and
+  `TestWorkspaceAttentionFlattensMultiLineBlocker` in
+  `internal/ui/workspace_test.go`; both fail on the pre-fix code.
+- `go test ./internal/ui/... ./internal/contractschema/... -count=1`:
+  pass. `go test ./internal/looper -run 'Test(Dashboard|Attachment|
+  Observer|Compact|Status|Inspect)' -count=1`: pass. `go vet`, `gofmt`
+  clean.
+- Live: `scripts/record-demo.py` copied under the task resource prefix
+  with a 12-line blocker and a private tmux socket re-ran the recorded
+  flow against the rebuilt binary. The attention row renders one line
+  with a single blank line before Scheduling, and after `u` and `k` the
+  cursor and detail pane sit on T004, the blocked task that sorts first.
+
+## Quota pause restored across restarts, 2026-11-18 (T146)
+
+Closes the T125 restart gap: a controller stopped inside a quota window
+re-arms the pause at startup, so the held task's recorded promise holds
+across the restart instead of stranding the work for an operator requeue.
+Core code: `internal/looper/quota.go` (`restoreQuotaPauses`), startup hook
+in `internal/looper/engine.go` (`initialize`).
+
+- The defect: `resumeQuotaTasks` ran only from `expireQuotaPauses`, which
+  reads the session-memory `quotaPauses` map initialized empty in
+  `NewEngine`. A restart mid-window left the held task blocked, and a
+  blocked task is never dispatched, so no provider failure could re-arm
+  the pause — the controller idled at "Waiting for changed requirements"
+  past the recorded retry until `looper requeue` rescued it. The T125
+  note above carries the erratum.
+- The fix reads the record the held task already persists: the typed
+  `quota_window` block reason, the blocked attempt's agent profile, and
+  the `unblock_when` promise `holdQuota` wrote
+  (`quotaRetryFromUnblock` parses the RFC3339 stamp after the fixed cue,
+  period trimmed). One pass groups holds by profile and arms
+  `providerPause` entries before the loop starts, so the ordinary
+  boundary machinery — expiry, dispatch gate, waiting line, budget —
+  behaves exactly as in the session that recorded the pause.
+- A window whose recorded time already passed resumes at the restart's
+  first boundary (the evidence scenario: stopped 11:49:28, restarted
+  11:50:43 after reopen). A promise without a time ("when the provider
+  window reopens") requeues at startup, because the saved state cannot
+  say whether the window is closed; a still-closed window re-arms from
+  the provider's next failure, the discovery dispatched work always had.
+  The restore keeps `pauseOnQuota`'s 24 h daily cap and starts a fresh
+  pause-budget cycle (`consecutive: 1`): the previous session's window
+  count lived only in its memory.
+- `quotaHoldsWork` now also holds the idle boundary while any profile's
+  pause has blocked quota work, not only ready work, and
+  `quotaWaitMessage` names every paused profile that holds work — so the
+  controller reports the quota line with its retry clock instead of the
+  generic changed-requirements line while quota-held work remains.
+- Journal: one `quota-restore` event per affected profile, payload keys
+  `profile`, `retry_at`, `windows` (1), with `requeued: true` marking the
+  no-recorded-time variant. `resumeQuotaTasks` was split into
+  `requeueQuotaHeld` (the transition) plus its events; the transition
+  itself is unchanged. The restore is idempotent behind `quotaRestored`,
+  because `Run` initializes again behind harnesses that pre-install a
+  plan.
+- Scope: reviewer-side pauses still self-heal on restart, because a
+  pending review is dispatched and its failure re-arms the pause; only
+  blocked tasks needed the record. Operator and deferral control tags
+  stay authoritative — a restored window never reopens those holds.
+
+Tests: `internal/looper/quota_restart_test.go` — the mid-window restart
+acceptance route (restore keeps the recorded `retry_at`, quota wait line
+while held, no generic waiting line before the resume, one resumed
+attempt), the restart-after-reopen route, the no-recorded-time requeue,
+the promise parse table, and the boundary-gate unit case.
+
+Validation, 2026-11-18:
+
+- Live, built CLI on a private fixture (stub worker failing once with a
+  75 s window): session 1 held T012 blocked with reason `quota_window`
+  and promise "retries automatically at 13:29:01+01:00"; stopped
+  13:27:58 mid-window; session 2 restarted 13:28:08, journaled
+  `quota-restore` with the same retry, waited on the quota line, and at
+  13:29:01 requeued and dispatched T012 automatically — done at 13:32:14
+  with no operator requeue; "Waiting for changed requirements" appeared
+  only after the work completed. (The stub's mark file briefly pointed
+  at a moved directory, so the worker re-failed twice more after the
+  resume; the journal shows those windows re-arming and expiring
+  in-session on top of the restored pause, which is the designed
+  budget-bounded behavior.)
+- `go test ./internal/looper -run 'Quota' -count=1`: pass.
+- `go vet ./...`, `gofmt` clean on changed files.
+- `go test ./... -count=1 -timeout 40m`: pass (exit 0); the looper
+  package was rerun alone on the final tree after a behavior-preserving
+  cleanup inside `restoreQuotaPauses`: pass (663 s, exit 0).
+
+Docs updated: `docs/observability.md` (restart paragraph, monitor row),
+`docs/AGENT-CONTRACT-MIGRATION.md` (change-log row).

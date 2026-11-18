@@ -159,6 +159,81 @@ func TestWorkspaceNavigationAcrossTaskStates(t *testing.T) {
 	}
 }
 
+// A run's first snapshot often holds no blocked task yet. The implicit
+// selection must follow the head as ordering changes, so the task view opens
+// on the blocked task that sorts first, not on a stale head pinned when the
+// first tasks appeared (figure re-recording, 2026-11-15).
+func TestWorkspaceTaskViewOpensOnSortingHead(t *testing.T) {
+	now := time.Now().UTC()
+	tasks := []TaskView{
+		{ID: "T001", Title: "Set up the module layout", Status: "todo"},
+		{ID: "T002", Title: "Implement the durable queue", Status: "todo"},
+	}
+	m := model{width: 120, height: 26, snap: &ViewSnapshot{Project: "jobq", Session: "session", Now: now.Format(time.RFC3339), Started: now.Format(time.RFC3339), Tasks: tasks}}
+	m.initWorkspace()
+	m.syncTasks()
+	update := *m.snap
+	update.Tasks = append(append([]TaskView(nil), tasks...),
+		TaskView{ID: "T004", Title: "Run the retry tests against Redis", Status: "blocked", Blockers: []string{"Redis is not installed"}})
+	next, _ := m.Update(update)
+	m = next.(model)
+	if m.workspace.selectedTask != "" {
+		t.Fatalf("reordering pinned an implicit selection to %s", m.workspace.selectedTask)
+	}
+	m, _ = press(m, "u")
+	if m.mode != ModeTasks {
+		t.Fatal("u did not open the task view")
+	}
+	if row := m.workspace.taskTable.SelectedRow(); len(row) == 0 || row[0] != "T004" {
+		t.Fatalf("task view opened on %v, not the blocked task that sorts first", row)
+	}
+	m, _ = press(m, "k")
+	if row := m.workspace.taskTable.SelectedRow(); len(row) == 0 || row[0] != "T004" {
+		t.Fatalf("moving up from the head left the selection: %v", row)
+	}
+	m, _ = press(m, "j")
+	if m.workspace.selectedTask != "T001" {
+		t.Fatalf("navigation did not pin the selection: %q", m.workspace.selectedTask)
+	}
+}
+
+// One attention row must stay one display line. A blocker longer than the
+// terminal width once kept its newlines past the width clamp, leaving a
+// column of blank lines under the first line (figure re-recording, 2026-11-15).
+func TestWorkspaceAttentionFlattensMultiLineBlocker(t *testing.T) {
+	m := workspaceFixture()
+	m.width, m.height = 120, 26
+	blocker := "Redis is not installed on this machine.\n" +
+		strings.Repeat("Install and start the server before the retry tests can run.\n", 11)
+	m.snap.Tasks[3].Blockers = []string{blocker}
+	m.syncTasks()
+	for _, row := range m.overviewRows() {
+		if row.taskID == "T004" && strings.Contains(ansi.Strip(row.text), "\n") {
+			t.Fatalf("attention row spans display lines:\n%s", row.text)
+		}
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "T004 Redis is not installed on this machine. Install and start the server") {
+		t.Fatalf("the attention row does not carry the flattened blocker:\n%s", view)
+	}
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "T004 Redis is not installed") {
+			continue
+		}
+		if i+2 < len(lines) && lines[i+1] == "" && lines[i+2] == "" {
+			t.Fatalf("blank lines follow the attention row:\n%s", view)
+		}
+		break
+	}
+	// The full text stays readable in the inspector, reflowed to its width.
+	m.workspace.selectedTask = "T004"
+	detail := m.inspectorContent(100)
+	if !strings.Contains(detail, "Redis is not installed on this machine.") || !strings.Contains(detail, "retry tests can run") {
+		t.Fatalf("inspector lost the multi-line blocker:\n%s", detail)
+	}
+}
+
 func TestWorkspaceSelectionSurvivesCompletionAndReordering(t *testing.T) {
 	m := workspaceFixture()
 	m.mode = ModeTasks

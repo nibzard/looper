@@ -151,15 +151,11 @@ func (m model) filteredTasks() []TaskView {
 	return tasks
 }
 
-func (m *model) preserveTaskSelection() {
-	if !m.hasWorkspace() || m.workspace.selectedTask != "" {
-		return
-	}
-	if t := m.workspaceTask(); t != nil {
-		m.workspace.selectedTask = t.ID
-	}
-}
-
+// An unset selectedTask is an implicit selection: both the overview marker
+// and the task table follow the head of the ordered list, so a task that
+// newly sorts first (a blocked task, for example) takes the cursor when the
+// task view opens. Navigation and inspection pin the selection, and a pinned
+// selection survives reordering until its task disappears.
 func (m model) workspaceTask() *TaskView {
 	if m.snap == nil {
 		return nil
@@ -202,15 +198,20 @@ func (m *model) syncTasks() {
 	m.initWorkspace()
 	tasks := m.filteredTasks()
 	index := -1
-	for i, t := range tasks {
-		if t.ID == m.workspace.selectedTask {
-			index = i
-			break
+	if m.workspace.selectedTask != "" {
+		for i, t := range tasks {
+			if t.ID == m.workspace.selectedTask {
+				index = i
+				break
+			}
 		}
-	}
-	if index < 0 && len(tasks) > 0 {
-		index = 0
-		m.workspace.selectedTask = tasks[0].ID
+		// A pinned selection whose task vanished falls back to the head. An
+		// unset selection stays implicit and keeps following the head instead
+		// of freezing on whatever sorted first when it materialized.
+		if index < 0 && len(tasks) > 0 {
+			index = 0
+			m.workspace.selectedTask = tasks[0].ID
+		}
 	}
 	listWidth := m.width
 	if m.width >= 110 {
@@ -235,6 +236,8 @@ func (m *model) syncTasks() {
 	m.workspace.taskTable.SetRows(rows)
 	if index >= 0 {
 		m.workspace.taskTable.SetCursor(index)
+	} else if len(tasks) > 0 {
+		m.workspace.taskTable.SetCursor(0)
 	}
 	m.workspace.taskTable.SetHeight(max(1, m.height-lipgloss.Height(m.header())-lipgloss.Height(m.workspaceFooter())-5))
 }
@@ -304,6 +307,9 @@ func (m model) workspaceKeys(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	case "enter":
 		if m.mode == ModeBoard || m.mode == ModeTasks {
 			if t := m.workspaceTask(); t != nil {
+				// Inspecting is an explicit choice: pin the row so returning
+				// from the inspector lands on it, not on the reordered head.
+				m.workspace.selectedTask = t.ID
 				m.workspace.backMode = m.mode
 				m.mode = ModeInspect
 				m.workspace.inspector.GotoTop()
@@ -527,6 +533,11 @@ func (m model) overviewRows() []overviewRow {
 		selected = t.ID
 	}
 	taskRow := func(t TaskView, text string) {
+		// Blockers arrive as free agent text and can span lines. One overview
+		// row must stay one display line: past the width clamp the terminal
+		// library drops printable text but keeps every newline, which once
+		// left a column of blank lines under the first line of a blocker.
+		text = strings.Join(strings.Fields(plainText(text)), " ")
 		prefix := "  "
 		style := textStyle
 		if t.Status == "blocked" {
