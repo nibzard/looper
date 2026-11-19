@@ -70,7 +70,7 @@ func TestPricingProviderDefaultsAndFallbacks(t *testing.T) {
 		{"glm-5p1", "fireworks", 5.8},
 		{"glm-4-32b", "openrouter", .48},
 		{"glm-4-32b:free", "openrouter", 0},
-		{"glm-5.3[1m]", "alt", 5.8},
+		{"glm-5.3[1m]", "zai", 5.8},
 		{"claude-sonnet-4-6", "anthropic", 18},
 		{"gpt-5.3-codex", "openai", 15.75},
 	} {
@@ -98,7 +98,7 @@ func TestPricingExplicitProviderAndUnknownModels(t *testing.T) {
 		{Model: "unknown-model", Input: 100},
 		{Model: "glm-unknown-model", Input: 100},
 		{Model: "gpt-unknown-model", Input: 100},
-		{Model: "glm-4-air", Provider: "alt", Input: 100},
+		{Model: "glm-4-air", Provider: "zai", Input: 100},
 		{Model: "codex-mini", Provider: "unknown-provider", Input: 100},
 		{Model: "glm-4-32b:free", Input: 100, CacheRead: 200},
 	} {

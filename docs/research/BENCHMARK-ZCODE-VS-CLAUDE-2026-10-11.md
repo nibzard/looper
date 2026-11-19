@@ -18,7 +18,7 @@ tokens, and do they finish the loop?
   (`count_words`, `top_words` with punctuation stripping and alphabetical
   tie-breaks) plus a unittest suite. Acceptance: `python3 -m unittest`
   exits 0.
-- zcode arm: the CLI built from `alt-org/ZCode` source, run through a
+- zcode arm: the CLI built from `zai-org/ZCode` source, run through a
   tsx wrapper with an API-key login (`GLM-5.3` coding plan). The wrapper
   maps the per-attempt `TMPDIR` to a short path; the zcode stack binds
   Unix sockets under `TMPDIR` and exceeds the socket path limit

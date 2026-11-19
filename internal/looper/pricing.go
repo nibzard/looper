@@ -157,7 +157,7 @@ func resolvePrice(model, provider string) (*priceModel, string) {
 	preferred := ""
 	switch {
 	case strings.HasPrefix(strings.ToLower(model), "glm-"):
-		preferred = "alt"
+		preferred = "zai"
 	case strings.HasPrefix(model, "claude-"):
 		preferred = "anthropic"
 	case strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "codex-mini") || regexp.MustCompile(`^o[134]`).MatchString(model):
