@@ -528,12 +528,14 @@ of the tracked tree, the pushed refs, and the published tags:
 - Published tags carry the old internal `NOTES.md`: 42 private-name
   lines at `v0.8.3`, 27 at `v0.10.0`. Scrubbing them needs a history
   rewrite or tag deletion; decide before promoting the repository.
+  Resolved 2026-11-19 by the history rewrite below.
 - Two tracked symlinks are broken: `.claude/skills/release-runbook` and
   `.codex/skills/release-runbook` point to a missing
   `skills/release-runbook`.
 - Commit metadata includes `reviewer <reviewer@example.com>` (21
   commits) and one commit with a personal Gmail address; fixing needs
-  the same history rewrite.
+  the same history rewrite. Resolved 2026-11-19: every commit author
+  and committer now reads `nibzard <nibzard@users.noreply.github.com>`.
 - Root and `docs/` hold internal working documents next to user docs:
   `EXPERIMENT-PLAN.md`, `UNATTENDED-RECOVERY-PLAN.md`,
   `AUTONOMOUS-AGENTS.md`, `PRODUCT.md`, and in `docs/` the seven
@@ -547,6 +549,40 @@ Proposed order: pick the license; scrub `main` (private names, notes
 refs, broken symlinks, internal-doc moves); then decide on the history
 rewrite for tags and commit metadata. Fixture paths are byte-pinned, so
 neutralizing them also regenerates fixtures and their tests.
+
+## History scrub, 2026-11-19
+
+The owner chose the full history rewrite (option 3 of the recorded
+decision). `git filter-repo` ran twice over all 459 commits with a
+literal replacement table and forced identities; the pre-scrub state is
+in `/home/agent/looper-pre-scrub-2026-11-19.bundle` (all refs, tip
+`07fa9be`).
+
+- Project names map to NATO codenames: Alpha, Bravo, Charlie, Delta
+  (both spellings), Echo, Foxtrot, Golf, Hotel (phrase-level rules keep
+  plain-English "margin"), India. Case variants are covered.
+- `claude-zai`/`zai` became `claude-alt`/`alt`, `Z.ai` became
+  `alt-provider` (capitalized `Z.AI` in the pricing README survived and
+  stays as public provider data).
+- `/home/agent` became `/home/user` across content, including the
+  byte-pinned fixtures; both fixture and generator sides changed
+  consistently.
+- Every commit author and committer now reads
+  `nibzard <nibzard@users.noreply.github.com>`.
+- `internal/looper/prices/data.json` was restored to its pre-scrub
+  content after the rewrite: its `zai-org/glm-*` model slugs are public
+  catalog data, and renaming them would break price matching. The
+  catalog carries no private strings.
+- Local `refs/notes/*` still hold pre-rewrite notes commits (old
+  identities in notes commit metadata). The remote copies were deleted;
+  do not push `refs/notes/*` again before they are rebuilt.
+- GitHub consequences: every tag points at a new object, so the
+  published release archives for `v0.10.0` and `v0.11.0` no longer
+  match their tags, and the Homebrew formula checksum for `v0.10.0`
+  is stale. Re-cut or drop those releases; the next release records
+  fresh checksums.
+- Still open from the cleanup review: the license (T129, MIT decided),
+  moving internal working documents out of the tree, and CI.
 
 
 ## Delivery audit, 2026-11-17
