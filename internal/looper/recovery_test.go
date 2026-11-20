@@ -259,7 +259,7 @@ printf '{"structured_output":%s}\n' "$result"
 		}
 	}
 	t.Setenv("LOOPER_RECOVERY_PROPOSAL", proposalJSON(t, p))
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := runCtx(t, 60*time.Second)
 	defer cancel()
 	if interrupted {
 		if ok, err := e.recoverRun(ctx); err != nil || !ok {

@@ -127,6 +127,65 @@ func TestConfigShowReportsSavedEffectiveAndController(t *testing.T) {
 	assertConfigSchema(t, &out)
 }
 
+// configShowText runs the plain-text show path and returns its lines.
+func configShowText(t *testing.T, c Config) []string {
+	t.Helper()
+	var out, stderr bytes.Buffer
+	if code := runConfig(c, os.Stdin, &out, &stderr); code != 0 {
+		t.Fatalf("show failed: %d %s", code, stderr.String())
+	}
+	return strings.Split(out.String(), "\n")
+}
+
+// hasLine reports whether one exact line appears, so a sentence glued to the
+// preceding settings line cannot match.
+func hasLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestConfigShowTextKeepsTheSettingsLineSeparate(t *testing.T) {
+	c := repoConfig(t, "config", "--show")
+	lines := configShowText(t, c)
+	settings := ""
+	for _, line := range lines {
+		if strings.HasPrefix(line, "agent ") {
+			settings = line
+		}
+	}
+	if settings == "" {
+		t.Fatalf("no effective-settings line in %q", lines)
+	}
+	if !hasLine(lines, "Effective settings:") || !hasLine(lines, "No saved profile exists.") {
+		t.Fatalf("labels must stay whole lines: %q", lines)
+	}
+	if !hasLine(lines, "No controller owns this repository; saved changes apply at the next start.") {
+		t.Fatalf("the controller sentence ran into another line: %q", lines)
+	}
+
+	writeProfileFile(t, c.ProfilePath, `{"version":1,"agent":"claude","jobs":3}`)
+	// Re-parse so the saved profile reaches the effective settings; a Config
+	// parsed before the profile exists keeps its parse-time sources.
+	saved, err := Parse([]string{"config", "--show"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines = configShowText(t, saved)
+	if hasLine(lines, "No saved profile exists.") {
+		t.Fatalf("saved profile must drop the no-profile sentence: %q", lines)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "agent claude [profile]") {
+		t.Fatalf("the saved profile must reach the effective settings: %q", lines)
+	}
+	if !hasLine(lines, "No controller owns this repository; saved changes apply at the next start.") {
+		t.Fatalf("the controller sentence ran into another line: %q", lines)
+	}
+}
+
 func TestConfigShowCreatesNothing(t *testing.T) {
 	c := repoConfig(t, "config")
 	cc := headlessConfig(t, "config", "--show")
@@ -326,6 +385,74 @@ func TestConfigJournalResolvesAfterCrash(t *testing.T) {
 	}
 	if text := configErrText(t, &out); !strings.Contains(text, "changed outside") {
 		t.Fatalf("unexpected error %q", text)
+	}
+}
+
+// An unset of a numeric project setting must behave like --unset jobs: the
+// command succeeds, and review_every leaves the saved profile instead of
+// failing numeric validation on the empty unset value.
+func TestConfigUnsetNumericProjectSettings(t *testing.T) {
+	c := repoConfig(t, "config")
+	writeProfileFile(t, c.ProfilePath, `{"version":1,"agent":"claude","jobs":3,"review_every":5}`)
+
+	// The preview reports the removal and writes nothing.
+	cc := headlessConfig(t, "config", "--unset", "review_every", "--preview")
+	var out, stderr bytes.Buffer
+	if code := runConfig(cc, os.Stdin, &out, &stderr); code != 0 {
+		t.Fatalf("preview unset review_every failed: %d %s %s", code, stderr.String(), out.String())
+	}
+	doc := decodeConfigDoc(t, &out)
+	if doc["kind"] != configPreviewKind {
+		t.Fatalf("kind: %v", doc["kind"])
+	}
+	changes := doc["changes"].([]any)
+	if len(changes) != 1 {
+		t.Fatalf("changes: %#v", changes)
+	}
+	change := changes[0].(map[string]any)
+	if change["field"] != "review_every" || change["from"] != float64(5) || change["to"] != nil {
+		t.Fatalf("review_every removal: %#v", change)
+	}
+	assertConfigSchema(t, &out)
+	if _, err := os.Stat(filepath.Join(configRuntimeDir(c), configJournalName)); !os.IsNotExist(err) {
+		t.Fatal("preview must not write the settings journal")
+	}
+	saved, err := LoadProfile(c.ProfilePath)
+	if err != nil || saved.ReviewEvery == nil || *saved.ReviewEvery != 5 {
+		t.Fatalf("preview must not change the profile: %+v %v", saved, err)
+	}
+
+	// The plain unset removes review_every beside a jobs unset.
+	out.Reset()
+	cc = headlessConfig(t, "config", "--unset", "review_every", "--unset", "jobs")
+	if code := runConfig(cc, os.Stdin, &out, &stderr); code != 0 {
+		t.Fatalf("unset failed: %d %s %s", code, stderr.String(), out.String())
+	}
+	doc = decodeConfigDoc(t, &out)
+	if doc["kind"] != configSavedKind {
+		t.Fatalf("kind: %v", doc["kind"])
+	}
+	assertConfigSchema(t, &out)
+	saved, err = LoadProfile(c.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ReviewEvery != nil {
+		t.Fatalf("unset review_every must remove the saved value: %+v", saved)
+	}
+	if saved.Jobs != 0 {
+		t.Fatalf("unset jobs must clear jobs beside review_every: %+v", saved)
+	}
+	raw, err := os.ReadFile(c.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "review_every") {
+		t.Fatalf("the saved profile must drop the review_every key: %s", raw)
+	}
+	j, err := loadConfigJournal(filepath.Join(configRuntimeDir(c), configJournalName))
+	if err != nil || len(j.Entries) != 1 || j.Entries[0].State != "done" {
+		t.Fatalf("journal file: %+v %v", j, err)
 	}
 }
 
@@ -636,6 +763,145 @@ func TestConfigLiveSubmitAppliesThroughController(t *testing.T) {
 	}
 	// A stopped-save journal never appears on the live path.
 	if _, err := os.Stat(filepath.Join(dir, configJournalName)); !os.IsNotExist(err) {
+		t.Fatal("the live path must not write the stopped-save journal")
+	}
+}
+
+// The unset spellings stay distinct: review_every renders as the null
+// removal the protocol applies, jobs keeps its stored auto-mode zero, and a
+// numeric set never parses null as a value.
+func TestProjectPatchFieldsRemovalSpelling(t *testing.T) {
+	patch, err := parseConfigPatch(configScopeProject, nil, []string{"review_every", "jobs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := projectPatchFields(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["review_every"]) != "null" {
+		t.Fatalf("unset review_every must render as null: %s", fields["review_every"])
+	}
+	if string(fields["jobs"]) != "0" {
+		t.Fatalf("unset jobs must keep stored auto mode: %s", fields["jobs"])
+	}
+	patch, err = parseConfigPatch(configScopeProject, []string{"review_every=3"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err = projectPatchFields(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["review_every"]) != "3" {
+		t.Fatalf("a numeric set must render as a number: %s", fields["review_every"])
+	}
+	// The removal has exactly one spelling; --set review_every=null stays a
+	// refused value, not a second path to the removal.
+	patch, err = parseConfigPatch(configScopeProject, []string{"review_every=null"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = projectPatchFields(patch); err == nil || !strings.Contains(err.Error(), "nonnegative integer") {
+		t.Fatalf("--set review_every=null must fail numeric validation: %v", err)
+	}
+}
+
+// The live path now expresses the same per-field removal the stopped path
+// saves: --unset review_every under a running controller submits
+// review_every null, the controller drops the saved key instead of storing
+// 0, and the acknowledgement names the next-run boundary (T154).
+func TestConfigLiveUnsetReviewEveryRemovesSavedCadence(t *testing.T) {
+	c := repoConfig(t, "config")
+	dir := configRuntimeDir(c)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeProfileFile(t, c.ProfilePath, `{"version":1,"agent":"claude","review_every":5}`)
+	// A live controller holds the lock and publishes metadata with this
+	// process, which keeps the session verifiable.
+	common := filepath.Join(c.Root, ".git")
+	lock, err := os.OpenFile(filepath.Join(common, "looper.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	info := &ControllerInfo{Version: 1, Session: "run-livecfg-unset", PID: os.Getpid(), Mode: ControllerModeForeground}
+	if err = writeJSON(controllerPath(dir), info); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStore(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	e := &Engine{
+		Dir: dir, Store: store, Config: c, Output: bytes.NewBuffer(nil),
+		controller: info,
+		acks:       map[string]SettingsAck{},
+	}
+
+	cc := headlessConfig(t, "config", "--unset", "review_every")
+	var out, stderr bytes.Buffer
+	if code := runConfig(cc, os.Stdin, &out, &stderr); code != 0 {
+		t.Fatalf("live unset failed: %d %s %s", code, stderr.String(), out.String())
+	}
+	// The published envelope carries the removal, not a zero assignment.
+	names := queuedJSONNames(t, dir)
+	if len(names) != 1 {
+		t.Fatalf("one settings request must sit in the queue: %v", names)
+	}
+	envelopeRaw, err := os.ReadFile(filepath.Join(requestDir(dir), names[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Fields map[string]json.RawMessage `json:"fields"`
+	}
+	if err = json.Unmarshal(envelopeRaw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if string(envelope.Fields["review_every"]) != "null" {
+		t.Fatalf("the live envelope must carry the null removal: %s", envelope.Fields["review_every"])
+	}
+
+	e.processSettingsRequests()
+	if e.err != nil {
+		t.Fatalf("controller failed on the removal: %v", e.err)
+	}
+	saved, err := LoadProfile(c.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ReviewEvery != nil {
+		t.Fatalf("the live removal must drop the saved key: %+v", saved)
+	}
+	rawProfile, err := os.ReadFile(c.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawProfile), "review_every") {
+		t.Fatalf("the saved profile must omit the review_every key: %s", rawProfile)
+	}
+	ack, ok := readRequestAck(dir, strings.TrimSuffix(names[0], ".json"))
+	if !ok || ack.Status != AckApplied {
+		t.Fatalf("the removal must apply: %+v %v", ack, ok)
+	}
+	if ack.Outcomes["review_every"] != "saved; applies on the next controller run" {
+		t.Fatalf("outcome %q", ack.Outcomes["review_every"])
+	}
+	// The effective cadence keeps its snapshot; the default applies on the
+	// next controller run, never mid-run.
+	if e.Config.ReviewEvery != 5 {
+		t.Fatalf("effective review cadence changed mid-run: %+v", e.Config)
+	}
+	// The stopped-save journal never appears on the live path.
+	if _, err = os.Stat(filepath.Join(dir, configJournalName)); !os.IsNotExist(err) {
 		t.Fatal("the live path must not write the stopped-save journal")
 	}
 }

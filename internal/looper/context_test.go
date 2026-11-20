@@ -39,7 +39,7 @@ func TestContextKeepsLargeInputsOutOfPrompt(t *testing.T) {
 	if len(prompt) > 4<<10 || !utf8.ValidString(prompt) || strings.Contains(prompt, "acceptance detail") {
 		t.Fatalf("planner prompt: %d bytes", len(prompt))
 	}
-	worker := workerPrompt(b, task, c)
+	worker := workerPrompt(b, task, c, "base-1")
 	if strings.Contains(worker, "large task detail") || strings.Contains(worker, "failure evidence") || !strings.Contains(worker, c.Task) || !strings.Contains(worker, c.Feedback) {
 		t.Fatal("worker context is embedded or missing")
 	}
@@ -72,7 +72,7 @@ func TestContextKeepsLargeInputsOutOfPrompt(t *testing.T) {
 
 func TestSmallTaskKeepsAcceptanceCriteriaInline(t *testing.T) {
 	task := Task{ID: "T1", Title: "Add output", Status: "todo", Details: "Output must contain an exact newline."}
-	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json", Task: "task.json", Requirements: "requirements.md"})
+	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json", Task: "task.json", Requirements: "requirements.md"}, "base-1")
 	if !strings.Contains(prompt, task.Details) || !strings.Contains(prompt, "requirements.md") {
 		t.Fatal("focused worker inputs missing")
 	}
@@ -95,7 +95,7 @@ func TestPlanPromptExplainsCheckWorktreeContract(t *testing.T) {
 
 func TestWorkerPromptExplainsCheckWorktreeContract(t *testing.T) {
 	task := Task{ID: "T1", Title: "one", Status: "todo"}
-	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json"})
+	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json"}, "base-1")
 	for _, phrase := range []string{
 		"preserve the project files they receive",
 		"uncommitted candidate changes in a detached worktree",
@@ -109,7 +109,7 @@ func TestWorkerPromptExplainsCheckWorktreeContract(t *testing.T) {
 
 func TestWorkerPromptKeepsShortGoalInline(t *testing.T) {
 	task := Task{ID: "T1", Title: "one", Status: "todo"}
-	prompt := workerPrompt(Backlog{Goal: "ship the game with score 12345"}, task, agentContext{Backlog: "backlog.json"})
+	prompt := workerPrompt(Backlog{Goal: "ship the game with score 12345"}, task, agentContext{Backlog: "backlog.json"}, "base-1")
 	if !strings.Contains(prompt, "Project goal: ship the game with score 12345") {
 		t.Fatalf("short goal not inline: %q", prompt)
 	}
@@ -119,7 +119,7 @@ func TestWorkerPromptRefersToCompleteGoalWhenLong(t *testing.T) {
 	task := Task{ID: "T1", Title: "one", Status: "todo"}
 	// The 512-byte budget cuts this goal inside the score number.
 	goal := strings.Repeat("Keep every mode playable. ", 18) + "The final score target is 987654321098765432109876543210. Extended play rules follow."
-	prompt := workerPrompt(Backlog{Goal: goal}, task, agentContext{Backlog: "backlog.json"})
+	prompt := workerPrompt(Backlog{Goal: goal}, task, agentContext{Backlog: "backlog.json"}, "base-1")
 	if !strings.Contains(prompt, "Read the accepted backlog snapshot at backlog.json") || !strings.Contains(prompt, "extract its goal field") {
 		t.Fatalf("long goal lacks the complete-goal reference:\n%s", prompt)
 	}
@@ -133,7 +133,7 @@ func TestWorkerPromptRefersToCompleteGoalWhenLong(t *testing.T) {
 
 func TestRepairPromptAsksForPriorResults(t *testing.T) {
 	task := Task{ID: "T1", Title: "one", Status: "todo"}
-	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json", Feedback: "feedback.md"})
+	prompt := workerPrompt(Backlog{Goal: "ship"}, task, agentContext{Backlog: "backlog.json", Feedback: "feedback.md"}, "base-1")
 	if !strings.Contains(prompt, "Read that feedback and the earlier attempt records it names for this failure") {
 		t.Fatalf("repair prompt lacks the prior-results sentence:\n%s", prompt)
 	}
@@ -153,7 +153,7 @@ func TestMissingAppliedContextPreventsWorkAndCompletion(t *testing.T) {
 				_, err = e.start(context.Background(), e.State.Backlog.Tasks[0], make(chan workerResult, 1))
 			case "review":
 				e.State.Finished = false
-				err = e.review(context.Background(), true)
+				err = e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull})
 			}
 			if err == nil || !strings.Contains(err.Error(), "missing-import") {
 				t.Fatalf("missing import accepted: %v", err)

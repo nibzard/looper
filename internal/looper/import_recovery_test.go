@@ -168,7 +168,7 @@ func TestPlanImportRecoversAfterControllerKill(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			ctx, cancel := runCtx(t, 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPlanImportCrashHelper$")
 			cmd.Env = withEnvParent(os.Environ(), os.Getpid())
@@ -308,7 +308,7 @@ func TestPlanImportCrashHelperEndsWithItsDeadSuite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := runCtx(t, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPlanImportCrashParentShim$")
 	cmd.Env = withEnvParent(os.Environ(), os.Getpid())

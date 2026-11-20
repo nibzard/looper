@@ -599,6 +599,40 @@ func (e *Engine) seedStartupState() error {
 	return e.save()
 }
 
+// reconcileSchemaControlFile keeps the schema control file beside the task
+// file honest. A declared reference schema is tracked content the controller
+// respects (T117): whenever the control file's bytes differ from the
+// reference, the controller refreshes them, so the run-root copy cannot drift
+// from the shipped content while the declaration is in effect. Without a
+// declaration the earlier rule stands: the built-in default is written only
+// when the file is absent, and an existing copy is never touched.
+func (e *Engine) reconcileSchemaControlFile() error {
+	path := e.Config.SchemaPath()
+	if e.Repo == nil || e.Repo.SchemaReference == "" {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return atomicWrite(path, []byte(backlogSchema), 0644)
+		}
+		return nil
+	}
+	reference, err := os.ReadFile(e.Repo.SchemaReference)
+	if err != nil {
+		return fmt.Errorf("the declared reference schema %s is unreadable: %w", e.Repo.SchemaReference, err)
+	}
+	current, readErr := os.ReadFile(path)
+	if readErr == nil && string(current) == string(reference) {
+		return nil
+	}
+	if err = atomicWrite(path, reference, 0644); err != nil {
+		return err
+	}
+	if readErr == nil {
+		e.event("schema-refreshed", "the schema control file differed from the declared reference schema; refreshed it from "+e.Repo.SchemaReference)
+	} else {
+		e.event("schema-refreshed", "the schema control file was absent; seeded it from the declared reference schema "+e.Repo.SchemaReference)
+	}
+	return nil
+}
+
 func (e *Engine) initializeState(ctx context.Context) error {
 	// Saved identity is checked before anything can write: bootstrapping a
 	// different task-file selection would run an agent and create a second
@@ -621,6 +655,12 @@ func (e *Engine) initializeState(ctx context.Context) error {
 		}
 		return fmt.Errorf("saved state belongs to another project or version")
 	}
+	// The schema control file is reconciled before bootstrap or a resume can
+	// assemble anything: a declared reference is content every seed respects,
+	// so the run root's copy is right before the first tree copies it.
+	if err = e.reconcileSchemaControlFile(); err != nil {
+		return err
+	}
 	var bootstrapPlans []capturedPlan
 	if _, statErr := os.Stat(e.Config.Todo); errors.Is(statErr, os.ErrNotExist) {
 		if s != nil {
@@ -640,11 +680,6 @@ func (e *Engine) initializeState(ctx context.Context) error {
 		// A closed reviewer quota window waits out its window instead of
 		// ending the start (T141).
 		if err = e.bootstrapAndWait(ctx, bootstrapPlans, importID); err != nil {
-			return err
-		}
-	}
-	if _, err = os.Stat(e.Config.SchemaPath()); errors.Is(err, os.ErrNotExist) {
-		if err = atomicWrite(e.Config.SchemaPath(), []byte(backlogSchema), 0644); err != nil {
 			return err
 		}
 	}
@@ -938,11 +973,11 @@ func (e *Engine) importRetainedEdit(observed string) error {
 	return e.err
 }
 
-func (e *Engine) bootstrap(ctx context.Context, plans []capturedPlan) error {
-	return e.bootstrapResponse(ctx, plans, "")
+func (e *Engine) bootstrap(ctx context.Context, plans []capturedPlan, importID string) error {
+	return e.bootstrapResponse(ctx, plans, "", importID)
 }
 
-func (e *Engine) bootstrapResponse(ctx context.Context, plans []capturedPlan, correction string) error {
+func (e *Engine) bootstrapResponse(ctx context.Context, plans []capturedPlan, correction, importID string) error {
 	head, _ := e.Repo.Head()
 	tree, err := e.Repo.Snapshot(e.Config.Root)
 	if err != nil {
@@ -983,6 +1018,16 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 	if err != nil {
 		return err
 	}
+	// The agent call just ran for minutes over a project that had no task
+	// file, so an operator can have supplied one while it ran (T144):
+	// bootstrap exists to create that file, and the operator's bytes
+	// supersede the completed result exactly as they supersede the retry
+	// during the quota wait (T141). The check runs before validation, so an
+	// invalid result adopts too instead of spending a correction round that
+	// a file superseding the backlog makes pointless.
+	if _, statErr := os.Stat(e.Config.Todo); statErr == nil {
+		return e.adoptSuppliedTaskFile(importID, "during the bootstrap agent call")
+	}
 	if err = c.validate(); err != nil {
 		return err
 	}
@@ -1004,7 +1049,7 @@ Use dependencies. Separate external prerequisites from implementable work. Do no
 				return fmt.Errorf("bootstrap changed code; its result was not applied")
 			}
 			e.event("bootstrap-correction", "Rejected invalid backlog; requesting one corrected backlog: "+validationErr.Error())
-			return e.bootstrapResponse(ctx, plans, validationErr.Error())
+			return e.bootstrapResponse(ctx, plans, validationErr.Error(), importID)
 		}
 		return fmt.Errorf("bootstrap backlog rejected after correction (result: %s): %w", filepath.Join(dir, "result.json"), validationErr)
 	}
@@ -1144,7 +1189,7 @@ func (e *Engine) execute(ctx context.Context, op operation, a Attempt, b Backlog
 		r.Err = err
 		return r
 	}
-	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, c), true)
+	raw, err := op.agent.Run(ctx, a.Agent, a.Worktree, dir, workerPrompt(b, a.Task, c, a.Base), true)
 	var summary Summary
 	if err == nil {
 		if err = json.Unmarshal(raw, &summary); err == nil {
@@ -1450,7 +1495,9 @@ func (e *Engine) applyResult(a *Attempt) error {
 	// The application, including follow-ups, stages until the export
 	// commits it. A failure before that commit reports no success and
 	// leaves no in-memory-only task: recovery replays the retained result.
-	findings := e.beginFindingStage()
+	// The worker stage carries the attempt, so a reconciliation the worker
+	// reports is guarded against the revision that attempt verified (T139).
+	findings := e.beginWorkerStage(a)
 	t.Status = s.Status
 	// History accumulates across attempts; the latest report never erases
 	// earlier evidence, and a hold keeps the files already recorded. A

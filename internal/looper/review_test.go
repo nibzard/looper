@@ -51,7 +51,7 @@ const reviewIncomplete = `{"status":"reviewed","summary":"checked","findings":[]
 
 func TestReviewPublishesLogIdentity(t *testing.T) {
 	e, _ := reviewEngine(t, reviewComplete, nil, doneBacklog())
-	if err := e.review(context.Background(), true); err != nil {
+	if err := e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := e.Store.RecentEvents(-1, 50)
@@ -68,7 +68,7 @@ func TestReviewPublishesLogIdentity(t *testing.T) {
 
 func TestFinalReviewNeedsExplicitCompletion(t *testing.T) {
 	e, _ := reviewEngine(t, reviewIncomplete, nil, doneBacklog())
-	if err := e.review(context.Background(), true); err != nil {
+	if err := e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if e.State.Finished {
@@ -78,7 +78,7 @@ func TestFinalReviewNeedsExplicitCompletion(t *testing.T) {
 
 func TestFinalReviewCompletesFromResponse(t *testing.T) {
 	e, _ := reviewEngine(t, reviewComplete, nil, doneBacklog())
-	if err := e.review(context.Background(), true); err != nil {
+	if err := e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if !e.State.Finished {
@@ -89,7 +89,7 @@ func TestFinalReviewCompletesFromResponse(t *testing.T) {
 func TestHistoricalMarkerCannotCompleteAGoal(t *testing.T) {
 	marker := Task{ID: "T9", Title: "Project done", Priority: 5, Status: "done", Tags: []string{"project-done"}}
 	e, _ := reviewEngine(t, reviewIncomplete, nil, doneBacklog(marker))
-	if err := e.review(context.Background(), true); err != nil {
+	if err := e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if e.State.Finished {
@@ -103,7 +103,7 @@ func TestHistoricalMarkerCannotCompleteAGoal(t *testing.T) {
 func TestBlockedTaskPreventsCompletion(t *testing.T) {
 	blocked := Task{ID: "T2", Title: "two", Priority: 1, Status: "blocked", Blockers: []string{"missing input"}}
 	e, _ := reviewEngine(t, reviewComplete, nil, doneBacklog(blocked))
-	if err := e.review(context.Background(), true); err != nil {
+	if err := e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if e.State.Finished {
@@ -115,7 +115,7 @@ func TestBlockedTaskPreventsCompletion(t *testing.T) {
 func TestOpenFindingPreventsCompletion(t *testing.T) {
 	result := `{"status":"reviewed","summary":"checked","findings":[{"title":"Fix observed behavior","details":"Check added output","evidence":"Observed fixture failure","depends_on":[],"priority":1}],"complete":true}`
 	e, _ := reviewEngine(t, result, nil, doneBacklog())
-	if err := e.review(context.Background(), true); err != nil {
+	if err := e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	if e.State.Finished {
@@ -163,7 +163,7 @@ func TestReviewBacklogEditsAreRejected(t *testing.T) {
 			}
 			e, _ := reviewEngine(t, reviewComplete, edited, doneBacklog())
 			before := clone(e.State.Backlog)
-			err = e.review(context.Background(), true)
+			err = e.review(context.Background(), true, reviewScope{Mode: reviewScopeFull})
 			if err == nil || !strings.Contains(err.Error(), "private backlog") {
 				t.Fatalf("review must be rejected for a private backlog edit: %v", err)
 			}

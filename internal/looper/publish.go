@@ -1019,7 +1019,10 @@ func publishBuildTree(c Config, repo *Repository, ev *publishEvidence, prepared 
 }
 
 // publishCommit creates the project commit with the configured Git identity.
-// It never reuses Repository.Commit, which forces the Looper identity.
+// It stays separate from Repository.Commit because publication commits under
+// the repository index and honoring is guarded, not fallen back from: an
+// incomplete identity refuses the publication instead of taking the
+// deterministic Looper identity.
 func publishCommit(c Config, repo *Repository, tree, parent, message string, ev *publishEvidence) (string, error) {
 	args := []string{"commit-tree", tree, "-p", parent}
 	if ev.signing == "configured" {

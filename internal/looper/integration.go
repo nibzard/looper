@@ -495,7 +495,7 @@ type reviewResult struct {
 	Complete bool      `json:"complete"`
 }
 
-func (e *Engine) review(ctx context.Context, final bool) error {
+func (e *Engine) review(ctx context.Context, final bool, scope reviewScope) error {
 	documents, err := e.appliedContext()
 	if err != nil {
 		return err
@@ -546,6 +546,14 @@ Reconcile recorded state instead of re-reporting it. When a finding confirms tha
 Report gaps as findings only. Do not edit the task file or add tasks yourself; Looper owns task changes and rejects a review that edits the backlog.
 Duplicate findings already tracked in the backlog must not become new tasks.
 The final review must cover the original goal and every applied import, including imports that added no new tasks.`+"\n"+findingInstructions, kind, e.State.Tip, c.Backlog, e.State.Tip)
+	if scope.Mode == reviewScopeFocused {
+		prompt += fmt.Sprintf(`
+This pass is focused. Every path changed since the review at %s is outside the accepted backlog's source_files:
+%s
+Verify only whether these changes affect the project goal, the acceptance of recorded tasks, or their checks.
+Do not re-verify the unchanged coverage and do not restate findings already tracked in the backlog or their reconciliation decisions.
+`, e.State.ReviewedTree, strings.Join(scope.Changed, "\n"))
+	}
 	prompt += c.references()
 	prompt += "Read every document in the applied requirements index before declaring completion. Do not limit review to requirements selected by workers.\n"
 	if len(evidence) > 0 {
@@ -591,6 +599,52 @@ The final review must cover the original goal and every applied import, includin
 	return e.applyReview(result, final, name)
 }
 
+// reviewCycle runs one due review at the scope the recorded coverage permits
+// (T128): the full agent pass, a focused pass over a change outside the
+// reviewed source files, or the local reconciliation that replaces a review
+// whose inputs did not move. Callers keep the review pending until one of
+// these returns, so a cancelled cycle retains it.
+func (e *Engine) reviewCycle(ctx context.Context, final bool) error {
+	scope := e.reviewScope(final)
+	if scope.Mode != reviewScopeSkip {
+		return e.review(ctx, final, scope)
+	}
+	return e.applyReviewSkip(scope, final)
+}
+
+// applyReviewSkip settles a due review without an agent pass. The published
+// content is unchanged, or the change is outside the recorded coverage and
+// the recorded verdict already closed the goal, so the same pass would
+// re-read the same content and re-report findings the reconciliation
+// machinery already recorded. The cycle reconciles recorded findings
+// instead — one stable operator decision per repeated finding — re-affirms
+// the recorded completion, and advances the review record. No milestone
+// check row is written: nothing was verified. The journal note carries the
+// reason and the changed paths instead.
+func (e *Engine) applyReviewSkip(scope reviewScope, final bool) error {
+	findings := e.beginFindingStage()
+	findings.sweepUnchanged()
+	e.State.ReviewedAt = e.State.Integrated
+	e.State.ReviewedTip = e.State.Tip
+	e.State.ReviewPending = false
+	e.State.ReviewedTree = e.State.Published
+	e.State.Finished = final && e.State.ReviewedComplete && !e.openWork()
+	if err := e.export(); err != nil {
+		findings.rollback()
+		return err
+	}
+	findings.emit()
+	changed := scope.Changed
+	if changed == nil {
+		changed = []string{}
+	}
+	e.eventData("review", "Skipped the review pass: "+scope.Reason+". Recorded findings keep their reconciliation.", e.identity().merge(map[string]any{
+		"reviewed_tree": e.State.ReviewedTree,
+		"changed":       changed,
+	}))
+	return nil
+}
+
 // applyReview applies one accepted review report: findings, completion
 // markers, and the milestone record. The backlog and receipt changes stage
 // until the saved state/export protocol commits them. A failed commit rolls
@@ -606,13 +660,10 @@ func (e *Engine) applyReview(result reviewResult, final bool, name string) error
 	e.State.ReviewedTip = e.State.Tip
 	e.State.ReviewPending = false
 	e.State.PlanSignature = ""
-	open := false
-	for _, t := range e.State.Backlog.Tasks {
-		if !t.Marker() && t.Status != "done" {
-			open = true
-		}
-	}
-	e.State.Finished = final && result.Complete && !open
+	e.State.ReviewedTree = e.State.Published
+	e.State.ReviewedComplete = result.Complete
+	e.State.ReviewedImports = appliedImportCount(e.State)
+	e.State.Finished = final && result.Complete && !e.openWork()
 	if err := e.export(); err != nil {
 		findings.rollback()
 		return err

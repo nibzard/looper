@@ -103,6 +103,14 @@ event appears every 30 seconds while the agent runs. It reports output size and
 the last output timestamp. Log silence alone does not establish a stalled review.
 The heartbeat does not change review tools, completion rules, or timeouts.
 
+A due review that needs no agent — the published content is unchanged since
+the recorded review, or the change is outside the reviewed source files and
+the recorded verdict closed the goal — journals one `review` event whose
+message starts with `Skipped the review pass:` and carries the recorded tree
+and the changed paths in its payload. Such a cycle writes no review log and
+no milestone check row; the review record still settles, so the next agent
+pass starts from the advanced coverage.
+
 Repair diagnoses and run-recovery consultations publish their stream through
 `diagnosis-activity` and `run-recovery-activity`, with a heartbeat event every
 30 seconds while the consultation runs. The published view reports the
@@ -160,15 +168,21 @@ also checks installation dependencies and the backlog.
 A blocked task whose resume condition requires the task itself reports the
 `task_circular_condition` finding with the condition text and guidance to
 record an independent prerequisite or correct the task state. No
-independent work can satisfy such a condition. Two textual shapes count:
-the identifier in requirement position (`waits for T027 to start`) and the
+independent work can satisfy such a condition. Three textual shapes count:
+the identifier in requirement position (`waits for T027 to start`), the
 identifier in subject position with its own progress as the event
-(`T027 starts implementation`, `T066 is unblocked`). A condition that names
-another task, or one that mentions the task only as the work that follows
-an external prerequisite (`after the operator grants access, T027
-resumes`; `T085 must land before T027 starts`), is not circular and
-reports nothing. A condition that names no identifier is also outside the
-check. Doctor reports the state and never edits the backlog.
+(`T027 starts implementation`, `T066 is unblocked`), and an
+identifier-free condition whose subject is the task's own scope or its own
+deferral round (`waits for save work to resume` on the auto-save task, or
+`waits for its deferred tag to be lost`). A condition that names another
+task, or one that mentions the task only as the work that follows an
+external prerequisite or a consequence connector (`after the operator
+grants access, T027 resumes`; `after the migration lands, the save work
+resumes`; `T085 must land before T027 starts`; `the migration lands, then
+the save work resumes`), is not circular and reports nothing — subject
+words between the cue or connector and the event change nothing (`before
+the T027 work starts`). Doctor reports the state and never edits the
+backlog.
 
 ## Blocked-task reasons
 
@@ -233,6 +247,13 @@ its readiness and queryable seed while the `quota` events explain the wait.
 written while the window is closed is adopted instead of overwritten. Past
 the pause budget the start ends for an operator rerun, keeping the manual
 path.
+
+The adoption covers the bootstrap agent call too, not only the wait: a task
+file written while the bootstrap agent itself runs is adopted when the call
+returns, so the completed bootstrap result never overwrites the operator's
+bytes. Startup plans supplied with that start lose their bootstrap staging
+record and follow the ordinary startup import against the operator's
+backlog.
 
 The recorded retry also survives a restart: a controller stopped inside a
 quota window re-arms the pause at startup from the quota-held tasks in the

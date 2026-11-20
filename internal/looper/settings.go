@@ -422,6 +422,12 @@ var settingFieldKeys = map[string]bool{
 	"setup_command": true, "review_every": true,
 }
 
+// removableSettingKey names the one optional settings field: a null value
+// removes the saved key instead of assigning, so the built-in default
+// applies. Every other field stores a value (an empty string or jobs 0 is a
+// saved state, not an absent one), so null stays refused for them.
+const removableSettingKey = "review_every"
+
 // maxPendingRequests bounds the request queues. sweepRequestQueue enforces
 // it at every loop boundary by answering excess envelopes with an error
 // acknowledgement, so a flooded queue recovers instead of wedging claims.
@@ -778,11 +784,17 @@ func patchProfile(current *Profile, fields map[string]json.RawMessage) (*Profile
 		}
 	}
 	if v, ok := fields["review_every"]; ok {
-		var n int
-		if err := json.Unmarshal(v, &n); err != nil {
-			return nil, fmt.Errorf("review_every must be a nonnegative integer")
+		// Null removes the saved cadence: review_every is the one optional
+		// numeric field, and an absent key applies the built-in default.
+		if isNull(v) {
+			p.ReviewEvery = nil
+		} else {
+			var n int
+			if err := json.Unmarshal(v, &n); err != nil {
+				return nil, fmt.Errorf("review_every must be a nonnegative integer; null removes the saved cadence")
+			}
+			p.ReviewEvery = &n
 		}
-		p.ReviewEvery = &n
 	}
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -878,7 +890,10 @@ func (e *Engine) applySettingsRequest(req *SettingsRequest) SettingsAck {
 			base.Message = "unknown settings field " + key
 			return base
 		}
-		if isNull(value) {
+		// Null is the removal spelling for the one optional key, which
+		// patchProfile applies as a removal. Every other key carries a
+		// value, so null stays a refused envelope.
+		if isNull(value) && key != removableSettingKey {
 			base.Status = AckError
 			base.Message = key + " must not be null"
 			return base

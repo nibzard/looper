@@ -1,6 +1,7 @@
 package looper
 
 import (
+	"context"
 	"os"
 	"runtime"
 	"strconv"
@@ -86,6 +87,41 @@ func budgetFactor(loadPerCPU, psiFull float64) float64 {
 		return maxBudgetFactor
 	}
 	return factor
+}
+
+// runCtx gates one engine run with a failure bound that scales with the
+// pressure the host reports while the run sits stalled, the same live
+// rescaling quotaWait applies to a poll: the recorded pressure average
+// lags a burst by up to a minute, so a bound sized at entry fails a
+// healthy run mid-stall (the 2026-11-20 run lost an already-scaled ×3
+// bound at 105 s that way, and an unscaled 30 s one at 35 s). A run that
+// never finishes still cancels at the scaled bound. A deadline the test
+// itself forces — an interruption the run is expected to hit — is a
+// mechanism, not a failure bound, and must keep a fixed context.
+func runCtx(t *testing.T, base time.Duration) (context.Context, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		start := time.Now()
+		for {
+			if time.Since(start) >= testBudget(base) {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-watched
+	})
+	return ctx, cancel
 }
 
 func TestBudgetFactorScalesWithRecordedHostPressure(t *testing.T) {

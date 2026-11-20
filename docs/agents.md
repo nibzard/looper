@@ -4,7 +4,7 @@
 
 Run `looper config` to add agent commands and choose separate worker and reviewer
 profiles. Each command uses a supported adapter: Claude Code, Codex, or Zcode.
-For example, `anthropic` can run `claude` while `glm` runs `claude-zai`, both
+For example, `anthropic` can run `claude` while `glm` runs `claude-alt`, both
 through the Claude Code adapter:
 
 ```sh

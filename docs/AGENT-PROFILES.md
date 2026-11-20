@@ -73,6 +73,12 @@ is completed or reported on the next attempt, and a repeated `--set` after a
 crash replays to the same result instead of writing twice. Project edits
 keep the saved profile digest, session, receipts, and idempotency keys.
 
+`--unset review_every` removes the saved cadence on both paths, so the
+default review frequency applies again; the live request carries
+`review_every: null`, which a controller from before this spelling refuses
+with `review_every must not be null`. `--unset jobs` differs: it stores 0,
+which is auto mode. A numeric `--set` never accepts `null` as a value.
+
 A controller snapshots machine definitions when it starts. Machine edits
 apply to a running controller only after it restarts.
 

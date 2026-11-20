@@ -1,7 +1,6 @@
 package looper
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,7 +141,7 @@ func TestDetectNestedGoModulePreservesPlannedCoverage(t *testing.T) {
 	write(t, filepath.Join(root, "module", "go.mod"), "module example.com/child\n")
 	childTest := filepath.Join(root, "module", "child_test.go")
 	write(t, childTest, "package child\nimport \"testing\"\nfunc TestChild(t *testing.T) { t.Fatal(\"nested module checked\") }\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := runCtx(t, 30*time.Second)
 	defer cancel()
 	run := func(command string) (string, error) {
 		t.Helper()

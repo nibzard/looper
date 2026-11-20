@@ -74,7 +74,7 @@ func TestCompletedCodexRunWithOversizedLogAppliesResult(t *testing.T) {
 	t.Setenv("LOOPER_FAKE_PLAN", `{"setup":"","verify":"test -f completed.txt","tasks":[{"task_id":"T1","write_paths":["."],"resources":[]}]}`)
 	oversizedAgentLog(t, e.Config.CodexBin, ": > completed.txt")
 	e.Config.Once = true
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := runCtx(t, 30*time.Second)
 	defer cancel()
 	code, err := e.Run(ctx)
 	if err != nil || code != 0 {
@@ -131,7 +131,7 @@ func claudeEnvelope(t *testing.T, fields map[string]any) string {
 
 func runClaude(t *testing.T, bin, dir string) ([]byte, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := runCtx(t, time.Minute)
 	defer cancel()
 	return (Agent{Config: Config{ClaudeBin: bin, RetryLimit: 1}}).Run(ctx, "claude", dir, dir, "Complete task T1", true)
 }

@@ -12,8 +12,8 @@ import (
 // transition. The fixtures mirror the delivery-audit cases: a task blocked
 // behind a satisfied condition (Ohya T093), an outcome that exists while the
 // task stays blocked (Charlie T077), an operator gate without an operator
-// action (Ohya T109), and conditions that name the blocked task itself
-// (Charlie T027, T066).
+// action (Ohya T109), conditions that name the blocked task itself (Charlie
+// T027, T066), and the identifier-free circular wording (Charlie T040).
 
 // reconcileEngine returns an engine holding one blocked task with a satisfied
 // condition, plus the revision its findings must carry.
@@ -244,6 +244,31 @@ func TestReconciliationEscalatesCircularCondition(t *testing.T) {
 	}
 }
 
+// The Charlie T040 shape (delivery audit 2026-11-17): the condition names no
+// task at all and still waits on the task's own work. The guard escalates
+// instead of resuming, with a reason that names the wording, and repeated
+// reports add evidence to the one decision.
+func TestReconciliationEscalatesIdentifierFreeCircularCondition(t *testing.T) {
+	e, task, _ := reconcileEngine(t)
+	task.Title = "Auto-save system working per section 18"
+	task.Blockers = []string{"Waits for save work to resume, or for dependent death-reload work to land"}
+	applyFinding(t, e, reconciliationFinding("The task can start"))
+	if task = e.State.Backlog.Task("T001"); task.Status != "blocked" {
+		t.Fatal("an identifier-free circular condition was reconciled by the engine")
+	}
+	decision := decisionTask(e)
+	if decision == nil || !strings.Contains(decision.Details, "requires task T001's own work") {
+		t.Fatal("the identifier-free circular condition was not escalated with its reason")
+	}
+	for i := 0; i < 3; i++ {
+		applyFinding(t, e, reconciliationFinding("The task can start"))
+	}
+	if len(e.State.Backlog.Tasks) != 3 {
+		t.Fatal("repeated identifier-free circular findings created another decision")
+	}
+	assertFindingEvidence(t, e, decision.ID, "still needs the recorded decision")
+}
+
 func TestRepeatedPlainFindingEscalatesOneDecision(t *testing.T) {
 	e, _, _ := reconcileEngine(t)
 	plain := Finding{Title: "Import readiness holds", Details: "The condition is satisfied.", Evidence: "review one",
@@ -305,7 +330,7 @@ func TestReviewReconciliationRunsThroughTheReviewAgent(t *testing.T) {
 	e, _ := reviewEngine(t, reviewIncomplete, nil, doneBacklog(blocked))
 	result := fmt.Sprintf(`{"status":"reviewed","summary":"checked","findings":[{"title":"Input arrived","details":"The condition holds.","evidence":"the input file is present","depends_on":[],"priority":1,"owner":"agent","key":"input-arrived","existing_task_id":"T2","transition":"resume","revision":%q}],"complete":false}`, e.State.Tip)
 	t.Setenv("LOOPER_FAKE_REVIEW", result)
-	if err := e.review(context.Background(), false); err != nil {
+	if err := e.review(context.Background(), false, reviewScope{Mode: reviewScopeFull}); err != nil {
 		t.Fatal(err)
 	}
 	task := e.State.Backlog.Task("T2")
@@ -324,6 +349,9 @@ func TestReconciliationStagesUntilTheExportCommits(t *testing.T) {
 	e.State.Backlog.Tasks[1] = blocked
 	e.State.Tip = "tip-1"
 	a := followupAttempt(e)
+	// The reporting worker assembled its worktree from the accepted revision,
+	// so its reconciliation stages (T139) instead of being refused.
+	a.Base = "tip-1"
 	a.Summary.Followups = []Finding{{
 		Title: "Credentials are available", Details: "The condition holds.", Evidence: "the vault answers",
 		Owner: "agent", Key: "credentials", ExistingTaskID: "T2", Transition: transitionResume, Revision: "tip-1", Priority: 1,

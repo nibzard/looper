@@ -79,11 +79,22 @@ type findingStage struct {
 	reviewedAt  int
 	reviewedTip string
 	reviewPend  bool
+	// The review coverage record (T128) stages with the same transaction, so
+	// a failed commit leaves the recorded coverage exactly as it was.
+	reviewedTree     string
+	reviewedComplete bool
+	reviewedImports  int
 	// revision is the accepted revision this transaction applies against. A
 	// reconciliation must have verified exactly it, so evidence gathered on an
 	// older tree cannot release or close a task the controller has moved on.
 	revision string
-	notes    []findingNote
+	// attempt names the worker whose result this transaction applies, or nil
+	// on the review paths. A worker cannot read the accepted revision
+	// mid-flight, so its reconciliation names the base its worktree assembled
+	// from and the guard accepts that base only while the accepted revision
+	// still is what that attempt itself verified (T139).
+	attempt *Attempt
+	notes   []findingNote
 }
 
 // findingNote is one staged finding outcome. The task identity names the
@@ -95,15 +106,53 @@ type findingNote struct {
 
 func (e *Engine) beginFindingStage() *findingStage {
 	return &findingStage{
-		e:           e,
-		backlog:     clone(e.State.Backlog),
-		planSig:     e.State.PlanSignature,
-		finished:    e.State.Finished,
-		reviewedAt:  e.State.ReviewedAt,
-		reviewedTip: e.State.ReviewedTip,
-		reviewPend:  e.State.ReviewPending,
-		revision:    e.State.Tip,
+		e:                e,
+		backlog:          clone(e.State.Backlog),
+		planSig:          e.State.PlanSignature,
+		finished:         e.State.Finished,
+		reviewedAt:       e.State.ReviewedAt,
+		reviewedTip:      e.State.ReviewedTip,
+		reviewPend:       e.State.ReviewPending,
+		reviewedTree:     e.State.ReviewedTree,
+		reviewedComplete: e.State.ReviewedComplete,
+		reviewedImports:  e.State.ReviewedImports,
+		revision:         e.State.Tip,
 	}
+}
+
+// beginWorkerStage opens the transaction one worker result applies. The
+// attempt records the base the worker's worktree assembled from, so a
+// reconciliation it reports can name a revision the worker could actually
+// read instead of the accepted revision it cannot know mid-flight.
+func (e *Engine) beginWorkerStage(a *Attempt) *findingStage {
+	s := e.beginFindingStage()
+	s.attempt = a
+	return s
+}
+
+// verifiedRevision reports whether one reconciliation reported a revision
+// this transaction can vouch for. A review names the accepted revision its
+// prompt taught. A worker names the base its worktree assembled from, and
+// that base counts only while the accepted revision still is a tree the
+// attempt's own evidence covers: the unchanged base, or the verification
+// commit this attempt's work became on top of that base. Anything else
+// gathered its evidence on a tree the controller has moved past, exactly the
+// report a review at an older revision produces.
+func (s *findingStage) verifiedRevision(reported string) bool {
+	if reported == "" {
+		return false
+	}
+	if s.attempt == nil {
+		return reported == s.revision
+	}
+	a := s.attempt
+	if reported != a.Base {
+		return false
+	}
+	if s.revision == a.Base {
+		return true
+	}
+	return a.Verification != nil && s.revision == a.Verification.Commit && a.Verification.Base == a.Base
 }
 
 // emit reports the staged finding outcomes. Call it only after the changes
@@ -126,6 +175,9 @@ func (s *findingStage) rollback() {
 	e.State.ReviewedAt = s.reviewedAt
 	e.State.ReviewedTip = s.reviewedTip
 	e.State.ReviewPending = s.reviewPend
+	e.State.ReviewedTree = s.reviewedTree
+	e.State.ReviewedComplete = s.reviewedComplete
+	e.State.ReviewedImports = s.reviewedImports
 	s.notes = nil
 }
 
@@ -261,21 +313,30 @@ func nextTaskID(b Backlog) string {
 	return id
 }
 
-// circularCondition reports whether one blocked task's own condition names
-// the task itself, so no independent work can satisfy it. Dependency cycles
-// are rejected at validation; this catches the recorded form, where a blocker
-// or resume condition waits on the very task it blocks.
-func circularCondition(t Task) bool {
+// circularConditionReason names why one blocked task's own condition can be
+// satisfied only by the task itself, or "" when independent work can satisfy
+// it. Dependency cycles are rejected at validation; this catches the two
+// recorded forms (delivery audit 2026-11-17): a blocker or resume condition
+// that names the task — any mention counts, because an automatic transition
+// must err toward the operator — and one that names no task at all but
+// requires the task's own scope or deferral round (observe.go's
+// idFreeCircularWording, the Charlie T040 "waits for save work to resume"
+// wording).
+func circularConditionReason(t Task) string {
 	if t.Status != "blocked" || t.ID == "" {
-		return false
+		return ""
 	}
 	id := strings.ToLower(t.ID)
 	for _, condition := range append(append([]string{}, t.Blockers...), t.UnblockWhen) {
-		if strings.Contains(strings.ToLower(condition), id) {
-			return true
+		lowered := strings.ToLower(condition)
+		if strings.Contains(lowered, id) {
+			return "the unblock condition names task " + t.ID + " itself"
+		}
+		if idFreeCircularWording(condition, t) {
+			return "the unblock condition requires task " + t.ID + "'s own work, so no independent prerequisite can satisfy it"
 		}
 	}
-	return false
+	return ""
 }
 
 // taskHoldsWork names the phase that owns one task's contract, mirroring the
@@ -315,8 +376,16 @@ func (s *findingStage) reconcile(f Finding, key string, existing *Task) {
 		reject("it carries no revision")
 		return
 	}
-	if f.Revision != s.revision {
-		reject(fmt.Sprintf("it verified revision %s while the controller accepted %s", shortText(sanitize(f.Revision), 64), shortText(sanitize(s.revision), 64)))
+	if !s.verifiedRevision(f.Revision) {
+		reason := fmt.Sprintf("it verified revision %s while the controller accepted %s", shortText(sanitize(f.Revision), 64), shortText(sanitize(s.revision), 64))
+		if s.attempt != nil {
+			if f.Revision != s.attempt.Base {
+				reason += fmt.Sprintf("; a worker reconciliation names the revision its worktree started from (%s)", shortText(sanitize(s.attempt.Base), 64))
+			} else {
+				reason += "; the accepted revision holds work this attempt never read"
+			}
+		}
+		reject(reason)
 		return
 	}
 	if held := taskHoldsWork(e, existing.ID); held != "" {
@@ -338,8 +407,8 @@ func (s *findingStage) reconcile(f Finding, key string, existing *Task) {
 		s.escalate(*existing, f, "an ownership change needs the operator",
 			"Correct the owner by editing the task file; Looper imports the edit at a safe boundary. Cancel the task with looper cancel "+existing.ID+" if the work is no longer needed.")
 		return
-	case circularCondition(*existing):
-		s.escalate(*existing, f, "the unblock condition names task "+existing.ID+" itself",
+	case circularConditionReason(*existing) != "":
+		s.escalate(*existing, f, circularConditionReason(*existing),
 			"Rewrite the condition in the task file so independent work can satisfy it, or cancel the task with looper cancel "+existing.ID+"; Looper imports a task-file edit at a safe boundary.")
 		return
 	case existing.Deferred():
@@ -406,8 +475,8 @@ func repeatedBlockedFinding(t Task, f Finding, repeat, operator, active bool) (r
 	if !repeat || active || f.DeferUntil != "" || operator || t.Status != "blocked" || t.Deferred() || t.OperatorOnly() {
 		return "", ""
 	}
-	if circularCondition(t) {
-		return "the unblock condition names task " + t.ID + " itself",
+	if reason := circularConditionReason(t); reason != "" {
+		return reason,
 			"Rewrite the condition in the task file so independent work can satisfy it, or cancel the task with looper cancel " + t.ID + "; Looper imports a task-file edit at a safe boundary."
 	}
 	return "repeated findings change no state while task " + t.ID + " stays blocked",
@@ -420,12 +489,7 @@ func repeatedBlockedFinding(t Task, f Finding, repeat, operator, active bool) (r
 // however many later reports repeat the condition only add evidence.
 func (s *findingStage) escalate(target Task, f Finding, reason, action string) {
 	e := s.e
-	key := reconciliationKey(target.ID)
-	for i := range e.State.Backlog.Tasks {
-		decision := &e.State.Backlog.Tasks[i]
-		if !hasTaskTag(*decision, findingKeyPrefix+key) {
-			continue
-		}
+	if decision := decisionTaskFor(&e.State.Backlog, target.ID); decision != nil {
 		e.State.PlanSignature = ""
 		s.notes = append(s.notes, findingNote{taskID: decision.ID, message: decision.ID + "  Reconciliation of " + target.ID + " still needs the recorded decision: " + reason + "\nEvidence: " + sanitize(f.Evidence)})
 		return
@@ -443,13 +507,88 @@ func (s *findingStage) escalate(target Task, f Finding, reason, action string) {
 			"Finding: " + f.Title + "\n" +
 			"Evidence: " + f.Evidence + "\n" +
 			"Operator action: " + action,
-		Tags: []string{findingKeyPrefix + key},
+		Tags: []string{findingKeyPrefix + reconciliationKey(target.ID)},
 	}
 	holdForOperator(&decision)
 	e.State.Backlog.Tasks = append(e.State.Backlog.Tasks, decision)
 	e.State.PlanSignature = ""
 	e.State.Finished = false
 	s.notes = append(s.notes, findingNote{taskID: decision.ID, message: decision.ID + "  Escalated reconciliation of " + target.ID + ": " + reason + "\nEvidence: " + sanitize(f.Evidence)})
+}
+
+// decisionTaskFor returns the escalated operator decision for one target
+// task, or nil when none exists. The key names the target, so renamed
+// findings and repeated cycles find the same decision.
+func decisionTaskFor(b *Backlog, targetID string) *Task {
+	key := findingKeyPrefix + reconciliationKey(targetID)
+	for i := range b.Tasks {
+		if hasTaskTag(b.Tasks[i], key) {
+			return &b.Tasks[i]
+		}
+	}
+	return nil
+}
+
+// recordedFindingKey returns the stable finding key one task records, when it
+// carries one. Reconciliation decision keys name the decision's target, not a
+// reported finding, so they do not count.
+func recordedFindingKey(t Task) string {
+	for _, tag := range t.Tags {
+		if !strings.HasPrefix(tag, findingKeyPrefix) {
+			continue
+		}
+		key := strings.TrimPrefix(tag, findingKeyPrefix)
+		if key != "" && !strings.HasPrefix(key, reconciliationKeyPrefix) {
+			return key
+		}
+	}
+	return ""
+}
+
+// sweepUnchanged reconciles the findings a due review would re-report at an
+// unchanged revision (T128). Each blocked task that carries a recorded
+// finding gets the one stable operator decision the same repeated report
+// would escalate; the cycle itself is the repeat, because the finding stayed
+// unresolved through it. A decision that already exists is left exactly as
+// it is, so repeated cycles change nothing: no new evidence exists, and the
+// recorded decision already presents the action. Tasks that present their
+// own operator action — operator gates, deferrals, and the decisions
+// themselves — keep it.
+func (s *findingStage) sweepUnchanged() {
+	e := s.e
+	for i := range e.State.Backlog.Tasks {
+		t := &e.State.Backlog.Tasks[i]
+		if t.Status != "blocked" || t.Marker() || isReconciliationDecision(*t) {
+			continue
+		}
+		key := recordedFindingKey(*t)
+		if key == "" || t.Deferred() || t.OperatorOnly() {
+			continue
+		}
+		active := false
+		for _, a := range e.State.Attempts {
+			if a != nil && a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "cancelled" {
+				active = true
+			}
+		}
+		if active {
+			continue
+		}
+		finding := Finding{
+			Title:          t.Title,
+			Details:        "The recorded finding is unresolved and the published revision is unchanged since the review that reported it.",
+			Evidence:       "Review cycle skipped at " + e.State.Tip + "; the finding's task stays blocked.",
+			Owner:          "agent",
+			Key:            key,
+			ExistingTaskID: t.ID,
+			Priority:       t.Priority,
+		}
+		reason, action := repeatedBlockedFinding(*t, finding, true, false, active)
+		if reason == "" || decisionTaskFor(&e.State.Backlog, t.ID) != nil {
+			continue
+		}
+		s.escalate(*t, finding, reason, action)
+	}
 }
 
 // reconciliationKey derives the stable finding key of the one operator

@@ -30,7 +30,7 @@ type AgentError struct {
 
 func (e *AgentError) Error() string { return e.Kind + ": " + e.Detail }
 
-const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority","owner","key","existing_task_id","defer_until"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"},"owner":{"type":"string","enum":["agent","operator"]},"key":{"type":"string","minLength":1},"existing_task_id":{"type":"string"},"defer_until":{"type":"string"}}}}}}`
+const summarySchema = `{"type":"object","additionalProperties":false,"required":["task_id","status","summary","files","blockers","followups","unblock_when"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["done","blocked"]},"summary":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"blockers":{"type":"array","items":{"type":"string"}},"unblock_when":{"type":"string"},"followups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","details","evidence","depends_on","priority","owner","key","existing_task_id","defer_until"],"properties":{"title":{"type":"string"},"details":{"type":"string"},"evidence":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"priority":{"type":"integer"},"owner":{"type":"string","enum":["agent","operator"]},"key":{"type":"string","minLength":1},"existing_task_id":{"type":"string"},"defer_until":{"type":"string"},"transition":{"type":"string","enum":["resume","complete","reassign"]},"revision":{"type":"string"}}}}}}`
 
 const planSchema = `{
   "type": "object",
@@ -434,8 +434,12 @@ func quotaRecoveryAction(retry time.Time) string {
 }
 
 // quotaResetTime extracts the provider's reset time from a timed quota
-// message (T125). The agent process shares the controller's clock, so
-// zone-free wall-clock and clock-time values resolve on the local clock;
+// message (T125). A reset cue governs the parse (T142): the stamp or clock
+// time the provider tied to its reset wording wins, so an unrelated
+// datetime the message carries beside it — an incident start, a request
+// timestamp, a maintenance window — never overrides the reported reset.
+// The agent process shares the controller's clock, so zone-free
+// wall-clock and clock-time values resolve on the local clock;
 // zone-stamped values keep their zone. A clock time already past beyond the
 // tolerance names the next day; inside it the past value stands, and the
 // pause falls back to the rate-limit wait (T145). The reported text stays
@@ -451,48 +455,26 @@ func quotaRecoveryAction(retry time.Time) string {
 // existing rate-limit fallback wait instead of parking the work for a day.
 const quotaResetPastTolerance = 10 * time.Minute
 
+// quotaResetCue matches one reset cue and the stamp or clock time it
+// introduces on the same line within 32 characters — the same cue words the
+// clock reading has always required. The lazy gap takes the value nearest
+// the cue, and the stamp alternative answers first, so a full datetime at
+// the cue wins over the clock digits inside it.
+var quotaResetCue = regexp.MustCompile(`(?i)\b(?:reset|resume|retry|reopen)[^\n]{0,32}?(?:(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)|(\d{1,2}:\d{2}(?::\d{2})?\s?(?:am|pm)?))\b`)
+
+// quotaResetStamp matches a full datetime anywhere, for the fallback that
+// reads a message reporting a reset stamp without any cue wording.
 var quotaResetStamp = regexp.MustCompile(`\b(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)\b`)
-var quotaResetClock = regexp.MustCompile(`(?i)\b(?:reset|resume|retry|reopen)[^\n]{0,32}?(\d{1,2}:\d{2}(?::\d{2})?\s?(?:am|pm)?)\b`)
 var quotaResetRelative = regexp.MustCompile(`(?i)\b(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)[,\s]+)*(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s))?)`)
 var quotaResetUnit = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)`)
 
 func quotaResetTime(s string, now time.Time) (time.Time, bool) {
-	for _, m := range quotaResetStamp.FindAllStringSubmatch(s, -1) {
-		if t, err := time.Parse(time.RFC3339, m[1]); err == nil {
+	for _, m := range quotaResetCue.FindAllStringSubmatch(s, -1) {
+		if t, ok := quotaStampTime(m[1]); ok {
 			return t, true
 		}
-		for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
-			if t, err := time.ParseInLocation(layout, m[1], time.Local); err == nil {
-				return t, true
-			}
-		}
-	}
-	for _, m := range quotaResetClock.FindAllStringSubmatch(s, -1) {
-		// time.Parse matches the AM/PM marker case-sensitively; providers
-		// print both cases.
-		value := strings.TrimSpace(m[1])
-		if n := len(value); n > 2 {
-			value = value[:n-2] + strings.ToUpper(value[n-2:])
-		}
-		for _, layout := range []string{time.Kitchen, "15:04", "15:04:05"} {
-			t, err := time.Parse(layout, value)
-			if err != nil {
-				continue
-			}
-			date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).
-				Add(time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute + time.Duration(t.Second())*time.Second)
-			if !date.After(now) {
-				if now.Sub(date) <= quotaResetPastTolerance {
-					// A reset already past by seconds to minutes is
-					// provider clock skew or delivery delay, not a window
-					// that closes tomorrow (T145). The past value reaches
-					// the pause, whose existing rate-limit fallback wait
-					// reopens it imminently.
-					return date, true
-				}
-				date = date.AddDate(0, 0, 1)
-			}
-			return date, true
+		if t, ok := quotaClockTime(m[2], now); ok {
+			return t, true
 		}
 	}
 	for _, m := range quotaResetRelative.FindAllStringSubmatch(s, -1) {
@@ -514,6 +496,64 @@ func quotaResetTime(s string, now time.Time) (time.Time, bool) {
 		if delay > 0 {
 			return now.Add(delay), true
 		}
+	}
+	// Last resort for a message without a cued value: the first full
+	// datetime, the reading the stamp branch always had (T125).
+	for _, m := range quotaResetStamp.FindAllStringSubmatch(s, -1) {
+		if t, ok := quotaStampTime(m[1]); ok {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// quotaStampTime parses one full datetime stamp: a zone-stamped value keeps
+// its zone; a zone-free value resolves on the local clock, because the agent
+// process shares the controller's clock (T125).
+func quotaStampTime(value string) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, true
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// quotaClockTime parses one clock time on the local clock; a time already
+// past beyond the tolerance names the next day, and inside it the past
+// value stands for the pause's fallback wait (T125, T145).
+func quotaClockTime(value string, now time.Time) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	// time.Parse matches the AM/PM marker case-sensitively; providers
+	// print both cases.
+	value = strings.TrimSpace(value)
+	if n := len(value); n > 2 {
+		value = value[:n-2] + strings.ToUpper(value[n-2:])
+	}
+	for _, layout := range []string{time.Kitchen, "15:04", "15:04:05"} {
+		t, err := time.Parse(layout, value)
+		if err != nil {
+			continue
+		}
+		date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).
+			Add(time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute + time.Duration(t.Second())*time.Second)
+		if !date.After(now) {
+			if now.Sub(date) <= quotaResetPastTolerance {
+				// A reset already past by seconds to minutes is
+				// provider clock skew or delivery delay, not a window
+				// that closes tomorrow (T145). The past value reaches
+				// the pause, whose existing rate-limit fallback wait
+				// reopens it imminently.
+				return date, true
+			}
+			date = date.AddDate(0, 0, 1)
+		}
+		return date, true
 	}
 	return time.Time{}, false
 }
@@ -564,7 +604,10 @@ func resourceEnv(dir string) map[string]string {
 	return map[string]string{"LOOPER_ATTEMPT_ID": id, "LOOPER_RESOURCE_PREFIX": "looper_" + id, "LOOPER_ARTIFACT_DIR": dir, "LOOPER_RESOURCE_CLEANUP_FILE": filepath.Join(dir, resourceCleanupFile)}
 }
 
-func workerPrompt(b Backlog, t Task, c agentContext) string {
+// workerPrompt renders one task's implementation prompt. base is the revision
+// the worktree assembled from: the revision a worker can actually read, and
+// therefore the one its reconciliation follow-ups name (T139).
+func workerPrompt(b Backlog, t Task, c agentContext, base string) string {
 	data, _ := json.MarshalIndent(t, "", "  ")
 	sources, _ := json.Marshal(b.Sources)
 	contract := string(data)
@@ -587,18 +630,19 @@ Task contract:
 %s
 Implement the outcome and exercise its acceptance criteria. Repair problems you can resolve locally.
 Setup and verification must preserve the project files they receive; checks receive uncommitted candidate changes in a detached worktree, so do not require an empty Git status or infer candidate history from HEAD.
-Include ignore rules for generated output in your implementation. Remove tracked build artifacts when necessary.
+Include ignore rules for generated output. Remove tracked build artifacts when necessary.
 Do not edit the backlog, other worktrees, shared Git refs, or repository configuration. Do not push.
 Use LOOPER_RESOURCE_PREFIX for private databases and temporary resources. Bind servers to free ports.
-Register cleanup for external resources in LOOPER_RESOURCE_CLEANUP_FILE before creating them. Make cleanup idempotent and check ownership before removal. Looper runs cleanup after this operation finishes; interrupted work retains resources until recovery completes.
-Preserve cleanup already registered by setup. For Docker containers, set labels io.looper.resource-prefix=$LOOPER_RESOURCE_PREFIX and io.looper.artifact=$LOOPER_ARTIFACT_DIR. The registered Docker cleanup can then find each owned container. Keep shared services outside this cleanup.
+Register cleanup for external resources in LOOPER_RESOURCE_CLEANUP_FILE before creating them. Make cleanup idempotent and check ownership before removal. Looper runs cleanup after this operation finishes; interrupted work retains resources for recovery.
+Preserve cleanup already registered by setup. For Docker containers, set labels io.looper.resource-prefix=$LOOPER_RESOURCE_PREFIX and io.looper.artifact=$LOOPER_ARTIFACT_DIR. The Docker cleanup then finds each owned container. Keep shared services outside this cleanup.
 Do not weaken acceptance criteria or remove failing tests to claim success.
 If an external prerequisite is missing, report blocked with an explicit unblock condition.
 Return JSON: task_id, status (done or blocked), summary, files (array), blockers (array),
-followups (array of title, details, evidence, depends_on, priority, owner, key, existing_task_id), and unblock_when (string).
+followups (array of title, details, evidence, depends_on, priority, owner, key, existing_task_id, transition, revision), and unblock_when (string).
+A followup may reconcile existing_task_id with transition "resume", "complete", or "reassign" and revision %s (this worktree's base revision).
 Capture concrete missing work in followups; do not invent unrelated product goals.
 %s
-`, shortText(t.ID, 80), shortText(t.Title, 160), sources, goal, contract, findingInstructions)
+`, shortText(t.ID, 80), shortText(t.Title, 160), sources, goal, contract, base, findingInstructions)
 	p += c.references()
 	p += "Read requirements relevant to this task. Use the complete index to find constraints; unrelated tasks are context only.\n"
 	if c.Feedback != "" {

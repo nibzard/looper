@@ -25,7 +25,7 @@ func cleanupAuditCase(t *testing.T, name, script string) (wrapped, plain error) 
 	if err := os.WriteFile(filepath.Join(dir, resourceCleanupFile), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := runCtx(t, 30*time.Second)
 	defer cancel()
 	wrapped = runShell(ctx, dir, dir, "cleanup", "set -e\nsource \"$LOOPER_RESOURCE_CLEANUP_FILE\"", resourceEnv(dir))
 	cmd := exec.Command("bash", filepath.Join(dir, resourceCleanupFile))

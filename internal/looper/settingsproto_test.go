@@ -93,6 +93,71 @@ func storedEvents(t *testing.T, e *Engine) []Event {
 	return events
 }
 
+// A null review_every is the per-field removal the protocol carries: the
+// saved profile drops the key so the built-in default cadence applies, the
+// effective configuration keeps its snapshot until the next run, and the
+// outcome names that boundary. This closes the gap where a live unset saved
+// review_every 0 (periodic review disabled) while the stopped path removed
+// the key (T154).
+func TestApplySettingsRequestRemovesOptionalReviewEvery(t *testing.T) {
+	e := protocolEngine(t)
+	SaveProfile(e.Config.ProfilePath, &Profile{Version: 1, Agent: "claude", ReviewEvery: func() *int { v := 7; return &v }()})
+	digest := profileDigest(e.Config.ProfilePath)
+	ack := e.applySettingsRequest(request(e, map[string]any{"review_every": nil}, digest))
+	if ack.Status != AckApplied {
+		t.Fatalf("status %s: %s", ack.Status, ack.Message)
+	}
+	saved, err := LoadProfile(e.Config.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ReviewEvery != nil {
+		t.Fatalf("the removal must drop the saved key: %+v", saved)
+	}
+	raw, err := os.ReadFile(e.Config.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "review_every") {
+		t.Fatalf("the saved profile must omit the review_every key: %s", raw)
+	}
+	// The effective cadence never rewires mid-run; it keeps this engine's
+	// snapshot instead of taking the zero value.
+	if e.Config.ReviewEvery != 5 {
+		t.Fatalf("effective review cadence changed mid-run: %+v", e.Config)
+	}
+	if ack.Outcomes["review_every"] != "saved; applies on the next controller run" {
+		t.Fatalf("outcome %q", ack.Outcomes["review_every"])
+	}
+	// A null removal of an already-absent key stays a valid no-op patch.
+	ack = e.applySettingsRequest(request(e, map[string]any{"review_every": nil}, ack.ProfileDigest))
+	if ack.Status != AckApplied {
+		t.Fatalf("repeat removal failed: %s: %s", ack.Status, ack.Message)
+	}
+}
+
+// Null stays refused for every field that stores a value: an empty string or
+// jobs 0 is a saved state, so only the optional key accepts a removal.
+func TestApplySettingsRequestRefusesNullOutsideOptionalKey(t *testing.T) {
+	e := protocolEngine(t)
+	SaveProfile(e.Config.ProfilePath, &Profile{Version: 1})
+	digest := profileDigest(e.Config.ProfilePath)
+	for _, field := range []string{"jobs", "agent", "model", "verify_command"} {
+		ack := e.applySettingsRequest(request(e, map[string]any{field: nil}, digest))
+		if ack.Status != AckError {
+			t.Fatalf("null %s accepted: %s", field, ack.Status)
+		}
+		if ack.Message != field+" must not be null" {
+			t.Fatalf("null %s message: %q", field, ack.Message)
+		}
+	}
+	// The refused envelopes change nothing: the profile keeps its values.
+	saved, err := LoadProfile(e.Config.ProfilePath)
+	if err != nil || saved.ReviewEvery != nil || saved.Jobs != 0 {
+		t.Fatalf("refused requests must not touch the profile: %+v %v", saved, err)
+	}
+}
+
 func TestApplySettingsRequestConflicts(t *testing.T) {
 	e := protocolEngine(t)
 	SaveProfile(e.Config.ProfilePath, &Profile{Version: 1})

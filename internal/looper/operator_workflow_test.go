@@ -130,7 +130,7 @@ func (w *operatorWorkflow) runEngine(t *testing.T, timeout time.Duration) int {
 	if err = e.save(); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := runCtx(t, timeout)
 	defer cancel()
 	code, err := e.Run(ctx)
 	if err != nil && ctx.Err() == nil {

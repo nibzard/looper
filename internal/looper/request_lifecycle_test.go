@@ -753,7 +753,7 @@ func TestAddTaskCrashBoundariesSurviveRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			ready := filepath.Join(t.TempDir(), "ready")
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			ctx, cancel := runCtx(t, 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRequestCrashHelper$")
 			cmd.Env = withEnvParent(os.Environ(), os.Getpid())

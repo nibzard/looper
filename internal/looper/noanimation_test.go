@@ -1,7 +1,6 @@
 package looper
 
 import (
-	"context"
 	"io"
 	"strings"
 	"testing"
@@ -67,7 +66,7 @@ func TestNoAnimationRunKeepsEventsAndExitCode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := runCtx(t, 10*time.Second)
 		defer cancel()
 		code, err := e.Run(ctx)
 		events := storedEvents(t, e)

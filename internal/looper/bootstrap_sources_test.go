@@ -24,7 +24,7 @@ func TestBootstrapRejectsPrivateSources(t *testing.T) {
 			}
 			defer lock.Close()
 			defer e.Store.Close()
-			err = e.bootstrap(context.Background(), nil)
+			err = e.bootstrap(context.Background(), nil, "")
 			if err == nil || !strings.Contains(err.Error(), "private context") {
 				t.Fatalf("accepted transient source: %v", err)
 			}
@@ -76,7 +76,7 @@ if printf '%s' "$p" | grep -q 'previous backlog was rejected'; then result="$LOO
 	}
 	defer lock.Close()
 	defer e.Store.Close()
-	if err = e.bootstrap(context.Background(), nil); err != nil {
+	if err = e.bootstrap(context.Background(), nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	var accepted Backlog

@@ -60,6 +60,15 @@ func TestQuotaResetTimeShapes(t *testing.T) {
 		// stands and the pause's rate-limit fallback wait reopens it.
 		{"clock time minutes past keeps today", "Your limit will reset at 9:58am", time.Date(2026, 11, 18, 9, 58, 0, 0, time.Local), true},
 		{"clock time at the past tolerance keeps today", "Your limit will reset at 9:50am", time.Date(2026, 11, 18, 9, 50, 0, 0, time.Local), true},
+		// T142: a reset cue governs the parse, so a datetime the message
+		// reports beside the reset never overrides it.
+		{"incident stamp never overrides reported clock", "API Error: Request rejected (429); incident began 2026-11-18 09:00:00; usage limit reached; your limit will reset at 23:55", time.Date(2026, 11, 18, 23, 55, 0, 0, time.Local), true},
+		{"reported clock before incident stamp", "API Error: Request rejected (429); usage limit reached; your limit will reset at 23:55; incident began 2026-11-18 09:00:00", time.Date(2026, 11, 18, 23, 55, 0, 0, time.Local), true},
+		{"request stamp never overrides cued reset", "request 2026-11-18T09:00:00Z rejected; limit resets at 2026-11-18T22:30:00Z", time.Date(2026, 11, 18, 22, 30, 0, 0, time.UTC), true},
+		{"maintenance window never overrides reported reset", "maintenance window 2026-11-18 01:00:00 to 05:00:00; your limit will reset at 2026-11-19 07:30:00", time.Date(2026, 11, 19, 7, 30, 0, 0, time.Local), true},
+		{"uncued stamp and clock stay below the cued clock", "request logged at 09:00 under id 2026-11-18 09:00:00; filler text separates them; your limit will reset at 3:14pm", time.Date(2026, 11, 18, 15, 14, 0, 0, time.Local), true},
+		{"bare stamp without a reset cue", "quota window 2026-11-18 20:15:59 reported", time.Date(2026, 11, 18, 20, 15, 59, 0, time.Local), true},
+		{"relative delay outranks a distant uncued stamp", "quota reached; request logged 2026-11-18 09:00:00 with a long trace id; resume in 45m", now.Add(45 * time.Minute), true},
 		{"no reset reported", "usage limit reached: this account quota is exhausted", time.Time{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,6 +135,36 @@ func TestAgentQuotaFailureCarriesResetTime(t *testing.T) {
 	// event log may exist.
 	if _, statErr := os.Stat(filepath.Join(dir, "events-01.jsonl")); statErr == nil {
 		t.Fatal("quota failure retried in-process: second attempt log exists")
+	}
+}
+
+// TestAgentQuotaResetPrefersCuedResetTime feeds the T142 shape through a
+// stub agent: a quota message that carries an unrelated incident stamp
+// beside its reported reset clock. The parsed retry is the cued clock; the
+// incident stamp never moves the pause the controller will record.
+func TestAgentQuotaResetPrefersCuedResetTime(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "agent.sh")
+	script := "#!/bin/bash\n" +
+		"printf '%s\\n' '{\"type\":\"error\",\"message\":\"API Error: Request rejected (429); incident began 2026-11-18 09:00:00; usage limit reached; your limit will reset at 23:55\"}'\n" +
+		"exit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	a := Agent{Config: Config{ClaudeBin: bin, RetryLimit: 3, RetryDelay: time.Millisecond}}
+	_, err := a.Run(context.Background(), "claude", dir, dir, "prompt", true)
+	var agent *AgentError
+	if !errors.As(err, &agent) {
+		t.Fatalf("expected AgentError, got %v", err)
+	}
+	if agent.Kind != failureQuota {
+		t.Fatalf("classification: %s", agent.Kind)
+	}
+	// The agent layer parses against the live clock, so the reported clock
+	// names today or tomorrow; its time of day is exact either way, and it
+	// is never the incident stamp's 09:00:00.
+	if h, m, s := agent.Retry.Clock(); h != 23 || m != 55 || s != 0 {
+		t.Fatalf("reset time: %s; want the reported clock 23:55:00", agent.Retry)
 	}
 }
 
@@ -372,11 +411,16 @@ func quotaRun(t *testing.T, bin string, withPlan bool, prepare func(c *Config)) 
 }
 
 // quotaWait polls until cond holds or the budget ends, and reports whether
-// the condition held.
+// the condition held. The budget scales with the pressure the host reports
+// while the wait runs, not only at entry: a stall that arrives mid-wait
+// must extend an already-started wait the way testBudget would size a new
+// one, because the recorded pressure average lags a burst by up to a
+// minute (the 2026-11-20 check run lost a healthy chain at a ×3 budget
+// sized before the stall deepened).
 func quotaWait(t *testing.T, budget time.Duration, cond func() bool, label string) bool {
 	t.Helper()
-	deadline := time.Now().Add(testBudget(budget))
-	for time.Now().Before(deadline) {
+	start := time.Now()
+	for time.Since(start) < testBudget(budget) {
 		if cond() {
 			return true
 		}
@@ -675,7 +719,14 @@ func TestQuotaPastClockReopensImminently(t *testing.T) {
 	bin := quotaStub(t, "quota-past-clock", "worker", false, pastClockReset)
 	e, c, _, stop := quotaRun(t, bin, true, func(cfg *Config) { cfg.RetryDelay = 40 * time.Millisecond })
 	defer stop()
-	if !quotaWait(t, 30*time.Second, func() bool { return quotaTaskStatus(t, c, "T1") == "done" }, "T1 done") {
+	// The terminal wait covers the whole chain — pause, fallback wait,
+	// resume, requeue, and the worker's second run — so its bound must be
+	// the largest in this file: every durable step the chain takes stalls
+	// with the host, and the recorded flakes (2026-11-20 check run; the
+	// live reproduction at PSI "full" ~85) expired a 30 s base while T1
+	// was still progressing. The imminence itself is verified from the
+	// journaled times below, which do not stretch with the host.
+	if !quotaWait(t, 90*time.Second, func() bool { return quotaTaskStatus(t, c, "T1") == "done" }, "T1 done") {
 		stop()
 		t.Fatalf("a past reset clock must reopen imminently; T1 status %q", quotaTaskStatus(t, c, "T1"))
 	}

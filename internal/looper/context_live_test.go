@@ -1,7 +1,6 @@
 package looper
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -132,9 +131,9 @@ func runContextEval(t *testing.T, root, name, arm, kind string, repeat int, conf
 			prompt = strings.ReplaceAll(prompt, (agentContext{}).references(), "")
 		}
 	} else if name == "repair" {
-		prompt = workerPrompt(b, b.Tasks[0], c)
+		prompt = workerPrompt(b, b.Tasks[0], c, commit)
 		if arm == "inline" {
-			prompt = workerPrompt(b, b.Tasks[0], agentContext{}) + "\nApplied requirements:\n" + requirement + "\nRepair feedback:\n" + feedback
+			prompt = workerPrompt(b, b.Tasks[0], agentContext{}, commit) + "\nApplied requirements:\n" + requirement + "\nRepair feedback:\n" + feedback
 			prompt = strings.ReplaceAll(prompt, (agentContext{}).references(), "")
 		}
 	} else {
@@ -149,7 +148,7 @@ func runContextEval(t *testing.T, root, name, arm, kind string, repeat int, conf
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := runCtx(t, 3*time.Minute)
 	defer cancel()
 	start := time.Now()
 	var progress func(string, string)

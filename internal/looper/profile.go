@@ -190,22 +190,24 @@ func (p *Profile) Validate() error {
 }
 
 // MarshalJSON writes known keys in a stable order and preserves unknown keys.
+// A nil ReviewEvery omits the key: the profile then does not save a review
+// cadence, and the built-in default applies, so an unset stays durable.
 func (p Profile) MarshalJSON() ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	reviewEvery := 5
-	if p.ReviewEvery != nil {
-		reviewEvery = *p.ReviewEvery
-	}
-	ordered := []struct {
+	type profileField struct {
 		key   string
 		value any
-	}{
+	}
+	ordered := []profileField{
 		{"version", p.Version}, {"agent", p.Agent}, {"review_agent", p.ReviewAgent},
 		{"jobs", p.Jobs}, {"model", p.Model}, {"claude_model", p.ClaudeModel},
 		{"effort", p.Effort}, {"verify_command", p.VerifyCommand},
-		{"setup_command", p.SetupCommand}, {"review_every", reviewEvery},
+		{"setup_command", p.SetupCommand},
+	}
+	if p.ReviewEvery != nil {
+		ordered = append(ordered, profileField{"review_every", *p.ReviewEvery})
 	}
 	out := []byte{'{'}
 	for i, field := range ordered {

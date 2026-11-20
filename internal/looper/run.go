@@ -464,14 +464,15 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 			}
 			// A due review precedes planning, exactly as on the idle path,
 			// including reviews the integration counters made due. A closed
-			// reviewer quota window defers both (T125).
+			// reviewer quota window defers both (T125). The cycle runs at the
+			// scope the recorded coverage permits (T128).
 			if e.reviewDue() && !e.quotaPaused(e.Config.ReviewAgent) {
 				// Persist before launching: cancellation must retain the review.
 				e.State.ReviewPending = true
 				if err := e.save(); err != nil {
 					return 1, err
 				}
-				if err := e.review(ctx, false); err != nil {
+				if err := e.reviewCycle(ctx, false); err != nil {
 					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
 						continue
 					}
@@ -571,7 +572,10 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				if err := e.save(); err != nil {
 					return 1, err
 				}
-				if err := e.review(ctx, final); err != nil {
+				// The cycle runs at the scope the recorded coverage permits:
+				// a review whose inputs did not move reconciles recorded
+				// findings instead of re-reporting them at full cost (T128).
+				if err := e.reviewCycle(ctx, final); err != nil {
 					// A closed reviewer quota window pauses the review and
 					// retries it after the reset; it is not a review failure
 					// and must not spend the failure budget (T125).

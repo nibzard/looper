@@ -45,8 +45,7 @@ the end of this file. The full text is available in three places:
 - Operator feedback assessed on 2026-11-14 against current source; all four
   priorities it raised are implemented as the packages above.
 
-- `T117` (todo): controller assembly cannot transport a tracked schema
-  at the control-file path.
+- `T117` implemented on 2026-11-19; see the T117 section at the end.
 - Blocked tasks, from `to-do.json`:
   - `T019` process identity checks on darwin; needs a macOS host.
   - `T037` and `T043` triage and operator decisions for disputed
@@ -76,6 +75,13 @@ the end of this file. The full text is available in three places:
   already verified. Consider skipping or shortening a review when only
   files outside `source_files` and the task file change, and an option
   that exits an idle complete run.
+  - Resolved 2026-11-19 by T128: a review records its coverage (tree,
+    completion verdict, imports seen), and the next cycle skips the
+    agent when the content is unchanged or the change is outside
+    `source_files` with the goal already closed; open work gets a
+    focused pass over the changed paths. Repeated unchanged findings
+    escalate one operator decision per target. The exit option already
+    exists as `--once`.
 
 ## Standing cautions
 
@@ -517,6 +523,8 @@ of the tracked tree, the pushed refs, and the published tags:
   `/home/user/.looper/alpha-b17f/runtime`; about 50 tracked files
   mention `.looper` and 35 mention `/home/user`.
 - No LICENSE file exists. A public launch needs a license decision.
+  Resolved 2026-11-20: the owner chose MIT on 2026-11-18 and `LICENSE`
+  is in the tree; see the section at the end.
 - Private project names (Alpha, Bravo, Charlie, Delta,
   Echo) and the `claude-alt`/alt-provider provider details appear in
   tracked files: `NOTES.md` (27 lines), `UNATTENDED-RECOVERY-PLAN.md`,
@@ -555,7 +563,7 @@ neutralizing them also regenerates fixtures and their tests.
 The owner chose the full history rewrite (option 3 of the recorded
 decision). `git filter-repo` ran twice over all 459 commits with a
 literal replacement table and forced identities; the pre-scrub state is
-in `/home/agent/looper-pre-scrub-2026-11-19.bundle` (all refs, tip
+in `/home/user/looper-pre-scrub-2026-11-19.bundle` (all refs, tip
 `07fa9be`).
 
 - Project names map to NATO codenames: Alpha, Bravo, Charlie, Delta
@@ -581,8 +589,9 @@ in `/home/agent/looper-pre-scrub-2026-11-19.bundle` (all refs, tip
   match their tags, and the Homebrew formula checksum for `v0.10.0`
   is stale. Re-cut or drop those releases; the next release records
   fresh checksums.
-- Still open from the cleanup review: the license (T129, MIT decided),
-  moving internal working documents out of the tree, and CI.
+- Still open from the cleanup review: moving internal working documents
+  out of the tree, and CI. The license closed on 2026-11-20 (T129):
+  `LICENSE` is in the tree and the next release notes carry it.
 
 
 ## Delivery audit, 2026-11-17
@@ -671,7 +680,8 @@ Limits found while implementing, not fixed here:
 
 - Circular detection is textual: a condition that names the blocked task's
   own ID. Charlie T040's wording ("waits for save work to resume") carries
-  no ID and is not detected; a review must still name it.
+  no ID and is not detected; a review must still name it. Closed 2026-11-20
+  by T140; see the T140 section at the end.
 - A worker follow-up that carries a transition must report the accepted
   revision, which a worker cannot know mid-flight; such reports are refused
   with a journal note. Reviews, which learn the revision from the prompt,
@@ -768,8 +778,9 @@ blocked task whose resume condition requires the task itself. Core code:
   quiet on honest conditions.
 - Plain text reads the task file (`c.Todo`); JSON doctor diagnoses the
   saved state, as it always has. A condition that names no identifier at
-  all (Charlie T040's summary "waits for save work to resume") stays
-  outside the check, as documented for T124.
+  all (Charlie T040's summary "waits for save work to resume") stayed
+  outside the check, as documented for T124, until T140 extended it on
+  2026-11-20; see the T140 section at the end.
 
 Tests: `internal/looper/circular_condition_test.go` (detection table, legacy
 JSON, version 2 JSON with the deferral exemption, plain text with the
@@ -1294,3 +1305,746 @@ Validation, 2026-11-18:
 
 Docs updated: `docs/observability.md` (restart paragraph, monitor row),
 `docs/AGENT-CONTRACT-MIGRATION.md` (change-log row).
+
+## Tracked reference schema implemented, 2026-11-19 (T117)
+
+A project can now declare a tracked reference schema with
+`LOOPER_SCHEMA_REFERENCE=<repo-relative path>` (for example
+`docs/to-do.schema.json`). The controller resolves the declaration in
+`OpenRepository` (`Repository.SchemaReference`) and respects it in both
+places that transport the control-file schema:
+
+- `Repository.Workspace` seeds every assembled tree from the reference
+  bytes directly (`schemaSeed`), so a drifted run-root copy can never
+  reach a worktree while the declaration is in effect — not even a copy
+  that drifts again after startup.
+- `Engine.reconcileSchemaControlFile` (called from `initializeState`
+  before bootstrap or resume assembles anything) refreshes the run-root
+  control file to the reference bytes whenever they differ, recording one
+  `schema-refreshed` journal event. Without a declaration both sites keep
+  the earlier behavior exactly: the built-in default is written only when
+  the file is absent, and an existing copy is never touched.
+
+Without a declaration nothing changes; with one, a declaration that names
+a path outside the repository (refused in `Parse` with
+`schema_reference_invalid`), a control or runtime path, a symlink, a
+directory, a missing file, or invalid JSON (refused in
+`setSchemaReference`) fails before any seed honors it halfway. The
+declaration is per controller environment: every CLI invocation that
+assembles or publishes (publish, recovery, settings) should carry the
+same variable, or it simply sees no declaration.
+
+Tests: `internal/looper/schema_reference_test.go` — startup refresh with
+the journal event, worktree seeding from tracked content beside the
+checked-out reference, mid-run root drift held out, undeclared behavior
+pinned byte-for-byte, the refusal table, and the `Parse` env handling.
+
+Validation, 2026-11-19:
+
+- Live, built CLI on a private fixture (stub agent failing fast): with
+  the declaration, startup journaled `schema-refreshed` and the drifted
+  39-byte control file became byte-identical to the committed 2,257-byte
+  reference; a second declared run recorded no further refresh; a
+  declaration naming the control file itself and an absolute path both
+  refused with their teaching messages before any agent ran.
+- `go vet ./...` and `gofmt`: clean. Every package except the looper
+  package: pass. `go test ./internal/looper -count=1 -timeout 40m`:
+  pass (775.8 s). A first full-package run under heavy machine load
+  (1,526 s, 2.3× the usual duration) failed only
+  `TestWorkerQuotaPauseResumesAutomatically` and
+  `TestPlanningQuotaPauseResumes`; both pass `-count=3` in isolation and
+  the whole quota family passes repeatedly — the known timing-sensitive
+  quota-resume routes (see the T136 notes above), not this change.
+- The adapter suite `node --test adapters/measuretwice/adapter.test.mjs`
+  cannot run in this worktree: `node_modules` was never installed
+  (`Cannot find package 'measuretwice'`). Pre-existing environment gap;
+  no adapter code changed.
+- This worktree's own runtime copy at the root (`to-do.schema.json`,
+  ignored, untracked) was the stale 1,667-byte pre-cancellation schema
+  the T117 evidence recorded; refreshed it to the shipped 2,257-byte
+  default. A future controller started with
+  `LOOPER_SCHEMA_REFERENCE=docs/to-do.schema.json` now performs that
+  refresh itself.
+
+Docs updated: `docs/configuration.md` (the env var row and a paragraph on
+the control-file contract), the `backlogSchema` comment in
+`internal/looper/types.go`.
+
+## Config show settings line separator fixed, 2026-11-19 (T133)
+
+`looper config --show` ran the effective-settings value into the next
+sentence: `renderConfigShow` wrote `EffectiveSettings(c)` with `fmt.Fprint`
+and the string carries no trailing newline, so the output ended
+`... review frequency 5 [profile]No controller owns this repository; ...`
+on one line. Core code: `internal/looper/config_cmd.go` (one `Fprintln`).
+
+- The fix terminates the line at the render site. `EffectiveSettings`
+  keeps its no-newline contract; the interactive editor path
+  (`settings.go`, `fmt.Fprintln(out, "Effective settings:", ...)`) already
+  terminates the line and is unchanged. The machine-scope text and every
+  other config renderer already ended their lines; a scan found no other
+  run-on in the file.
+- The version 2 JSON document is untouched (only the plain-text renderer
+  changed), so the config schema fixtures stay byte-identical.
+- Regression test `TestConfigShowTextKeepsTheSettingsLineSeparate` pins
+  both cases the finding names: exact whole lines for the label, the
+  no-profile sentence, and the controller sentence, plus the saved-profile
+  case where `[profile]` values reach the effective line. It fails on the
+  unfixed code with the finding's exact run-on shape.
+- Live, built CLI in a scratch project under the task resource prefix:
+  the no-profile case prints the settings value, `No saved profile
+  exists.`, and the controller sentence on three lines; the saved-profile
+  case ends the settings value at `review frequency 2 [profile]` with the
+  controller sentence on its own line; `--contract v2 --json` serves the
+  unchanged document.
+
+## Quota reset cue parsing restored, 2026-11-20 (T148)
+
+Fixes the regression the pass-4 review of `7ca99ed` recorded
+(`looper:finding:quota-reset-cue-parse-regression`): `quotaResetTime`
+(`internal/looper/agent.go`) returned the first full datetime found
+anywhere in a quota-classified message, so a message carrying an incident
+stamp beside its reported reset paused until the wrong time. T142 wrote
+the cue-governed parse (commit `db6f073` on
+`refs/looper-tasks/task-cbf679c7f38a5b70`), but that commit was never
+integrated — T145 and the quick-wins landing `41433c1` were written
+against the tree without it, and T142 was then cancelled on the premise
+the parsing had landed.
+
+- The T142 implementation is recovered verbatim: `quotaResetCue` matches
+  one reset cue (`reset`, `resume`, `retry`, `reopen` — the words the
+  clock reading always required) and the stamp or clock time it introduces
+  on the same line within 32 characters; `quotaStampTime` and
+  `quotaClockTime` hold the per-value parsing. Order: cued value, relative
+  delay, then the first-full-datetime fallback for a message with no cue
+  wording (the T125 reading, kept for every message that reports only its
+  reset).
+- One deliberate merge with T145, which landed after T142 was written and
+  is pinned by its own tests: the ten-minute past tolerance stays inside
+  `quotaClockTime`, so a reported clock minutes past keeps today and the
+  pause's rate-limit fallback reopens it. Restoring `db6f073` byte for
+  byte would have reverted that accepted fix.
+- Tests recovered with it: the seven shape rows in
+  `TestQuotaResetTimeShapes` (both evidence orders, request and
+  maintenance stamps beside cued resets, uncued values below a cued
+  clock, a bare uncued stamp, a relative delay outranking a distant
+  uncued stamp) and `TestAgentQuotaResetPrefersCuedResetTime` through a
+  stub agent.
+- Acceptance probe from the finding, run both ways: input
+  `usage limit exceeded at 2026-11-20T09:00:00+01:00; your quota resets
+  at 2026-11-20T23:55:00+01:00` returns 09:00 on the pre-fix tree (the
+  recorded FAIL) and the cued 23:55 on this tree.
+- Limit T142 recorded stands: a stamp that happens to sit within 32
+  characters after a cue word still answers for that cue; telling those
+  apart needs provider sentence structure no observed message supplies.
+
+Validation, 2026-11-20:
+
+- `go test ./internal/looper -count=1 -timeout 40m`: pass (1 719.9 s under
+  host load). `go vet ./...`: pass. `gofmt` clean on every changed file.
+  `go test ./internal/contractschema ./internal/ui -count=1`: pass.
+- `go test -race ./internal/looper -run 'Quota' -count=1`: pass (128.9 s).
+- Live, built CLI on a private fixture under the task resource prefix
+  (stub worker failing once, incident stamp one hour back, cued reset
+  eight seconds out): the journal `quota` event recorded `retry_at`
+  exactly the cued reset — never the incident stamp — the window expired
+  with the quota wait line, `quota-resume` requeued T1, and the second
+  attempt completed the work (T1 done, no blockers).
+
+## Config unset review_every fixed, 2026-11-20 (T149)
+
+Finding, `looper:finding:config-unset-review-every`: `looper config
+--unset review_every` (plain and `--preview`) exited 2 with
+`review_every must be a nonnegative integer; "" is not`, while
+`--unset jobs` exited 0 and saved. Two defects stacked:
+
+- `projectPatchFields` coerced the empty unset value to `"0"` only for
+  `jobs`, so an unset `review_every` failed numeric validation and the
+  removal branch in `applyProjectPatch` stayed unreachable. The coercion
+  now runs for every numeric setting the patch unsets.
+- Even with the removal branch reachable, the removal could not persist:
+  `Profile.MarshalJSON` wrote a hardcoded `review_every: 5` whenever the
+  pointer was nil, so every saved profile carried the key and an unset
+  re-baked the default as a saved value. The marshaler now omits the key
+  for a nil pointer, matching the struct tag and the load semantics
+  (absent key → nil pointer → built-in default). Every form-based writer
+  sets a non-nil pointer through `ProfileFromSettings`, so only patch
+  results can omit the key.
+
+Behavior after the fix, probed with the built CLI in a scratch project:
+plain and preview unset exit 0, the outcome line reads
+`review_every: 7 -> <nil> (saved)`, the saved profile drops the key, and
+`config --show` reports `review frequency 5 [default]`. `--unset jobs`
+is unchanged (jobs 0 is auto mode, a saved value, not a removal).
+
+Known edge, recorded not fixed: under a live controller the settings
+request protocol carries assignments only, so an unset submits
+`review_every: 0` and the controller saves `review_every: 0` (periodic
+review disabled) rather than removing the key (default cadence). That
+matches how `--unset jobs` behaves on the live path and predates this
+fix; expressing a per-field removal in the request protocol is a
+protocol change outside this task.
+
+Tests: `TestConfigUnsetNumericProjectSettings` covers preview unset
+(removal reported, nothing written) and plain unset beside `--unset
+jobs` (key gone, jobs 0, journal done), with both documents checked
+against the v2 config schema.
+
+Validation, 2026-11-20:
+
+- `go test -timeout 55m -count=1 ./internal/looper`: pass (775.4 s; the
+  Go 10m default panics mid-suite on this fsync-bound package, so every
+  full-suite run needs the Makefile's 30m floor or better).
+- `go test -count=1` over every other package (contractschema, ui):
+  pass. `go vet ./...`: pass. `gofmt` clean on every changed file.
+
+## Controller commits use the configured Git identity, 2026-11-20 (T151)
+
+Finding, `looper:finding:controller-commit-identity-hardcoded`:
+`Repository.Commit` (`internal/looper/git.go`) hardcoded the
+`GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables to
+`Looper <looper@localhost>`, so every controller commit made after the
+history scrub carried a machine identity the scrub decision did not choose
+(11 unpushed commits on main carried it at the finding).
+
+- `commitIdentity` resolves the identity through `git config --get
+  user.name` / `user.email` — the same merged-configuration read
+  `collectPublishEvidence` uses — so the repository's configured identity
+  reaches every controller commit: snapshot, complete, retain-partial,
+  integrate, inspect, baseline refresh, and the branch-recovery seed. A
+  complete configured identity wins (author and committer); the
+  deterministic `Looper <looper@localhost>` pair is the fallback only when
+  nothing complete is configured, because Git refuses an empty ident and a
+  controller must integrate work with no operator present. A partial
+  configuration falls back whole, mirroring the publish guard's
+  completeness rule instead of mixing a configured half with a synthetic
+  one.
+- `Merge` carried a second hardcoded copy (`-c user.name=Looper -c
+  user.email=looper@localhost`). `git merge --no-commit` creates no commit,
+  but Git refuses to start it without an identity (verified: `fatal: empty
+  ident name … not allowed`), so those flags were operational. The merge
+  now rides the same resolved identity through environment variables; no
+  commit records it.
+- Tests: `internal/looper/git_identity_test.go` — the configured local
+  identity, the harness-global identity (the scope walk), the
+  deterministic fallback with every scope empty, a partial configuration
+  ignored, and the merge path on an identity-free repository (the merge
+  must run, stop at its base, and still deliver the content). The two
+  configured-identity tests fail on the pre-fix helper with the finding's
+  shape; the merge test fails with Git's empty-ident refusal when the
+  identity environment is dropped.
+- Live, built CLI on private fixtures under the task resource prefix: with
+  local `user.name`/`user.email` set, Snapshot, Complete, and Integrate
+  carried the configured pair as author and committer and the accepted
+  work still landed as unstaged edits; with `GIT_CONFIG_GLOBAL` and
+  `GIT_CONFIG_SYSTEM` pointed at `/dev/null` and no local identity, the
+  same three commits carried `Looper <looper@localhost>` and the run
+  completed; an unset-variable probe confirmed the host global scope is
+  honored (`reviewer <reviewer@example.com>` appeared).
+- Open operator items, not fixable here: this repository resolves no local
+  identity and the host global is `reviewer <reviewer@example.com>`, not
+  the scrub-decided `nibzard <nibzard@users.noreply.github.com>`, so the
+  owner records the decision with `git config user.name nibzard` and
+  `git config user.email nibzard@users.noreply.github.com` in the
+  repository (workers do not edit repository configuration), and the 11
+  unpushed commits ahead of `origin/main` still carry the machine
+  identity, which only an owner-side re-author or acceptance can settle.
+
+Validation, 2026-11-20:
+
+- `go test ./internal/looper -count=1 -timeout 40m`: pass (765.5 s).
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- `go test ./internal/contractschema ./internal/ui -count=1`: pass.
+- `go test -race ./internal/looper -run 'TestControllerCommit|
+  TestMergeRunsOnARepositoryWithoutConfiguredIdentity|TestPublish|
+  TestIntegrate|TestPrepare' -count=1`: pass.
+
+Repair round 1, 2026-11-20: the combined check failed `make test` on a
+stalled host, not on the identity change. The check run's own goroutine
+dump showed one fsync inside a recovery subtest stalled for minutes while
+the suite kept progressing, and the two recorded failures were both
+fsync-stall artifacts: `TestQuotaPastClockReopensImminently` expired a
+×3-scaled 30 s poll while T1 was still mid-flight, and the suite alarm
+(a fixed `GO_TEST_TIMEOUT ?= 30m`) aborted a slow-but-progressing suite
+at 1800 s. The host read PSI "full" avg60 ≈ 85 percent both during the
+check and live during this repair, the worst pressure on record
+(`loadbudget_test.go`'s cap was calibrated at 65).
+
+- `quotaWait` now scales its bound against the pressure the host reports
+  while the wait runs, not only at entry: the 60 s pressure average lags
+  a burst, so a stall that arrives mid-wait must extend an already
+  started wait the way `testBudget` sizes a new one.
+- The past-clock test's terminal wait raised from a 30 s base to 90 s: it
+  covers the longest chain in the file (pause, fallback, resume, requeue,
+  the worker's second run) and a live reproduction at PSI ≈ 85 expired
+  the ×5.9-scaled 30 s bound at 232 s with T1 verifiably progressing
+  ("doing", not parked). The imminence itself is asserted from the
+  journaled `retry_at` against the pause time, which do not stretch with
+  the host; only the failure bound moved.
+- `GO_TEST_TIMEOUT` now starts at 30 m and grows with the same pressure
+  anchors through `scripts/go-test-timeout.sh` (floor 30 m, cap 180 m,
+  the six of `maxBudgetFactor`), so a progressing suite on a stalled host
+  runs to completion while a wedged one still fails inside three hours.
+  An explicit `GO_TEST_TIMEOUT=...` still bounds a run on demand.
+
+Repair validation, 2026-11-20, live at PSI "full" avg60 80-90:
+
+- `TestQuotaPastClockReopensImminently`: pass (175.4 s) with the widened
+  bound, after the reproduced failure at 232.6 s.
+- `TestRecoveryApplyUnsupportedChoicesRetainWork`: pass (149.0 s, six
+  subtests) — never failing, only slow.
+- Identity and budget tests: pass; `go vet ./internal/looper`: pass;
+  `gofmt` clean.
+- Full `make test` under the scaled budget (resolved to 116 m at
+  launch): completed with the two further stall failures recorded in
+  the continuation below; the quota and recovery tests named in the
+  check failure both passed inside it.
+
+Repair round 1 continued, 2026-11-20: a first full `make test` under
+the scaled budget (116 m) confirmed the quota and recovery repairs —
+both recorded failures passed — and surfaced two more sites of the same
+stall class, both deadline bounds around one engine run:
+
+- `TestAddTaskRequestWhileWorkerRuns` had already scaled its context
+  (testBudget(30 s)) but the bound was sized once at entry and pressure
+  deepened mid-run: expired at 105 s with the run healthy.
+- `TestCompletedCodexRunWithOversizedLogAppliesResult` used an unscaled
+  fixed 30 s context: expired at 35 s while the worker pushed 100 MiB
+  through a stalled pipe.
+
+A context deadline cannot grow after creation, so `runCtx`
+(`loadbudget_test.go`) cancels from a watchdog that re-sizes the bound
+against live pressure every second — the same semantics quotaWait now
+applies to polls. The three evidenced sites converted (the add-task
+run, the oversized-log run, and the `runClaude` helper's minute); a
+deadline a test forces as its mechanism (an interruption the run is
+expected to hit) stays fixed and is not a conversion candidate. All
+converted tests passed live, as fast as the eased host allowed (9.6 s,
+4.8 s, sub-second Claude cases).
+
+27 further fixed `context.WithTimeout` failure bounds remain
+across the suite (count: `grep -rn "context.WithTimeout"
+internal/looper/*_test.go | grep -v testBudget`). Each is a latent
+flake of this class; converting them needs the per-site judgment above,
+so the class is reported rather than swept blindly here.
+
+Final validation, 2026-11-20: full `make test` under the scaled budget
+(resolved to 39 m at launch on the eased host): pass. `go test ./...`
+green with internal/looper at 600.5 s, `go vet` pass, and the install,
+skill, build, runtime, package-smoke, and skill-regression steps all
+passed. The gate is green end to end with the identity change and the
+stall repairs in.
+
+## MIT license added, 2026-11-20 (T129)
+
+The owner's 2026-11-18 decision (MIT) is now in the tree:
+
+- `LICENSE` at the root carries the canonical MIT text, copyright
+  `2026 nibzard`, the identity every post-scrub commit already carries.
+- The README states the license in a new License section.
+- `Formula/looper.rb` declares `license "MIT"`. Homebrew audit expects
+  the stanza, and the next release re-cuts the formula checksum anyway.
+- `docs/release-notes/0.12.0.md` drafts the release note. The version
+  number is provisional until the release decision; rename the file if
+  the next release picks another number.
+
+No per-file headers: MIT does not require them and the tree has no
+header convention, so the repository-wide `LICENSE` file is the whole
+grant. T153's operator prerequisite completed when the owner recorded
+the choice in T129's details; marking T153 done stays with the backlog
+owner, because workers do not edit the backlog.
+
+## Post-scrub private-form regressions fixed, 2026-11-20 (T152)
+
+Three live sites had reintroduced forms the 2026-11-19 scrub removed:
+
+- The T128 review-cost fixture comment named a private project where it
+  meant the Charlie codename; `reconcile_test.go` already used the
+  codename for the same T077 reference.
+- The agents guide's `glm` example named the private provider command
+  instead of `claude-alt` (e7c985c over-reverted the line). The profile
+  catalog in `docs/AGENT-PROFILES.md` already showed the public form.
+- The scrub record's backup-bundle path named the private home instead
+  of `/home/user`.
+
+All three carry the public forms now. The mapping bullets in the
+History scrub section above still name both sides of each
+transformation, as intended.
+
+`scripts/scrub-check.py` keeps new content from reintroducing the
+private forms: `make scrub-check` (and the first step of `make test`)
+fails when tracked content carries them again, case-insensitively. The
+check exempts History scrub lines that name a mapping itself, and it
+never matches the public `zai-org` catalog slugs restored in
+`data.json` because it searches for longer private forms only. The
+private literals are assembled from fragments inside the script, so
+the script itself does not carry them; the other private project names
+stay out of the tree entirely, so the guard covers only the three
+forms this repo's own record names or fixed.
+
+## Live settings removal for review_every, 2026-11-20 (T154)
+
+Closes the T149 known edge, `looper:finding:config-live-unset-removal`:
+under a running controller, `config --unset review_every` submitted
+`review_every: 0` and the controller saved 0 (periodic review
+disabled) while the stopped path removed the key (default cadence 5).
+
+- Protocol change, additive within envelope version 1: a settings
+  request may carry `null` for exactly one field, `review_every`
+  (`removableSettingKey`). `applySettingsRequest` accepts it and
+  `patchProfile` turns it into a removal (`p.ReviewEvery = nil`), so
+  the saved profile drops the key and the built-in default applies.
+  Every other field keeps the unchanged `must not be null` refusal,
+  because its zero value is a saved state (empty string, jobs 0 auto).
+- `projectPatchFields` renders an unset `review_every` as `null`; the
+  jobs unset keeps `0`. The removal branch that T149 added after
+  `patchProfile` is gone: null now flows through one code path, so the
+  stopped, preview, and live paths share the patch renderer, the
+  profile applier, and the payload digest.
+- A numeric `--set review_every=null` stays refused (one removal
+  spelling). The interactive form and the dashboard still diff numeric
+  snapshots through `changedFields`, so they assign numbers as before.
+- Compatibility: an older controller refuses the null envelope with
+  `review_every must not be null` and changes nothing; an older client
+  submitting 0 still assigns 0. An idempotency key reused from the old
+  `0` submission conflicts, as any changed payload does. The ack
+  outcome is `saved; applies on the next controller run`; the
+  effective cadence keeps its snapshot mid-run.
+- Tests: `TestApplySettingsRequestRemovesOptionalReviewEvery`,
+  `TestApplySettingsRequestRefusesNullOutsideOptionalKey` (protocol),
+  `TestProjectPatchFieldsRemovalSpelling` (renderer), and
+  `TestConfigLiveUnsetReviewEveryRemovesSavedCadence` (live round trip
+  on the lock-and-metadata harness: envelope carries null, profile
+  drops the key, ack applied). All four fail on the pre-fix tree;
+  `TestConfigUnsetNumericProjectSettings` (T149) keeps pinning the
+  stopped path.
+
+Validation, 2026-11-20:
+
+- Live, built CLI on a private fixture under the task resource prefix
+  (stub agent, detached controller): stopped set saved
+  `review_every: 7`; live `config --unset review_every --wait`
+  applied; the saved profile dropped the key; a fresh invocation
+  reported `review frequency 5 [default]`; the durable receipt read
+  `applied_fields: [review_every]`,
+  `restart_required_fields: [review_every]`; `stop --wait` drained
+  cleanly.
+- `go test ./... -count=1 -timeout 59m`: pass (internal/looper
+  759.5 s). `go vet ./...`: pass. `gofmt` clean. `make scrub-check`:
+  clean. `-race` on the settings/config-live families: pass.
+- `make build` then `python3 scripts/runtime-test.py`: 73 tests pass
+  in 315.8 s. The installer, package-smoke, and skill-regression steps
+  of `make test` were not rerun; this change touches the settings
+  protocol, the config command, and documents only.
+
+## Fixed test-deadline bounds converted to runCtx, 2026-11-20 (T155)
+
+Closes the leftover the T151 repair round reported: the 27 fixed
+`context.WithTimeout(context.Background(), <fixed>)` failure bounds in
+`internal/looper/*_test.go` are now pressure-scaled `runCtx(t, base)`
+bounds. Count after the change:
+`grep -rn "context.WithTimeout" internal/looper/*_test.go | grep -v
+testBudget` returns 8, all mechanism sites.
+
+- 19 grep sites converted (20 bounds: the transport site split its two
+  arms): event_identity, context_live (`runContextEval`, the opt-in
+  paid comparison), import_recovery (both crash-helper children),
+  recovery (`testUnattendedRecovery`), resume (the second-attempt
+  run), retained_merge (all four), operator_workflow (`runEngine`),
+  detect, noanimation, failure (`cleanupAuditCase`), transport (the
+  missing-report arm), request_lifecycle (the crash helper),
+  verbose (both), publication_snapshot, and requeue.
+- Per-site judgment, applied to the rule and not only to the task's
+  illustrative file list:
+  - The four retained_merge bounds are failure guards, not mechanisms:
+    no retained_merge test asserts `DeadlineExceeded`, the healthy run
+    or reopen ends on its own, and an expired deadline fails the test
+    ("worker did not finish", or exit 130 against the expected blocked
+    exit 2). The task text named retained_merge among mechanism files,
+    but those four sites never force the deadline, so they convert.
+  - The transport hang arm does force its deadline (it asserts
+    `DeadlineExceeded` after a report that never comes) and the task's
+    file list omitted it. The site is split: the hang arm keeps a
+    fixed 200 ms context; the missing-report arm converts its 5 s
+    guard to `runCtx`.
+- Kept fixed, each a deadline the test itself forces:
+  `TestIdleControllerDoesNotPlanWithoutWork` (dashboard),
+  `TestOverdueReviewSurvivesCancellationAndRestart` (review_recovery),
+  both memory throttle tests,
+  `TestNilPlanRecoverySurvivesCancellationAndRestart`,
+  `TestRunResumesOneOfTwoOverlappingRetainedAttempts` (resume), and
+  `TestTimingRecordsProcessOutcomes` (200 ms over a `sleep 10`
+  command). Each asserts `DeadlineExceeded` or reads the cancellation
+  as its outcome.
+- Four files dropped their `context` import after the conversion
+  (context_live, retained_merge, detect, noanimation).
+
+Validation, 2026-11-20:
+
+- All 27 affected tests plus the seven unchanged mechanism tests pass
+  together (`go test -run` over the full set, 34.1 s).
+- Full `internal/looper` package suite under the scaled budget: pass
+  (594.1 s, exit 0; the first attempt was stopped by the runner's
+  10-minute default background limit, not by a test failure, and the
+  rerun with a longer window completed). `go vet ./internal/looper`:
+  pass. `gofmt` clean. `go test ./internal/contractschema
+  ./internal/ui`: pass. `make scrub-check`: clean.
+
+## Worker reconciliation enabled, 2026-11-20 (T139)
+
+Closes the T124 limit `looper:finding:worker-reconciliation-source`: a worker
+summary's follow-ups can now carry the reconciliation transitions, so reviews
+are no longer the only source.
+
+- The agent summary schema (`internal/looper/agent.go`, the structured-output
+  contract each adapter enforces) gains optional `transition` and `revision`
+  on each follow-up object. Before this, `additionalProperties: false` made a
+  worker's report of those fields invalid before it ever reached the engine.
+- The revision guard splits by source (`findingStage.verifiedRevision`,
+  `internal/looper/findings.go`). A review still names the accepted revision
+  its prompt taught (`e.State.Tip`, unchanged; the existing
+  `TestReconciliationRefusesStaleRevision` keeps passing). A worker names the
+  base its worktree assembled from, and that base counts only while the
+  accepted revision still
+  is that base (a blocked report with nothing integrated since dispatch) or
+  the verification commit that attempt's own verified work became on top of it
+  (`a.Verification.Commit` with `a.Verification.Base == a.Base`, the completed
+  path after `publish`). A check that merged another attempt's work first —
+  `a.Verification.Base != a.Base`, the chained-candidate case — refuses the
+  report: the tree moved past what that worker read. The refusal note teaches
+  the revision the worker should have carried, or names the unread work.
+- `applyResult` opens `beginWorkerStage(a)`, so the guard reads the reporting
+  attempt. Review and skip paths keep `beginFindingStage`. A retained result
+  replays with its saved base and verification, so a restart re-applies the
+  same transition exactly once.
+- The worker prompt (`workerPrompt`, now taking the attempt base) names the
+  base revision and teaches both fields. The 4 KiB budget the long-goal
+  scenario pins (`TestWorkerPromptRefersToCompleteGoalWhenLong`) had 180 bytes
+  of headroom while the teaching costs about 200, so three template phrases
+  were shortened without dropping an instruction: "in your implementation" out
+  of the ignore-rules line, "until recovery completes" → "for recovery", and
+  "The registered Docker cleanup can then find each owned container" → "The
+  Docker cleanup then finds each owned container". The scenario measures
+  3 916 bytes before and 4 070 after (26 spare), and a new test pins both the
+  teaching and the budget.
+- Docs: `docs/tasks-and-checks.md` records both report sources and the guard;
+  `docs/AGENT-CONTRACT-MIGRATION.md` carries the dated row. The frozen status
+  projection already cleared both keys from `attempts[].summary.followups[]`
+  (T124), so no served document or fixture changes.
+
+Tests: `internal/looper/worker_reconcile_test.go` — resume from the base on a
+blocked report, resume after the attempt's own verification, refusal for a
+baseline the attempt never read, refusal for a revision it cannot know, a
+baseless synthetic attempt refused, the review guard unchanged, the schema
+enum, the prompt teaching inside the budget, the full run through the fake
+worker agent (the stub copies the base revision out of its own prompt and the
+resumed task then runs to completion), and the retained-state replay.
+
+Limits kept, not fixed here:
+
+- A worker whose check chained behind another attempt's candidate (the
+  `checks[len-1]` base in `Run`) reports against a base the controller has
+  already moved past; its reconciliation is refused and the next review
+  reconciles. Widening that needs reasoning about co-worker diffs the worker
+  never saw.
+- The prompt still teaches no `defer_until` on a reconciliation; that
+  combination is refused by `add`, as before.
+
+Validation, 2026-11-20:
+
+- Live, built CLI on a private fixture under the task resource prefix (stub
+  worker that copies the base revision out of its own prompt): T1's report
+  carried `transition: resume` with its worktree base, and the journal
+  recorded `T2  Reconciled resume at <verification commit> ... Evidence: T1
+  wrote the input file at <base>`; T2 then dispatched and completed; the final
+  review closed the goal; exit 0; one `Reconciled resume` and zero `Ignored
+  reconciliation` events. The saved attempt retains the proposal (transition
+  plus the base revision) beside its base and verification, and plain
+  `status --json` shows the retained follow-up with neither key, so the frozen
+  projection holds. A second fixture whose stub reported a foreign 40-hex
+  revision was refused: `it verified revision deadbeef... while the controller
+  accepted <verification commit>; a worker reconciliation names the revision
+  its worktree started from (<base>)`, and T2 stayed blocked.
+- Focused suites and the broad regression set (reconcile, findings, results,
+  reviews, prompts, context, compatibility, legacy, compact status, quota):
+  pass. `go vet ./...`: pass. `gofmt` clean. `make scrub-check`: clean.
+  `go test ./internal/contractschema ./internal/ui -count=1`: pass.
+- `go test -timeout 40m -count=1 ./internal/looper`: pass (631.9 s, exit 0).
+  The first attempt was stopped by the runner's ten-minute background limit
+  with the package mid-run (the T155 runner-limit class), not by a test; the
+  rerun under a 45-minute window completed green.
+
+## Identifier-free circular wording detected, 2026-11-20 (T140)
+
+Closes the limit the T124 and T135 sections recorded
+(`looper:finding:circular-condition-semantics`): a condition that names no
+task identifier — the audit's Charlie T040 wording "waits for save work to
+resume" — escaped both the reconcile guard and the doctor warning, and a
+review's `resume` transition would have been applied to it.
+
+- Doctor warning (`circularResumeCondition`, `internal/looper/observe.go`)
+  gains two readings. The subject-position identifier check gains the
+  resumption events, so the retained Charlie unblock wording "T040
+  auto-save work resumes" warns exactly like "T040 starts implementation".
+  A new `idFreeCircularWording` reads a condition that names no task at
+  all: when the words before one progress event name the task's own
+  implementation, its own deferral round, or a significant word of its
+  title — its own scope — the condition requires the task itself. A
+  deferral reference paired with its resolution word inside one clause
+  ("its deferred tag" with "lost", "lifted", "cleared") counts the same
+  way. A significant title word is a title token after dropping function
+  words, the event vocabulary, and project vocabulary nearly every title
+  carries ("work", "system", "section", "test"); "save" is the scope word
+  that catches T040 ("Auto-save system working per section 18").
+- Quiet by construction, each exemption mirroring the identifier check: a
+  condition naming any task identifier keeps its positional reading; an
+  event governed by an external cue after it ("resumes when the migration
+  lands") or in a preceding clause ("after the migration lands, the save
+  work resumes") explains a consequence; a consequence connector ("then",
+  "before") does the same; a cue in the same clause before the event is
+  requirement position, not a consequence ("waits until the save work
+  resumes" warns); and a subject outside the title scope names other work
+  ("waits for the art direction pass to resume" stays quiet on the
+  auto-save task). The "Deferred: " label is stripped before reading, so
+  the boilerplate never pairs with a resolution word by itself.
+- Consequence reading repaired in the reopened session (the first attempt
+  stopped at the usage limit before its suite finished): the connector and
+  cue exemptions first read only the word directly before the event or
+  mention, so subject words in between re-introduced false positives the
+  resumption vocabulary made reachable — "after the operator grants
+  access, the T027 work resumes", "T085 must land before the T027 work
+  starts", "the migration lands, then the save work resumes", and "the
+  migration must land before the save work resumes" all warned. Both paths
+  now split the text before the event at the last clause boundary
+  (`clauseBefore`): a consequence connector anywhere in the event's own
+  clause, or an external cue anywhere before that clause, explains the
+  event. A conjunction without a cue or connector ("the operator grants
+  access, and the T027 work starts") still warns, and every pinned
+  circular shape keeps warning.
+- Reconcile guard (`circularConditionReason`, `internal/looper/findings.go`,
+  replacing the bool `circularCondition`): the any-mention reason is
+  unchanged byte-for-byte; the identifier-free shape escalates with its own
+  reason, "the unblock condition requires task <id>'s own work, so no
+  independent prerequisite can satisfy it". Both the transition guard and
+  the repeated-plain-finding path use it.
+- Replay validation, read-only, against the retained Charlie and Ohya
+  saved states (current `state.db` plus the five Charlie history
+  snapshots): the new shape flags exactly two conditions, Charlie T054
+  ("Deferred: Real audio and art production begins, before version 1
+  ship") and T063 ("Deferred: The cafe building art pass starts"). Both
+  are re-wordings of circular blockers the T135 replay already flagged
+  with their identifier ("T054 real audio production begins") or that
+  carry no independent owner at all; no previously quiet honest condition
+  changed verdict. The findings.go any-mention guard also reports
+  mention-only tasks (T051, T052, T074, T077, T082) exactly as before.
+- Docs: `docs/observability.md` (the three textual shapes and the new
+  honest examples), `docs/tasks-and-checks.md` (the escalation wording),
+  and a dated row in `docs/AGENT-CONTRACT-MIGRATION.md`.
+
+Tests: `internal/looper/circular_condition_test.go` gained eleven table
+cases (the identifier-free circular shape, the identifier-plus-resumption
+shape, the deferral-round shape, the honest quiet shapes, and the five
+consequence-repair cases: cue-clause, connector, identifier-free connector,
+identifier-free before, and the still-warning conjunction) and the doctor
+fixture gained T106/T107 (warn, quiet); `internal/looper/reconcile_test.go`
+gained `TestReconciliationEscalatesIdentifierFreeCircularCondition`
+(escalation, its reason, one decision across repeated reports).
+
+Limits kept, not fixed here:
+
+- The scope match is exact-word after splitting. A condition that
+  references the task's scope in a different form (Charlie T066's
+  "brewing" against its title's "brewed") stays quiet unless an
+  identifier appears; stemming would trade that quiet for new false
+  positives, and the recorded circular wording repeats title words.
+- The scope proxy cannot tell two tasks that share a subject ("the cafe
+  building art pass" on a cafe-building task). Every state the replay
+  checked flags such a condition only when no tracked task owns the
+  event, which is the class the audit defined; an operator decision
+  records the real prerequisite either way.
+
+Validation, 2026-11-20 (reopened session):
+
+- `make test` on the final tree: pass — build, scrub-check, `go test`
+  (internal/looper 623 s), vet, the install and package scripts, and
+  skill regression. The first two attempts were stopped by the runner's
+  ten-minute background limit with the package mid-run (the T155
+  runner-limit class), not by a test; the detached rerun completed green.
+- `go test -race ./internal/looper -run 'TestCircularResumeCondition|
+  TestDoctorWarnsOnCircularResumeCondition|TestCompactStatusKeepsCircularWarning|
+  TestReconciliationEscalates|TestRepeatedPlainFindingEscalatesOneDecision'`:
+  pass. `gofmt` and `go vet` clean on every changed file.
+- The read-only replay against the retained Charlie and Ohya saved states
+  was rerun after the consequence repair: every verdict above is
+  unchanged, and no previously quiet honest condition changed.
+- End-to-end `looper doctor` on a throwaway fixture: the identifier-free
+  and deferral shapes warn, the connector and cue-clause shapes stay
+  quiet, the task file stays byte-identical, and warnings keep exit 0.
+
+## Bootstrap adopts a task file supplied during the agent call, 2026-11-20 (T144)
+
+Closes the limit the T141 section recorded: `bootstrapResponse` ended with an
+unconditional `writeJSON(e.Config.Todo, b)`, so a task file created while the
+bootstrap agent call itself ran — a window of minutes — was overwritten by
+the completed bootstrap result. T141's adoption covered only the quota wait
+it added. Core code: `internal/looper/engine.go` (the guard in
+`bootstrapResponse`, the `importID` parameter), `internal/looper/quota.go`
+(`adoptSuppliedTaskFile`, the shared helper both windows call).
+
+- The guard sits where the agent call returns, not only in front of the final
+  write: any file present at that point appeared during the call, because
+  `initializeState` reaches bootstrap only when the task file is absent.
+  Checking before validation also adopts an answer that would have been
+  refused, instead of spending a correction round over a file that already
+  supersedes it; `TestBootstrapAdoptsSuppliedFileBeforeTheCorrectionRound`
+  pins that with a call log proving bootstrap ran exactly once.
+- The adoption is the T141 wait adoption, factored into
+  `adoptSuppliedTaskFile`: the operator's bytes stay on disk, the startup
+  parse below the bootstrap branch validates them like any startup input,
+  the completed result is discarded with its workspace, one `bootstrap`
+  journal event names the window it appeared in, and supplied startup plans
+  lose their bootstrap staging record so the ordinary startup import analyzes
+  them against the operator's backlog (otherwise `adoptStagedImports` would
+  record them as covered by a bootstrap that never produced the file).
+- Everything else on the start path is untouched: the missing-task-file
+  refusal, saved-identity checks, the quota wait and its budget, drain and
+  cancellation exits, and the startup seed. A quota pause armed by an earlier
+  closure stays armed across the adoption, exactly as the T141 wait adoption
+  leaves it, so the loop the adoption reaches still gates review and planning
+  until `expireQuotaPauses` reopens the window.
+- Residual window, accepted: the stat and the write are two steps, so a file
+  created in the microseconds between them is still overwritten. The task
+  contract prescribes the stat guard; closing the gap fully needs an
+  exclusive-create write path, which would change `writeJSON` for every
+  caller.
+- A supplied file that is invalid gets the same treatment as any invalid
+  startup input: the adoption keeps it on disk, the strict startup parse
+  refuses it, and the start exits naming the file and the parse error. The
+  operator's bytes are never overwritten to make a start succeed.
+
+Tests: `internal/looper/bootstrap_supply_test.go` — the acceptance route
+(the stub writes the operator's file inside its bootstrap invocation, then
+answers with the competing bootstrap backlog; the operator's bytes survive
+on disk and as the saved baseline, the staging record of a supplied startup
+plan is removed, the plan reaches the ordinary import records, and the once
+run completes) and the correction route above. Both fail on the pre-fix
+tree: the first loses the adoption event, the second exits 1 with "bootstrap
+backlog rejected after correction".
+
+Validation, 2026-11-20:
+
+- `go test ./internal/looper -run 'TestBootstrap|TestQuota|TestStartup|
+  TestImport|TestLegacyContract' -count=1`: pass (131 s), and
+  `go test -race ./internal/looper -run 'TestBootstrap|TestQuota'`: pass.
+- `go vet ./...`: pass. `gofmt` clean on every changed file.
+- Live, built CLI on a private fixture under the task resource prefix
+  (stub bootstrap writing the operator's file inside its invocation, then
+  answering with a competing bootstrap backlog): `looper --once --agent
+  codex` journaled "The task file appeared during the bootstrap agent call;
+  startup adopts the operator's file and skips bootstrap", the task file and
+  the saved baseline kept the operator's goal and task, the bootstrap
+  backlog never landed, and the run finished "Project goal satisfied."
+  (exit 0). With `--plan`, the same run queued the plan through the ordinary
+  startup import ("Analyzing imported requirements"), left no bootstrap
+  staging record, and kept the operator's backlog authoritative.
+- Full-package and full-repo results are recorded in the task report.

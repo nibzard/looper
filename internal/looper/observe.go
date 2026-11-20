@@ -153,16 +153,19 @@ func statusReport(c Config, snap *StoreSnapshot, timing TimingReport, statistics
 	// The legacy status document is shape-frozen (AX-001) and its schema
 	// admits no export_semantics, requests, cancellations, or startup_seed
 	// key. Those are saved-state machinery — the AX-018 fingerprint, the
-	// AX-009 request receipts, the AX-019 pending cancellations, and the
-	// AX-022 startup seed that marks the bootstrap window — so the
-	// projection reports a copy of the state without them; omitempty then
-	// leaves each key out. The copy is shallow and read-only, so the
-	// engine's state keeps every hidden field.
+	// AX-009 request receipts, the AX-019 pending cancellations, the AX-022
+	// startup seed that marks the bootstrap window, and the T128 review
+	// coverage record — so the projection reports a copy of the state
+	// without them; omitempty then leaves each key out. The copy is shallow
+	// and read-only, so the engine's state keeps every hidden field.
 	state := *snap.State
 	state.ExportSemantics = ""
 	state.Requests = nil
 	state.Cancellations = nil
 	state.StartupSeed = false
+	state.ReviewedTree = ""
+	state.ReviewedComplete = false
+	state.ReviewedImports = 0
 	// The structured block reason is version 2 output (OW-10): the legacy
 	// and --full documents share this frozen shape and admit no
 	// block_reason key on nested tasks. The compact documents carry it.
@@ -297,9 +300,11 @@ var selfRequirementWords = map[string]bool{
 }
 
 // selfProgressWords name the events a blocked task's own clause can require:
-// the task starting, beginning, landing, or becoming unblocked. Completion
-// words stay out — "T077 outcome verified complete" reports an outcome, and
-// a resume consequence ("T027 resumes") follows an external prerequisite.
+// the task starting, beginning, landing, becoming unblocked, or resuming its
+// work ("T040 auto-save work resumes", the retained Charlie wording).
+// Completion words stay out — "T077 outcome verified complete" reports an
+// outcome, and a resume consequence that follows an external cue ("after the
+// operator grants access, T027 resumes") is exempt before this set is read.
 var selfProgressWords = map[string]bool{
 	"start": true, "starts": true, "started": true, "starting": true,
 	"begin": true, "begins": true, "began": true, "beginning": true,
@@ -307,6 +312,7 @@ var selfProgressWords = map[string]bool{
 	"finish": true, "finishes": true, "finished": true,
 	"land": true, "lands": true, "landed": true, "landing": true,
 	"ship": true, "ships": true, "shipped": true,
+	"resume": true, "resumes": true, "resumed": true, "resuming": true,
 }
 
 // consequenceConnectors mark the identifier as the later, explained event:
@@ -371,13 +377,39 @@ func firstWords(s string, n int) []string {
 	return words
 }
 
+// clauseBefore splits the text before one event or mention into its own
+// clause so far and the text before that clause: the last comma, semicolon,
+// or colon ends a clause, so the segment is what the same clause said
+// before the event and before holds every earlier clause.
+func clauseBefore(prefix string) (segment, before string) {
+	if at := strings.LastIndexAny(prefix, ",;:"); at >= 0 {
+		return prefix[at+1:], prefix[:at]
+	}
+	return prefix, ""
+}
+
+// connectorInWords reports whether s carries a consequence connector: a
+// clause that said "then" or "before" explains the event that follows the
+// connector instead of requiring it.
+func connectorInWords(s string) bool {
+	for _, w := range firstWords(s, 0) {
+		if consequenceConnectors[w] {
+			return true
+		}
+	}
+	return false
+}
+
 // mentionRequiresTask reports whether one occurrence of a blocked task's
 // identifier, at lowered[at:], requires the task itself. Two shapes count:
 // the identifier in requirement position ("waits for T027 to start"), and
 // the identifier in subject position with its own progress as the event
-// ("T027 starts implementation", "T066 is unblocked"). A mention that
-// follows a consequence connector, an external clause, or an external cue
-// explains what happens after a prerequisite and never counts.
+// ("T027 starts implementation", "T066 is unblocked"). A mention whose own
+// clause carries a consequence connector, that follows a clause with an
+// external cue, or that an external cue governs ("T027 resumes when the
+// migration lands") explains what happens after a prerequisite — with or
+// without subject words in between ("before the T027 work starts") — and
+// never counts.
 func mentionRequiresTask(lowered string, at int, id string) bool {
 	prefix, rest := lowered[:at], lowered[at+len(id):]
 	if selfRequirementWords[lastWord(prefix)] {
@@ -388,7 +420,8 @@ func mentionRequiresTask(lowered string, at int, id string) bool {
 	if strings.HasPrefix(rest, "'") || strings.HasPrefix(rest, "’") {
 		return false
 	}
-	if consequenceConnectors[lastWord(prefix)] || followsExternalClause(prefix) || cueInFirstWords(rest) {
+	segment, before := clauseBefore(prefix)
+	if connectorInWords(segment) || hasExternalCue(before) || cueInFirstWords(rest) {
 		return false
 	}
 	return progressWordInWindow(rest)
@@ -437,22 +470,6 @@ func progressWordIsLabel(rest string, end int) bool {
 	return len(next) == 1 && next[0] == "by"
 }
 
-// followsExternalClause reports whether the identifier starts a new clause
-// after a comma or semicolon whose preceding text carries an external cue,
-// as in "after the operator grants access, T027 ...".
-func followsExternalClause(prefix string) bool {
-	trimmed := strings.TrimRight(prefix, " \t")
-	if !strings.HasSuffix(trimmed, ",") && !strings.HasSuffix(trimmed, ";") {
-		return false
-	}
-	for _, w := range firstWords(trimmed, 0) {
-		if externalCues[w] {
-			return true
-		}
-	}
-	return false
-}
-
 // cueInFirstWords reports whether an external cue governs the identifier's
 // own clause, as in "T027 starts verification when the migration lands".
 func cueInFirstWords(rest string) bool {
@@ -465,17 +482,18 @@ func cueInFirstWords(rest string) bool {
 }
 
 // circularResumeCondition returns the blocker or resume condition that
-// requires the blocked task itself to start, finish, or become unblocked.
-// No independent prerequisite can satisfy such a condition, so the task
-// cannot leave the queue — the recorded Charlie shapes (delivery audit
-// 2026-11-17) are "Waits for T027 to start implementation", "T027 starts
-// implementation", and "T066 is unblocked". A condition that names another
-// task, or one that mentions this task only as the work that follows an
-// external prerequisite ("after the operator grants access, T027 resumes"),
-// reports nothing. The reconcile guard (circularCondition in findings.go)
-// stays broader on purpose: an automatic transition escalates on any
-// mention of the task itself, while this warning must stay quiet when the
-// recorded condition is honest.
+// requires the blocked task itself to start, finish, resume, or become
+// unblocked. No independent prerequisite can satisfy such a condition, so
+// the task cannot leave the queue — the recorded Charlie shapes (delivery
+// audit 2026-11-17) are "Waits for T027 to start implementation", "T027
+// starts implementation", "T066 is unblocked", and the identifier-free
+// "Waits for save work to resume" (T040, whose own scope is the save work).
+// A condition that names another task, or one that mentions this task only
+// as the work that follows an external prerequisite ("after the operator
+// grants access, T027 resumes"), reports nothing. The reconcile guard
+// (circularConditionReason in findings.go) stays broader on purpose: an
+// automatic transition escalates on any mention of the task itself, while
+// this warning must stay quiet when the recorded condition is honest.
 func circularResumeCondition(t Task) string {
 	if t.Status != "blocked" || t.ID == "" {
 		return ""
@@ -494,8 +512,262 @@ func circularResumeCondition(t Task) string {
 				return condition
 			}
 		}
+		if idFreeCircularWording(condition, t) {
+			return condition
+		}
 	}
 	return ""
+}
+
+// idFreeEventWords name the events an identifier-free condition can require
+// of the blocked task itself: its own progress (the selfProgressWords
+// vocabulary) plus the resumption and deferral-round endings the recorded
+// identifier-free shapes carry. A condition that names any task never reads
+// this set; the positional identifier check governs it.
+var idFreeEventWords = func() map[string]bool {
+	words := map[string]bool{
+		"lost": true, "lifted": true, "cleared": true,
+	}
+	for w := range selfProgressWords {
+		words[w] = true
+	}
+	return words
+}()
+
+// deferralResolutionWords name the ending of the task's own deferral round.
+// They pair with a deferral reference inside one clause, because only the
+// task's own resumption (or the operator edit that resumes it) ends the
+// deferral — the recorded "T027 starts implementation and lose its deferred
+// tag" without the identifier.
+var deferralResolutionWords = map[string]bool{
+	"lose": true, "loses": true, "lost": true, "lifted": true,
+	"cleared": true, "gone": true,
+}
+
+// idFreeSelfWords name the blocked task's own subject matter without its
+// identifier: its implementation, or the deferral round only its own
+// resumption ends.
+var idFreeSelfWords = map[string]bool{"implementation": true, "deferral": true, "deferred": true}
+
+// subjectFillerWords carry no subject matter inside a noun phrase, so the
+// subject scan steps over them without spending its word budget.
+var subjectFillerWords = map[string]bool{
+	"to": true, "the": true, "a": true, "an": true, "its": true,
+	"their": true, "of": true, "and": true, "or": true,
+}
+
+// scopeStopWords leave a title's significant words: function words, the
+// event vocabulary (a condition echoing the event is not a scope match),
+// and project vocabulary nearly every title carries, which would flag
+// honest conditions that echo it.
+var scopeStopWords = map[string]bool{
+	// Function words.
+	"a": true, "an": true, "the": true, "and": true, "or": true, "of": true,
+	"for": true, "to": true, "in": true, "on": true, "at": true, "by": true,
+	"with": true, "from": true, "into": true, "per": true, "as": true,
+	"is": true, "are": true, "be": true, "been": true, "was": true, "were": true,
+	"it": true, "its": true, "this": true, "that": true, "these": true,
+	"those": true, "when": true, "until": true, "after": true, "before": true,
+	"while": true, "then": true, "than": true, "so": true, "not": true,
+	"no": true, "any": true, "all": true, "every": true, "each": true,
+	"must": true, "should": true, "can": true, "cannot": true, "will": true,
+	"would": true, "may": true, "might": true, "own": true, "new": true,
+	// Event vocabulary.
+	"start": true, "starts": true, "started": true, "starting": true,
+	"begin": true, "begins": true, "began": true, "beginning": true,
+	"unblock": true, "unblocks": true, "unblocked": true, "unblocking": true,
+	"finish": true, "finishes": true, "finished": true,
+	"land": true, "lands": true, "landed": true, "landing": true,
+	"ship": true, "ships": true, "shipped": true,
+	"resume": true, "resumes": true, "resumed": true, "resuming": true,
+	// Project vocabulary nearly every title carries.
+	"work": true, "works": true, "working": true, "worked": true,
+	"task": true, "tasks": true, "implementation": true, "implement": true,
+	"implements": true, "implemented": true, "section": true, "system": true,
+	"systems": true, "acceptance": true, "test": true, "tests": true,
+	"testing": true, "check": true, "checks": true, "make": true,
+	"green": true, "complete": true, "completed": true, "done": true,
+}
+
+// taskIdentifierWord reports whether w spells one task identifier, t
+// followed by digits, as every backlog ID is written (T027, T085).
+func taskIdentifierWord(w string) bool {
+	if len(w) < 2 || (w[0] != 't' && w[0] != 'T') {
+		return false
+	}
+	for i := 1; i < len(w); i++ {
+		if w[i] < '0' || w[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// mentionsTaskIdentifier reports whether s names any task explicitly. A
+// condition that does reads through the positional identifier check, so the
+// identifier-free wording below never rewrites its meaning.
+func mentionsTaskIdentifier(s string) bool {
+	for _, w := range firstWords(s, 0) {
+		if taskIdentifierWord(w) {
+			return true
+		}
+	}
+	return false
+}
+
+// titleScopeWords collects the significant words of one task's title — its
+// own subject matter, which an identifier-free condition can reference:
+// "save work" is the scope of "Auto-save system working per section 18".
+func titleScopeWords(title string) map[string]bool {
+	scope := map[string]bool{}
+	for _, w := range firstWords(strings.ToLower(title), 0) {
+		if !scopeStopWords[w] {
+			scope[w] = true
+		}
+	}
+	return scope
+}
+
+// subjectNamesTask reports whether the words directly before one event word
+// name the blocked task's own subject matter: an explicit self word or a
+// significant word of the task's title. The backward scan stops at a clause
+// boundary or a structural word (a requirement, an external cue, a
+// consequence connector), steps over articles and conjunctions, and reads
+// at most selfProgressWindow subject words — "waits for save work to
+// resume" reads the subject "save work" of the event "resume".
+func subjectNamesTask(prefix string, scope map[string]bool) bool {
+	words := 0
+	for at := len(prefix); at > 0 && words < selfProgressWindow; {
+		r, size := utf8.DecodeLastRuneInString(prefix[:at])
+		if !wordRune(r) {
+			if r == ',' || r == ';' || r == ':' {
+				return false
+			}
+			at -= size
+			continue
+		}
+		end := at
+		for end > 0 {
+			r, size = utf8.DecodeLastRuneInString(prefix[:end])
+			if !wordRune(r) {
+				break
+			}
+			end -= size
+		}
+		w := prefix[end:at]
+		if selfRequirementWords[w] || externalCues[w] || consequenceConnectors[w] {
+			return false
+		}
+		if !subjectFillerWords[w] {
+			if idFreeSelfWords[w] || scope[w] {
+				return true
+			}
+			words++
+		}
+		at = end
+	}
+	return false
+}
+
+// hasExternalCue reports whether s carries a word that introduces an event
+// the task waits for instead of itself.
+func hasExternalCue(s string) bool {
+	for _, w := range firstWords(s, 0) {
+		if externalCues[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// idFreeCircularWording reports whether one condition that names no task at
+// all still requires the blocked task's own progress. The recorded shape
+// (delivery audit 2026-11-17, Charlie T040) is "Waits for save work to
+// resume": no identifier appears, and the condition's subject is the task's
+// own scope with its own progress as the required event. A deferral
+// reference paired with its resolution word inside one clause counts the
+// same way, because only the task's own resumption ends its deferral.
+//
+// Quiet by construction: a condition naming any task is left to the
+// identifier check; an event word governed by an external cue after it or
+// in a preceding clause, or by a consequence connector in its own clause,
+// explains what follows a prerequisite — subject words between the
+// connector or cue and the event change nothing; a clause carrying an
+// external cue never pairs a deferral with its resolution; and a subject
+// that matches neither a self word nor the task's title scope names
+// something else.
+func idFreeCircularWording(condition string, t Task) bool {
+	lowered := strings.ToLower(strings.TrimSpace(condition))
+	if lowered == "" || mentionsTaskIdentifier(lowered) {
+		return false
+	}
+	// The "Deferred: " label a deferred blocker carries names the recorded
+	// state, not the deferral round as a subject; drop it before reading.
+	if head, rest, found := strings.Cut(lowered, ":"); found && strings.TrimSpace(head) == "deferred" {
+		lowered = strings.TrimSpace(rest)
+		if lowered == "" {
+			return false
+		}
+	}
+	scope := titleScopeWords(t.Title)
+	clauseStart := 0
+	clauseDeferral, clauseResolution := false, false
+	closeClause := func(to int) bool {
+		if clauseDeferral && clauseResolution && !hasExternalCue(lowered[clauseStart:to]) {
+			return true
+		}
+		clauseDeferral, clauseResolution = false, false
+		clauseStart = to
+		return false
+	}
+	for at := 0; at < len(lowered); {
+		r, size := utf8.DecodeRuneInString(lowered[at:])
+		if !wordRune(r) {
+			if r == ',' || r == ';' || r == ':' {
+				at += size
+				if closeClause(at) {
+					return true
+				}
+				continue
+			}
+			at += size
+			continue
+		}
+		end := at
+		for end < len(lowered) {
+			r, size = utf8.DecodeRuneInString(lowered[end:])
+			if !wordRune(r) {
+				break
+			}
+			end += size
+		}
+		w := lowered[at:end]
+		if w == "deferred" || w == "deferral" {
+			clauseDeferral = true
+		}
+		if deferralResolutionWords[w] {
+			clauseResolution = true
+		}
+		if idFreeEventWords[w] {
+			prefix, rest := lowered[:at], lowered[end:]
+			// The same exemptions the identifier check reads: a connector in
+			// the event's own clause, a cue in an earlier clause, or a cue
+			// after the event explains a consequence — with or without
+			// subject words in between ("the migration lands, then the save
+			// work resumes"). A cue in the same clause does not exempt:
+			// "waits until the save work resumes" stays a requirement.
+			segment, before := clauseBefore(prefix)
+			if connectorInWords(segment) || hasExternalCue(before) || cueInFirstWords(rest) {
+				at = end
+				continue
+			}
+			if !progressWordIsLabel(rest, 0) && subjectNamesTask(prefix, scope) {
+				return true
+			}
+		}
+		at = end
+	}
+	return clauseDeferral && clauseResolution && !hasExternalCue(lowered[clauseStart:])
 }
 
 func diagnose(o Observation, s *State) []HealthFinding {

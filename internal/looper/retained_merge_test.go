@@ -1,7 +1,6 @@
 package looper
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,7 +78,10 @@ func TestRetainedMerge(t *testing.T) {
 				}
 				resultCommit := a.ResultCommit
 				results := make(chan workerResult, 1)
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				// A failure guard, not a mechanism: the healthy reopen or
+				// repair finishes on its own, and an expired deadline fails
+				// the wait below, so the bound scales with host pressure.
+				ctx, cancel := runCtx(t, 5*time.Second)
 				defer cancel()
 				if path == "reopen" {
 					got, err := e.start(ctx, *e.State.Backlog.Task(a.Task.ID), results)
@@ -170,7 +172,10 @@ func TestRunReopenedMergeConflictDoesNotWaitForWorker(t *testing.T) {
 	if err := e.export(); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A failure guard, not a mechanism: the run exits blocked on its own
+	// (code 2), and the bound only fires if the loop wrongly waits, so it
+	// scales with host pressure.
+	ctx, cancel := runCtx(t, 5*time.Second)
 	defer cancel()
 	code, err := e.Run(ctx)
 	if err != nil || code != 2 {
@@ -247,7 +252,9 @@ func TestRetainedMergeFailureWithoutConflict(t *testing.T) {
 			}
 			failingMergeGit(t)
 			results := make(chan workerResult, 1)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// The same failure guard as TestRetainedMerge: the healthy
+			// reopen or repair ends on its own, so the bound scales.
+			ctx, cancel := runCtx(t, 5*time.Second)
 			defer cancel()
 			if path == "reopen" {
 				got, err := e.start(ctx, *e.State.Backlog.Task(a.Task.ID), results)
@@ -382,7 +389,9 @@ func TestRunReopenedMergeFailureDoesNotWaitForWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	failingMergeGit(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The same failure guard as the conflict case: the blocked run exits
+	// on its own, so the bound scales with host pressure.
+	ctx, cancel := runCtx(t, 5*time.Second)
 	defer cancel()
 	code, err := e.Run(ctx)
 	if err != nil || code != 2 {

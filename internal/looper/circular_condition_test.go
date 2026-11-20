@@ -155,9 +155,100 @@ func TestCircularResumeCondition(t *testing.T) {
 			circular: false,
 		},
 		{
-			name:     "condition without any identifier",
-			task:     Task{ID: "T040", Status: "blocked", Blockers: []string{"Waits for save work to resume, or for dependent death-reload work to land"}},
+			// The audit's identifier-free T040 shape: the condition names no
+			// task at all, and its subject is the task's own scope — "save
+			// work" is the subject of "Auto-save system working per
+			// section 18" — with its own resumption as the required event.
+			name:     "own scope resuming without any identifier",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"Waits for save work to resume, or for dependent death-reload work to land"}},
+			circular: true,
+		},
+		{
+			// The retained Charlie T040 unblock wording: the identifier in
+			// subject position with its own work resuming as the event.
+			name:     "own identifier with its work resuming",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", UnblockWhen: "T040 auto-save work resumes; remove looper:deferred and set todo when this condition is met."},
+			circular: true,
+		},
+		{
+			// The deferral round only the task's own resumption ends, with
+			// no identifier at all.
+			name:     "own deferral round ending without any identifier",
+			task:     Task{ID: "T027", Title: "Boss fight playable", Status: "blocked", Blockers: []string{"Waits for implementation to start and its deferred tag to be lost"}},
+			circular: true,
+		},
+		{
+			// An identifier-free condition whose subject matches no scope of
+			// the task names other work, not the task itself.
+			name:     "identifier-free subject outside the task scope",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"Waits for the art direction pass to resume"}},
 			circular: false,
+		},
+		{
+			name:     "identifier-free operator prerequisite stays quiet",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"Deferred: the operator grants access to the shared cluster"}},
+			circular: false,
+		},
+		{
+			// The cue governs the resumption, so an external prerequisite
+			// satisfies the condition.
+			name:     "identifier-free resumption governed by an external cue",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", UnblockWhen: "After the migration lands, the save work resumes"},
+			circular: false,
+		},
+		{
+			// The deferral boilerplate every deferred task's unblock
+			// condition carries is an instruction, not a condition.
+			name:     "deferral boilerplate alone stays quiet",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", UnblockWhen: "remove looper:deferred and set todo when this condition is met."},
+			circular: false,
+		},
+		{
+			// The quota hold's promise names the controller's retry, not the
+			// task's own progress.
+			name:     "quota retry promise stays quiet",
+			task:     Task{ID: "T012", Title: "Auto-save system working per section 18", Status: "blocked", UnblockWhen: "retries automatically at 13:29:01+01:00"},
+			circular: false,
+		},
+		{
+			// A requirement word holds the task in requirement position, the
+			// identifier-free reading of "until T040 finishes".
+			name:     "identifier-free requirement position warns",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"Waits until the save work resumes"}},
+			circular: true,
+		},
+		{
+			// Subject words sit between the cued clause and the resumption
+			// event; the operator grant is still the prerequisite.
+			name:     "cue clause then own-scope subject resumes",
+			task:     Task{ID: "T027", Title: "Auto-save system working per section 18", Status: "blocked", UnblockWhen: "After the operator grants access, the T027 work resumes"},
+			circular: false,
+		},
+		{
+			// The connector governs the clause even with subject words
+			// between it and the event; T085 stays the prerequisite.
+			name:     "connector then own-scope subject starts",
+			task:     Task{ID: "T027", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"T085 must land before the T027 work starts"}},
+			circular: false,
+		},
+		{
+			// The identifier-free consequence of an external event, with the
+			// task's own scope as the subject that follows.
+			name:     "identifier-free connector consequence stays quiet",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"The migration lands, then the save work resumes"}},
+			circular: false,
+		},
+		{
+			name:     "identifier-free before consequence stays quiet",
+			task:     Task{ID: "T040", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"The migration must land before the save work resumes"}},
+			circular: false,
+		},
+		{
+			// A conjunction without a cue or connector still names the
+			// task's own start as an event, so the operator decides.
+			name:     "conjunction without a cue still warns",
+			task:     Task{ID: "T027", Title: "Auto-save system working per section 18", Status: "blocked", Blockers: []string{"The operator grants access, and the T027 work starts"}},
+			circular: true,
 		},
 		{
 			name:     "unblocked task",
@@ -191,6 +282,8 @@ func TestDoctorWarnsOnCircularResumeCondition(t *testing.T) {
 		{ID: "T103", Title: "honest deferral", Priority: 2, Status: "blocked", Tags: []string{deferredTaskTag}, UnblockWhen: "After the operator grants access, T103 resumes implementation"},
 		{ID: "T104", Title: "deferred on itself", Priority: 2, Status: "blocked", Tags: []string{deferredTaskTag}, Blockers: []string{"Waits for T104 to lose its deferred tag and start implementation"}},
 		{ID: "T105", Title: "subject shape", Priority: 2, Status: "blocked", Blockers: []string{"Deferred: T105 starts implementation"}},
+		{ID: "T106", Title: "Auto-save system working per section 18", Priority: 2, Status: "blocked", Blockers: []string{"Waits for save work to resume, or for dependent death-reload work to land"}},
+		{ID: "T107", Title: "Auto-save system working per section 18", Priority: 2, Status: "blocked", UnblockWhen: "Deferred: the operator grants access to the shared cluster"},
 	}}
 
 	c := Config{Root: t.TempDir(), BaseDir: t.TempDir(), Command: "doctor", JSON: true}
@@ -232,6 +325,7 @@ func TestDoctorWarnsOnCircularResumeCondition(t *testing.T) {
 			"T101": "Waits for T101 to start implementation and lose its deferred tag",
 			"T104": "Waits for T104 to lose its deferred tag and start implementation",
 			"T105": "Deferred: T105 starts implementation",
+			"T106": "Waits for save work to resume, or for dependent death-reload work to land",
 		}
 		for id, condition := range conditions {
 			f, ok := byTask[id]
@@ -248,7 +342,7 @@ func TestDoctorWarnsOnCircularResumeCondition(t *testing.T) {
 				t.Fatalf("%s finding must guide the operator: %+v", id, f)
 			}
 		}
-		for _, id := range []string{"T102", "T103"} {
+		for _, id := range []string{"T102", "T103", "T107"} {
 			if _, ok := byTask[id]; ok {
 				t.Fatalf("unexpected circular finding for %s", id)
 			}
@@ -273,8 +367,8 @@ func TestDoctorWarnsOnCircularResumeCondition(t *testing.T) {
 				circular[f.TaskID] = f
 			}
 		}
-		if len(circular) != 3 {
-			t.Fatalf("expected the three circular findings, got %+v", circular)
+		if len(circular) != 4 {
+			t.Fatalf("expected the four circular findings, got %+v", circular)
 		}
 		// The operator and deferral classes are expected waiting, but a
 		// condition only the blocked task itself can satisfy never is: the
@@ -326,7 +420,10 @@ func TestDoctorWarnsOnCircularResumeCondition(t *testing.T) {
 		if !strings.Contains(out.String(), "Warning: task T105 requires itself to resume: Deferred: T105 starts implementation") {
 			t.Fatalf("missing plain warning for the subject shape:\n%s", out.String())
 		}
-		for _, id := range []string{"T102", "T103"} {
+		if !strings.Contains(out.String(), "Warning: task T106 requires itself to resume: Waits for save work to resume") {
+			t.Fatalf("missing plain warning for the identifier-free shape:\n%s", out.String())
+		}
+		for _, id := range []string{"T102", "T103", "T107"} {
 			if strings.Contains(out.String(), "task "+id+" requires itself") {
 				t.Fatalf("unexpected plain warning for %s:\n%s", id, out.String())
 			}

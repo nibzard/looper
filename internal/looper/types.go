@@ -42,9 +42,13 @@ type Backlog struct {
 // exists so agents can validate its export. That on-disk file is a control
 // file: Repository.Excluded always lists it, snapshots strip it, and Workspace
 // seeds each assembled tree from the run root's copy, so its bytes are runtime
-// state a candidate cannot transport. The shipped reference copy is tracked
-// content at docs/to-do.schema.json; TestShippedSchemaMatchesDefault keeps the
-// two identical.
+// state a candidate cannot transport. A project that wants a versioned
+// contract declares a tracked reference schema with
+// LOOPER_SCHEMA_REFERENCE; the controller then seeds the control file and
+// every worktree from that content, so the copy cannot drift from what
+// shipped (T117). Without a declaration the shipped reference copy is tracked
+// content at docs/to-do.schema.json; TestShippedSchemaMatchesDefault keeps
+// the two identical.
 const backlogSchema = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Looper Todo",
@@ -589,6 +593,16 @@ type State struct {
 	ReviewedAt    int                    `json:"reviewed_at"`
 	ReviewedTip   string                 `json:"reviewed_tip,omitempty"`
 	ReviewPending bool                   `json:"review_pending,omitempty"`
+	// ReviewedTree, ReviewedComplete, and ReviewedImports record the coverage
+	// of the last applied review (T128): the published tree it read, whether
+	// its report closed the goal, and how many imports had applied. A later
+	// due review compares against them, so a cycle whose inputs did not move
+	// reconciles recorded findings instead of re-running the agent. Optional
+	// state fields: states saved before T128 load with none, and their first
+	// review runs the full pass.
+	ReviewedTree     string `json:"reviewed_tree,omitempty"`
+	ReviewedComplete bool   `json:"reviewed_complete,omitempty"`
+	ReviewedImports  int    `json:"reviewed_imports,omitempty"`
 	// StartupSeed marks a state written only so a starting controller's run
 	// is publicly queryable before readiness is reported (AX-022). It is not
 	// a baseline to resume: initialization treats it as absent and seeds the

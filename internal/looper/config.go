@@ -21,6 +21,12 @@ type Config struct {
 	Root, Todo, BaseDir, Agent, ReviewAgent, CodexBin, ClaudeBin, ZcodeBin, Model, ClaudeModel, Effort, Verify, Setup, Assess, Hook string
 	InspectTask                                                                                                                     string
 	RequestID                                                                                                                       string
+	// SchemaReference is the declared tracked reference schema: one
+	// repository-relative path (LOOPER_SCHEMA_REFERENCE) naming versioned
+	// content the controller respects when it seeds the schema control file
+	// and every worktree, so the control-file bytes cannot drift from the
+	// shipped content while the declaration is in effect.
+	SchemaReference string
 	// CancelTask is the task one cancellation names; Cascade takes its live
 	// dependents along (AX-019).
 	CancelTask string
@@ -197,6 +203,16 @@ func environmentInvalid(key, value string) *PublicError {
 	p := usageFailure("environment_invalid", key+" must be a nonnegative integer")
 	p.Expected = map[string]any{key: "nonnegative integer"}
 	p.Observed = map[string]any{key: clampString(value, 128)}
+	return p
+}
+
+// schemaReferenceInvalid reports a declared reference schema the controller
+// cannot respect: the declaration must name one file inside the repository,
+// relative to its root, so it can point at tracked content that transports.
+func schemaReferenceInvalid(value string) *PublicError {
+	p := usageFailure("schema_reference_invalid", "LOOPER_SCHEMA_REFERENCE must name one file inside the repository, relative to its root, for example docs/to-do.schema.json")
+	p.Expected = map[string]any{"LOOPER_SCHEMA_REFERENCE": "a repository-relative file path"}
+	p.Observed = map[string]any{"LOOPER_SCHEMA_REFERENCE": clampString(value, 128)}
 	return p
 }
 
@@ -876,7 +892,7 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 	home, _ := os.UserHomeDir()
-	c := Config{Root: root, Todo: "to-do.json", BaseDir: env("LOOPER_BASE_DIR", filepath.Join(home, ".looper")), CodexBin: env("CODEX_BIN", "codex"), ClaudeBin: env("CLAUDE_BIN", "claude"), ZcodeBin: env("ZCODE_BIN", "zcode"), Assess: env("LOOPER_ASSESS_COMMAND", ""), Hook: env("LOOPER_HOOK", ""), Command: "run", GitInit: env("LOOPER_GIT_INIT", "1") != "0"}
+	c := Config{Root: root, Todo: "to-do.json", BaseDir: env("LOOPER_BASE_DIR", filepath.Join(home, ".looper")), CodexBin: env("CODEX_BIN", "codex"), ClaudeBin: env("CLAUDE_BIN", "claude"), ZcodeBin: env("ZCODE_BIN", "zcode"), Assess: env("LOOPER_ASSESS_COMMAND", ""), Hook: env("LOOPER_HOOK", ""), SchemaReference: env("LOOPER_SCHEMA_REFERENCE", ""), Command: "run", GitInit: env("LOOPER_GIT_INIT", "1") != "0"}
 	for k, p := range map[string]*int{"MAX_ITERATIONS": &c.Limit, "LOOPER_MAX_REPAIRS": &c.MaxRepairs, "LOOPER_RATE_LIMIT_MAX": &c.RetryLimit} {
 		d := 0
 		switch k {
@@ -913,6 +929,16 @@ func Parse(args []string) (Config, error) {
 		if n, e := strconv.Atoi(v); e != nil || n < 0 {
 			return c, environmentInvalid("LOOPER_REVIEW_EVERY", v)
 		}
+	}
+	// The declared reference schema must name one file inside the repository:
+	// the value points at tracked content, and a path that escapes the root or
+	// names no single file cannot be content the controller transports.
+	if c.SchemaReference != "" {
+		ref, ok := validWritePath(c.SchemaReference)
+		if !ok || ref == "." {
+			return c, schemaReferenceInvalid(c.SchemaReference)
+		}
+		c.SchemaReference = ref
 	}
 	// Parsing: collect every option before touching the setting layers.
 	flags := flagOptions{}

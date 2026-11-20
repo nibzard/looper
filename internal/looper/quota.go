@@ -459,6 +459,24 @@ var errBootstrapDrained = errors.New("startup bootstrap drained by request")
 // waiting out the window to be overwritten by the retry (T141).
 var errBootstrapSupplied = errors.New("task file supplied during startup bootstrap")
 
+// adoptSuppliedTaskFile ends a startup bootstrap whose work the operator
+// superseded by supplying the task file bootstrap exists to create: during
+// the quota wait (T141) and during the bootstrap agent call itself (T144),
+// whose minutes-long window kept the historical overwrite. The operator's
+// bytes stay on disk and the startup parse below the bootstrap branch
+// validates them like any startup input. importID names the staging record
+// of captured startup plans, when any exist; removing it routes those plans
+// through the ordinary startup import, which analyzes them against the
+// operator's backlog instead of recording a bootstrap import for a file the
+// bootstrap never produced. during names the window for the journal.
+func (e *Engine) adoptSuppliedTaskFile(importID, during string) error {
+	e.event("bootstrap", "The task file appeared "+during+"; startup adopts the operator's file and skips bootstrap.")
+	if importID != "" {
+		os.Remove(stagingPath(e.Dir, importID))
+	}
+	return nil
+}
+
 // bootstrapAndWait runs the startup bootstrap and waits out a closed
 // reviewer quota window instead of ending the start (T141). Bootstrap runs
 // before the controller loop exists, so no loop boundary can hold a pause
@@ -471,7 +489,7 @@ var errBootstrapSupplied = errors.New("task file supplied during startup bootstr
 // record of captured startup plans, when any exist.
 func (e *Engine) bootstrapAndWait(ctx context.Context, plans []capturedPlan, importID string) error {
 	for {
-		err := e.bootstrap(ctx, plans)
+		err := e.bootstrap(ctx, plans, importID)
 		if err == nil {
 			return nil
 		}
@@ -495,16 +513,9 @@ func (e *Engine) bootstrapAndWait(ctx context.Context, plans []capturedPlan, imp
 		case err == nil:
 			// The window reopened; bootstrap retries.
 		case errors.Is(err, errBootstrapSupplied):
-			// The parse below the bootstrap branch validates the operator's
-			// file like any startup input. Supplied startup plans lose their
-			// staging record, so the ordinary startup import analyzes them
-			// against the operator's backlog instead of recording a bootstrap
-			// that never produced it.
-			e.event("bootstrap", "The task file appeared during the quota wait; startup adopts the operator's file and skips bootstrap.")
-			if importID != "" {
-				os.Remove(stagingPath(e.Dir, importID))
-			}
-			return nil
+			// The wait saw the operator's file appear; the shared adoption
+			// ends the bootstrap the same way the agent-call guard does.
+			return e.adoptSuppliedTaskFile(importID, "during the quota wait")
 		default:
 			return err
 		}

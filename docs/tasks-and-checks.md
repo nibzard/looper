@@ -56,6 +56,19 @@ observed evidence. These findings must stay within the project goal. Agents
 can miss defects or report problems that do not exist. Use executable
 acceptance checks where you can.
 
+A due review records what it covered: the published tree it read, whether it
+closed the goal, and the imports it saw. The next cycle compares against that
+record before it launches an agent. When the published content is unchanged,
+no review runs: the same pass would re-report the same unresolved findings at
+full cost, so the cycle reconciles recorded findings instead and escalates
+the one operator decision each repeated finding needs. When every changed
+path is outside the backlog's `source_files`, the change cannot move a
+requirement the review covered: a run whose recorded review closed the goal
+re-affirms that completion without a pass, and a run with open work runs a
+focused pass over the changed paths only. A change inside `source_files`, an
+import the recorded review never saw, or a backlog without `source_files`
+keeps the full pass.
+
 Follow-ups identify an `owner` (`agent` or `operator`), a stable outcome
 `key`, and an `existing_task_id` (empty for new work). Reuse the existing
 task ID or key when the same prerequisite appears under a different title.
@@ -69,11 +82,25 @@ revision the report verified. `resume` returns a blocked task to `todo` when
 its condition is satisfied. `complete` closes a task whose outcome already
 exists, so no worker implements it again. `reassign` proposes an ownership
 correction. Looper applies a transition only against the revision it accepted,
-an idle task, and the current task contract. Operator gates, deferrals,
-ownership changes, and conditions that name the blocked task itself stay with
-the operator: Looper escalates one decision task, keyed by the target task,
-and later reports only add evidence to it. A plain finding that reaches a
-blocked task twice without changing anything escalates the same way.
+an idle task, and the current task contract.
+
+Both report sources can reconcile. A review names the accepted revision from
+its prompt. A worker cannot read that revision mid-flight, so its prompt names
+the base revision its worktree started from and the worker reports that. The
+base counts only while the accepted revision still is that base, or the
+verification commit the worker's own verified work became on top of it; a
+check that merged another task's work first moved the tree past what that
+worker read, so the report is refused with a journal note that names the
+revision it should have carried. A restart replays a retained worker result
+against its saved base, so the transition re-applies without a review.
+
+Operator gates, deferrals, ownership changes, and conditions that only the
+blocked task's own work can satisfy — naming the task itself, or naming no
+task at all while referencing the task's own scope or deferral round — stay
+with the operator: Looper escalates one decision
+task, keyed by the target task, and later reports only add evidence to it.
+A plain finding that reaches a blocked task twice without changing anything
+escalates the same way.
 
 Operator follow-ups enter the backlog as blocked with a `looper:operator`
 tag. They stay outside the worker queue even if a generic retry sets them

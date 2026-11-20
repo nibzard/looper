@@ -132,7 +132,7 @@ func TestRequeueFreshNextDispatchStartsClean(t *testing.T) {
 		Setup, Verify string
 	}{[]string{e.State.Backlog.Task("T001").Contract()}, e.Config.Setup, e.Config.Verify})
 	results := make(chan workerResult, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := runCtx(t, 20*time.Second)
 	defer cancel()
 	next, err := e.start(ctx, *e.State.Backlog.Task("T001"), results)
 	if err != nil {

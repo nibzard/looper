@@ -264,7 +264,15 @@ func projectPatchFields(patch *configPatch) (map[string]json.RawMessage, error) 
 		value := patch.fields[canonical]
 		switch canonical {
 		case "jobs", "review_every":
-			if patch.unsets[canonical] && canonical == "jobs" {
+			// An unset carries an empty string, which is not a number. jobs
+			// stores 0 (auto mode). review_every is the one optional numeric
+			// key, so its unset rides the protocol as null and patchProfile
+			// turns null into a removal: the default cadence applies again.
+			if patch.unsets[canonical] {
+				if canonical == removableSettingKey {
+					fields[canonical] = json.RawMessage("null")
+					continue
+				}
 				value = "0"
 			}
 			n, err := strconv.Atoi(value)
@@ -293,11 +301,9 @@ func applyProjectPatch(c Config, current *Profile, patch *configPatch) (*Profile
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// Unsetting review_every removes the saved value; patchProfile only
-	// copies forward, so the removal happens after the patch.
-	if patch.unsets["review_every"] {
-		patched.ReviewEvery = nil
-	}
+	// An unset review_every arrives as null in fields, and patchProfile
+	// applies the removal itself, so both the stopped and the live paths
+	// save a profile without the key.
 	for _, role := range []string{"agent", "review_agent"} {
 		if _, touched := patch.fields[role]; !touched {
 			continue
@@ -882,7 +888,9 @@ func renderConfigShow(doc *configShowDocument, c Config) string {
 		return b.String()
 	}
 	fmt.Fprintln(&b, "Effective settings:")
-	fmt.Fprint(&b, EffectiveSettings(c))
+	// EffectiveSettings returns no trailing newline; terminate the line so
+	// the sentence below starts on its own line.
+	fmt.Fprintln(&b, EffectiveSettings(c))
 	if doc.Saved == nil {
 		fmt.Fprintln(&b, "No saved profile exists.")
 	}

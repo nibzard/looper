@@ -195,7 +195,9 @@ backlog unchanged.
 
 Milestone reviews drain existing work before examining complete product behavior.
 Final reviews report gaps as findings and set completion explicitly; the
-review response is the only path that adds work or finishes a goal. Findings
+review response is the only path that adds work or finishes a goal, and a
+later cycle restores a recorded completion only when nothing the recorded
+review covered changed. Findings
 require a title, acceptance
 details, evidence, and known dependencies. Duplicate titles are suppressed. Semantic
 deduplication and scope judgment remain reviewer responsibilities.
@@ -203,6 +205,16 @@ The private task file belongs to the controller: a review that edits it,
 including a legacy project-done marker, is rejected before any finding or
 completion applies. Historical markers still load and stay excluded from
 scheduling, but no marker authorizes completion.
+
+Each applied review records its coverage: the published tree it read, its
+completion verdict, and the imports it saw. The next due cycle compares
+against that record first. Unchanged published content runs no agent: the
+cycle reconciles recorded findings and escalates the one operator decision
+each repeated finding needs. A change entirely outside the backlog's
+source_files cannot move a covered requirement: a run whose recorded review
+closed the goal re-affirms that completion without a pass, and a run with
+open work runs a focused pass over the changed paths alone. A covered change,
+an unseen import, or a backlog without source_files keeps the full pass.
 
 Measuretwice reports are advisory evidence. A fail or review requests independent
 reproduction during product review. Neither provider availability nor an

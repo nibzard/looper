@@ -214,11 +214,17 @@ func TestLaunchReportFailureAndCancellation(t *testing.T) {
 	for _, mode := range []string{"missing", "hang"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			timeout := 5 * time.Second
+			// The hang arm forces its own deadline: that deadline is the
+			// interruption under test and must stay fixed so the error
+			// reads DeadlineExceeded. The missing arm only guards a healthy
+			// exit-detection path, so its bound scales with host pressure.
+			var ctx context.Context
+			var cancel context.CancelFunc
 			if mode == "hang" {
-				timeout = 200 * time.Millisecond
+				ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
+			} else {
+				ctx, cancel = runCtx(t, 5*time.Second)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			err := runProcess(ctx, dir, filepath.Join(dir, "events.log"), []string{"sh", "-c", "exit 0"}, nil, map[string]string{"LOOPER_TEST_LAUNCH_REPORT": mode})
 			if mode == "hang" {

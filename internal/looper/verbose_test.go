@@ -46,7 +46,7 @@ func TestVerboseEmitsExactlyOneConfigEvent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := runCtx(t, 10*time.Second)
 		defer cancel()
 		code, err := e.Run(ctx)
 		events := storedEvents(t, e)
@@ -124,7 +124,7 @@ func TestDispatchLimitExitReason(t *testing.T) {
 	result := `{"task_id":"T001","status":"done","summary":"finished","files":["a.txt"],"blockers":[],"followups":[],"unblock_when":""}`
 	e, _ := runningEngine(t, result)
 	e.Config.Limit = 1
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := runCtx(t, 30*time.Second)
 	defer cancel()
 	code, err := e.Run(ctx)
 	if code != 2 || err != nil {

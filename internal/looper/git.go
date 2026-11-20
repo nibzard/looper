@@ -3,6 +3,7 @@ package looper
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,12 @@ type Repository struct {
 	// repository. Concurrent atomic writes under it create and rename
 	// .looper-write-* temporaries, which a root scan must never stat.
 	Runtime string
+	// SchemaReference is the absolute path of the declared tracked reference
+	// schema, or empty without a declaration. The reference is versioned
+	// content the controller respects whenever it seeds the schema control
+	// file: the run root's copy and every assembled tree take its bytes, so
+	// the control file cannot drift from the shipped content (T117).
+	SchemaReference string
 }
 
 // One slow git operation on a large repository must not abort a run. The limit
@@ -118,7 +125,43 @@ func OpenRepository(c Config, dir string) (*Repository, error) {
 		r.Excluded = append(r.Excluded, filepath.ToSlash(rel))
 		r.Runtime = filepath.ToSlash(rel)
 	}
+	if err = r.setSchemaReference(c); err != nil {
+		return nil, err
+	}
 	return r, nil
+}
+
+// setSchemaReference resolves a declared reference schema onto the repository
+// (T117). The declaration names tracked content — a schema versioned with the
+// project — and every later seed takes the reference bytes, so the control
+// file cannot drift from the shipped content. The path must name one readable
+// regular file inside the repository, outside the excluded control and
+// runtime paths, and hold one JSON document: a declaration that names
+// anything else fails here, before a seed can honor it halfway.
+func (r *Repository) setSchemaReference(c Config) error {
+	if c.SchemaReference == "" {
+		return nil
+	}
+	if r.excluded(c.SchemaReference) {
+		return fmt.Errorf("LOOPER_SCHEMA_REFERENCE %s names a control or runtime path; point it at tracked content such as docs/to-do.schema.json", c.SchemaReference)
+	}
+	p := filepath.Join(r.Root, filepath.FromSlash(c.SchemaReference))
+	if st, err := os.Lstat(p); err != nil {
+		return fmt.Errorf("the declared reference schema %s is unreadable: %w", p, err)
+	} else if st.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("reference schema must not be a symlink: %s", p)
+	} else if st.IsDir() {
+		return fmt.Errorf("reference schema must be one file, not a directory: %s", p)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return fmt.Errorf("the declared reference schema %s is unreadable: %w", p, err)
+	}
+	if !json.Valid(b) {
+		return fmt.Errorf("the declared reference schema %s is not valid JSON", p)
+	}
+	r.SchemaReference = p
+	return nil
 }
 func (r *Repository) excluded(p string) bool {
 	for _, x := range r.Excluded {
@@ -282,6 +325,36 @@ func (r *Repository) SnapshotFrom(cwd, base string, knownTrees ...string) (strin
 	b, err := gitCommand(cwd, nil, e, "write-tree")
 	return strings.TrimSpace(string(b)), err
 }
+
+// commitIdentity resolves the identity controller commits carry. The
+// repository's configured Git identity wins — user.name and user.email as
+// Git resolves them across the local, global, and system configuration —
+// because the configuration is where a project records its chosen commit
+// identity (the history-scrub decision lives there too). The deterministic
+// Looper identity is the fallback only when no complete identity is
+// configured: Git refuses an empty ident, and a controller must integrate
+// work without an operator present to answer that refusal.
+func (r *Repository) commitIdentity() (name, email string) {
+	name, _ = gitText(r.Root, "config", "--get", "user.name")
+	email, _ = gitText(r.Root, "config", "--get", "user.email")
+	if name == "" || email == "" {
+		// A partial identity is not a usable one; the commit takes the
+		// fallback whole rather than mixing a configured half with a
+		// synthetic one.
+		return "Looper", "looper@localhost"
+	}
+	return name, email
+}
+
+// identityEnv maps one identity onto the Git environment variables that
+// supply the author and the committer.
+func identityEnv(name, email string) map[string]string {
+	return map[string]string{
+		"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
+		"GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email,
+	}
+}
+
 func (r *Repository) Commit(tree string, parents []string, message string) (string, error) {
 	args := []string{"commit-tree", tree}
 	for _, p := range parents {
@@ -289,7 +362,8 @@ func (r *Repository) Commit(tree string, parents []string, message string) (stri
 			args = append(args, "-p", p)
 		}
 	}
-	b, err := gitCommand(r.Root, []byte(message+"\n"), map[string]string{"GIT_AUTHOR_NAME": "Looper", "GIT_AUTHOR_EMAIL": "looper@localhost", "GIT_COMMITTER_NAME": "Looper", "GIT_COMMITTER_EMAIL": "looper@localhost"}, args...)
+	name, email := r.commitIdentity()
+	b, err := gitCommand(r.Root, []byte(message+"\n"), identityEnv(name, email), args...)
 	return strings.TrimSpace(string(b)), err
 }
 func (r *Repository) Ref(ref, commit string) error {
@@ -309,14 +383,40 @@ func (r *Repository) Workspace(name, commit string, b Backlog) (string, error) {
 	}
 	// Snapshot trees exclude control files, yet prompts name the task schema
 	// as a source file, so copy it beside the backlog or every reader pays a
-	// missing-file error. A project without one yet (first bootstrap) skips
-	// the copy.
-	if schema, err := os.ReadFile(filepath.Join(r.Root, r.Excluded[1])); err == nil {
+	// missing-file error. A declared reference supplies the bytes directly,
+	// so an assembled tree cannot carry a control-file copy that drifted
+	// from the shipped content (T117). A project without one yet (first
+	// bootstrap) skips the copy.
+	schema, err := r.schemaSeed()
+	if err != nil {
+		return p, err
+	}
+	if len(schema) > 0 {
 		if err = atomicWrite(filepath.Join(p, r.Excluded[1]), schema, 0600); err != nil {
 			return p, err
 		}
 	}
 	return p, nil
+}
+
+// schemaSeed reads the bytes a newly assembled tree carries at the schema
+// control-file path. A declared reference supplies them, so the seed cannot
+// drift from the shipped content even when the run root's copy already has;
+// a reference that became unreadable fails the assembly instead of seeding
+// stale bytes. Without a declaration the run root's copy seeds as before,
+// and a project without one yet seeds nothing.
+func (r *Repository) schemaSeed() ([]byte, error) {
+	if r.SchemaReference != "" {
+		b, err := os.ReadFile(r.SchemaReference)
+		if err != nil {
+			return nil, fmt.Errorf("the declared reference schema %s is unreadable: %w", r.SchemaReference, err)
+		}
+		return b, nil
+	}
+	if b, err := os.ReadFile(filepath.Join(r.Root, r.Excluded[1])); err == nil {
+		return b, nil
+	}
+	return nil, nil
 }
 func (r *Repository) Remove(p string) {
 	if rel, err := filepath.Rel(filepath.Join(r.Dir, "worktrees"), p); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
@@ -349,11 +449,15 @@ func (m *MergeError) Error() string {
 func (m *MergeError) Unwrap() error { return m.Err }
 
 func (r *Repository) Merge(work, commit string) error {
-	output, err := gitText(work, "-c", "user.name=Looper", "-c", "user.email=looper@localhost", "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", commit)
+	// The merge stops before committing, so no commit records this
+	// identity, but Git refuses to start a merge without one; the resolved
+	// identity rides along for that requirement alone.
+	name, email := r.commitIdentity()
+	out, err := gitCommand(work, nil, identityEnv(name, email), "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", commit)
 	if err == nil {
 		return nil
 	}
-	if output != "" {
+	if output := strings.TrimSpace(string(out)); output != "" {
 		err = fmt.Errorf("%w\n%s", err, output)
 	}
 	unmerged, checked := unmergedPaths(work)

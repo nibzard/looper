@@ -26,6 +26,16 @@ start would use. No agent runs.
 | `LOOPER_BASE_DIR` | `~/.looper` | State and artifact location |
 | `CODEX_BIN`, `CLAUDE_BIN`, `ZCODE_BIN` | `codex`, `claude`, `zcode` | Installed agent commands |
 | `LOOPER_HOOK` | unset | Optional executable called after a result |
+| `LOOPER_SCHEMA_REFERENCE` | unset | Repository-relative path of the tracked schema contract, such as `docs/to-do.schema.json` |
+
+The schema beside the task file (for example `to-do.schema.json`) is a control
+file: Looper never transports it through snapshots, and every worktree is
+seeded from the run root's copy. A project that wants a versioned schema
+contract declares a tracked reference with `LOOPER_SCHEMA_REFERENCE`. The
+controller then seeds the control file and every worktree from that content,
+and it refreshes a copy that drifted from the reference at startup. A
+declaration that names a path outside the repository, a control or runtime
+path, a symlink, or a file that is not valid JSON refuses to start.
 
 The hook receives the task ID, status, summary path, and attempt ID. It has
 a 30-second timeout. A hook failure does not roll back the task result, and

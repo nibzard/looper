@@ -175,3 +175,7 @@ The integration suite runs the real executable against real Git
 repositories with stub agents. The entry point is `cmd/looper/main.go`, and
 the controller is in `internal/looper`. See
 [the validation record](docs/VALIDATION.md).
+
+## License
+
+Looper is released under the [MIT License](LICENSE).

@@ -49,7 +49,7 @@ func TestTaskFilteredQueriesRetrieveLifecycleEvents(t *testing.T) {
 		t.Skipf("events-page schema is absent: %v", err)
 	}
 	e, c, _ := assessRunEngine(t, "", 0)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := runCtx(t, 60*time.Second)
 	defer cancel()
 	code, err := e.Run(ctx)
 	if code != 0 || err != nil {

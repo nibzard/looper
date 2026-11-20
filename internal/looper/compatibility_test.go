@@ -77,9 +77,14 @@ func contractScenario(t *testing.T) Config {
 		RecoveredCommands: &RecoveryCommands{PreviousSetup: "old", PreviousVerify: "old", BeforeSetup: "before", BeforeVerify: "before", Setup: "new", Verify: "new"},
 		ReviewedTip:       "reviewed-tip",
 		ReviewPending:     true,
-		ExportBefore:      "export-before",
-		ExportPending:     true,
-		Imports:           []*ImportRecord{{RequestID: "import-01", Digests: []string{"digest"}, Artifacts: []string{"imports/import-01/plan.md"}, SourcePaths: []string{"docs/PLAN.md"}, Status: ImportApplied, AddedTasks: []string{"T070"}, Enqueued: "2026-11-05T09:41:02Z", Applied: "2026-11-05T09:44:02Z"}},
+		// The review coverage record (T128) is saved-state machinery like the
+		// fingerprint above: the frozen document admits none of its keys.
+		ReviewedTree:     "reviewed-tree",
+		ReviewedComplete: true,
+		ReviewedImports:  1,
+		ExportBefore:     "export-before",
+		ExportPending:    true,
+		Imports:          []*ImportRecord{{RequestID: "import-01", Digests: []string{"digest"}, Artifacts: []string{"imports/import-01/plan.md"}, SourcePaths: []string{"docs/PLAN.md"}, Status: ImportApplied, AddedTasks: []string{"T070"}, Enqueued: "2026-11-05T09:41:02Z", Applied: "2026-11-05T09:44:02Z"}},
 		// Receipts are the normal saved state after any mutation (AX-009) —
 		// one terminal, one waiting beside the decided cancellation below —
 		// so the frozen guards fail if the legacy status projection stops
@@ -340,10 +345,11 @@ func marshalShape(shape any) string {
 // request receipts (AX-009), a decided cancellation waiting on active work
 // survives a restart in the saved state (AX-019), and a detached start saves
 // the startup seed for its whole bootstrap window (AX-022). The frozen
-// legacy status document must keep hiding all four, and the T124 repair adds
+// legacy status document must keep hiding all four, the T124 repair adds
 // the nested pair: a retained result keeps the transition and revision its
 // worker proposed so recovery can replay it, while the frozen follow-up shape
-// admits neither key. A leak here fails the frozen schema, whose
+// admits neither key, and the T128 review coverage record adds its three
+// saved-state keys. A leak here fails the frozen schema, whose
 // additionalProperties false admits no such keys. The version 2 --full route
 // serves the same complete document, so it hides them too.
 func TestLegacyStatusOmitsSavedStateMachinery(t *testing.T) {
@@ -360,6 +366,9 @@ func TestLegacyStatusOmitsSavedStateMachinery(t *testing.T) {
 	}
 	if snap.State == nil || snap.State.ExportSemantics == "" {
 		t.Fatal("the scenario must save a state that carries the fingerprint")
+	}
+	if snap.State.ReviewedTree == "" || !snap.State.ReviewedComplete || snap.State.ReviewedImports == 0 {
+		t.Fatal("the scenario must save a state that carries the review coverage record")
 	}
 	if len(snap.State.Requests) == 0 {
 		t.Fatal("the scenario must save a state that carries request receipts")
@@ -402,7 +411,7 @@ func TestLegacyStatusOmitsSavedStateMachinery(t *testing.T) {
 		if err = json.Unmarshal(out.Bytes(), &doc); err != nil {
 			t.Fatalf("%s: output is not JSON: %v", route.name, err)
 		}
-		for _, key := range []string{"export_semantics", "requests", "cancellations", "startup_seed"} {
+		for _, key := range []string{"export_semantics", "requests", "cancellations", "startup_seed", "reviewed_tree", "reviewed_complete", "reviewed_imports"} {
 			if _, ok := doc[key]; ok {
 				t.Errorf("%s emits %s; the key is saved-state machinery and stays out of the frozen document: %s", route.name, key, out.Bytes())
 			}

@@ -161,7 +161,10 @@ exec "$LOOPER_TEST_AGENT" "$@"
 		t.Fatal(err)
 	}
 	e.Config.CodexBin, e.Config.ClaudeBin = bin, bin
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The bound only guards the run; the test cancels through the watcher
+	// below once the second worker signals, so a pressure-scaled bound is
+	// safe here.
+	ctx, cancel := runCtx(t, 30*time.Second)
 	defer cancel()
 	go func() {
 		for ctx.Err() == nil {

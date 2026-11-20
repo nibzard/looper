@@ -4,6 +4,7 @@ class Looper < Formula
   url "https://github.com/nibzard/looper/archive/refs/tags/v0.10.0.tar.gz"
   sha256 "4d95fc1f30b525807e5528681092c63849ee9e1036f9101670c1c2939b41352f"
   head "https://github.com/nibzard/looper.git", branch: "main"
+  license "MIT"
 
   depends_on "go" => :build
 

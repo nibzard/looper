@@ -49,7 +49,7 @@ if printf '%s' "$p" | grep -q 'previous backlog was rejected'; then result="$LOO
 					}
 					defer lock.Close()
 					defer e.Store.Close()
-					err = e.bootstrap(context.Background(), nil)
+					err = e.bootstrap(context.Background(), nil, "")
 					if correct {
 						if err != nil {
 							t.Fatal(err)

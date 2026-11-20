@@ -11,6 +11,9 @@ this plan. [Delivery audit](/notes/looper-delivery-audit-2026-11-17.md)
 
 Status: implemented by T135 — `looper doctor` reports the finding
 `task_circular_condition` in text, legacy JSON, and version 2 JSON.
+The T140 extension (2026-11-20) also reads conditions that name no task
+identifier at all when their subject is the task's own scope or deferral
+round, and the same reading guards review reconciliation.
 
 Add a warning to `looper doctor` for a blocked task whose resume condition
 explicitly requires the same task to start, finish, or become unblocked.
