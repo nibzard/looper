@@ -15,7 +15,12 @@ import (
 
 type Repository struct {
 	Root, Common, Dir string
-	Excluded          []string
+	// GitDir is this checkout's own git directory (`rev-parse
+	// --absolute-git-dir`). It differs from Common inside a linked worktree,
+	// and the per-worktree files — the index, its lock, and the sequencer
+	// state — live here, never in the shared common directory.
+	GitDir   string
+	Excluded []string
 	// Runtime is the repository-relative, slash-separated path of the
 	// controller's runtime tree, or empty when it lives outside the
 	// repository. Concurrent atomic writes under it create and rename
@@ -117,7 +122,14 @@ func OpenRepository(c Config, dir string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Repository{Root: c.Root, Common: common, Dir: dir, Excluded: []string{filepath.ToSlash(rel), filepath.ToSlash(relSchema)}}
+	gitDir, err := gitText(c.Root, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return nil, err
+	}
+	if gitDir, err = filepath.EvalSymlinks(gitDir); err != nil {
+		return nil, err
+	}
+	r := &Repository{Root: c.Root, Common: common, GitDir: gitDir, Dir: dir, Excluded: []string{filepath.ToSlash(rel), filepath.ToSlash(relSchema)}}
 	if rel, e := filepath.Rel(c.Root, c.BaseDir); e == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
 		if rel == "." {
 			return nil, fmt.Errorf("LOOPER_BASE_DIR must not be the project root")
@@ -513,9 +525,21 @@ func (r *Repository) Changes(base, commit string) ([]string, error) {
 	return out, nil
 }
 func (r *Repository) Apply(before, after string) error {
-	p, err := gitCommand(r.Root, nil, nil, "diff", "--binary", before, after, "--")
+	if before == after {
+		return nil
+	}
+	// External diff drivers, textconv filters, and prefix-rewriting settings
+	// (diff.noprefix, diff.mnemonicPrefix) can produce a patch `git apply`
+	// rejects, so the diff runs with all of them pinned — the same hardening
+	// the verification diffs use.
+	p, err := gitCommand(r.Root, nil, nil, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", before, after, "--")
 	if err != nil {
 		return err
+	}
+	if len(bytes.TrimSpace(p)) == 0 {
+		// Identical trees (an empty commit between the revisions) produce an
+		// empty patch; `git apply` rejects empty input as unrecognized.
+		return nil
 	}
 	if _, err = gitCommand(r.Root, p, nil, "apply", "--check", "--binary"); err != nil {
 		return err

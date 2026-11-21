@@ -55,6 +55,18 @@ func (e *Engine) reviewScope(final bool) reviewScope {
 	if applied := appliedImportCount(e.State); applied != e.State.ReviewedImports {
 		return reviewScope{Mode: reviewScopeFull, Reason: fmt.Sprintf("%d import(s) applied since the review at %s", applied-e.State.ReviewedImports, e.State.ReviewedTree)}
 	}
+	// The recorded verdict must describe this backlog. The published tree
+	// never carries the task file, so a task added, reopened, cancelled, or
+	// closed outside a review is invisible to the tree comparison below;
+	// the recorded shape catches it, and a shape change never skips or
+	// borrows the recorded completion. A run recorded before the shape
+	// existed, or a state a test built by hand, carries no shape: the guard
+	// stays inert until the next applied review records one.
+	if e.State.ReviewedBacklog != "" {
+		if shape := backlogShape(e.State.Backlog); shape != e.State.ReviewedBacklog {
+			return reviewScope{Mode: reviewScopeFull, Reason: "the task list changed since the recorded review (tasks added, reopened, cancelled, or closed outside a review)"}
+		}
+	}
 	if e.State.ReviewedTree == e.State.Published {
 		return reviewScope{Mode: reviewScopeSkip, Reason: fmt.Sprintf("the published tree is unchanged since the review at %s", e.State.ReviewedTree)}
 	}
@@ -75,6 +87,32 @@ func (e *Engine) reviewScope(final bool) reviewScope {
 		return reviewScope{Mode: reviewScopeSkip, Changed: changed, Reason: fmt.Sprintf("every changed path is outside the reviewed source files and the review at %s closed the goal", e.State.ReviewedTree)}
 	}
 	return reviewScope{Mode: reviewScopeFocused, Changed: changed, Reason: "every changed path is outside the reviewed source files"}
+}
+
+// backlogShape digests the completion shape of a backlog: each ordinary
+// task's identifier and outcome status. The controller's own in-flight
+// transition — dispatch marking a task doing — reads as todo, because every
+// review boundary sits between dispatches and must not widen its scope for
+// ordinary progression. A worker result re-records the shape for its own
+// task's outcome (applyResult). Every other flip (a reopen, a cancel or close
+// made outside the controller, a task added) moves the shape. Titles,
+// details, and markers stay out.
+func backlogShape(b Backlog) string {
+	type row struct {
+		ID, Status string
+	}
+	rows := make([]row, 0, len(b.Tasks))
+	for _, t := range b.Tasks {
+		if t.Marker() {
+			continue
+		}
+		status := t.Status
+		if status == "doing" {
+			status = "todo"
+		}
+		rows = append(rows, row{ID: t.ID, Status: status})
+	}
+	return hashJSON(rows)
 }
 
 // coversSources reports whether any changed path lies inside the accepted

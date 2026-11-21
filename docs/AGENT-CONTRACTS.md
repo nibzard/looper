@@ -411,6 +411,12 @@ lists.
   fields such as the request identifier, the session, and the submitter never
   take part, so a retry after a controller restart still matches — and a plan
   import's digest addresses the captured plan bytes, never their paths.
+  The task and attempt revisions that `cancel`, `amend`, and `requeue` read
+  at submission are preconditions, not content: they stay on the request, so
+  the controller still refuses a request read against a task that changed,
+  but they never take part in the digest. A retry of the same command after
+  the original applied therefore replays the original outcome, although the
+  application moved those revisions.
 - Resolution happens twice. The submitting command answers from the retained
   receipts before it publishes: a match returns the original request as the
   immediate receipt with `duplicate: true` (or as the record a `--wait`

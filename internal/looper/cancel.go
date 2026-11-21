@@ -527,10 +527,11 @@ func runCancel(c Config, out, stderr io.Writer) int {
 	if err != nil {
 		return emitError(c, err, out, stderr)
 	}
-	payloadDigest := requestPayloadDigest(&SettingsRequest{Type: RequestTypeCancel, TaskID: c.CancelTask, TaskRevision: revision, Cascade: c.Cascade}, nil)
+	keyed := &SettingsRequest{Type: RequestTypeCancel, TaskID: c.CancelTask, TaskRevision: revision, Cascade: c.Cascade}
+	payloadDigest := requestPayloadDigest(keyed, nil)
 	// A caller key answers from the retained receipts before any envelope is
 	// published (AX-012).
-	if code, handled := answerFromRetainedKey(c, dir, PublicRequestCancel, c.IdempotencyKey, payloadDigest, out, stderr); handled {
+	if code, handled := answerFromRetainedKey(c, dir, PublicRequestCancel, c.IdempotencyKey, payloadDigest, out, stderr, legacyRequestPayloadDigest(keyed)); handled {
 		return code
 	}
 	if c.Wait {

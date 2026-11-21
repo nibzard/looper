@@ -115,7 +115,7 @@ func TestControllerSignals(t *testing.T) {
 	_, dir := projectPaths(c)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	installControllerSignals(c, cancel)
+	installControllerSignals(c, cancel).own()
 	// SIGTERM drains: a request bound to this process appears and the
 	// context stays live.
 	syscall.Kill(os.Getpid(), syscall.SIGTERM)
@@ -155,29 +155,32 @@ func TestControllerSignals(t *testing.T) {
 }
 
 // TestSigTermBeforeEngineDrainsAtFirstBoundary covers the startup overlap: a
-// drain request written by the signal handler before controller identity is
-// published still drains that controller at its first boundary, and the
-// completed drain consumes the request.
+// SIGTERM that arrives before the engine holds the lock is latched, writes no
+// stop file while this process is not yet the controller, and drains that
+// controller at its first boundary once it owns the repository. The completed
+// drain consumes the request.
 func TestSigTermBeforeEngineDrainsAtFirstBoundary(t *testing.T) {
 	c := preparedRepo(t, "--once")
 	_, dir := projectPaths(c)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	installControllerSignals(c, cancel)
+	signals := installControllerSignals(c, cancel)
 	syscall.Kill(os.Getpid(), syscall.SIGTERM)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(stopRequestPath(dir)); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if _, err := os.Stat(stopRequestPath(dir)); err != nil {
-		t.Fatal("SIGTERM must write the drain request during startup")
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(stopRequestPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("a process that does not own the repository must not write a stop request")
 	}
 	e, lock, err := NewEngine(c, io.Discard)
 	if err != nil {
 		t.Fatal(err)
+	}
+	signals.own()
+	req, _, err := readStopRequest(dir)
+	if err != nil || req == nil {
+		t.Fatalf("the latched SIGTERM must write the drain request once owned: %v", err)
+	}
+	if req.Session != e.controller.Session {
+		t.Fatalf("the replayed request must bind to the controller session, got %+v", req)
 	}
 	defer lock.Close()
 	defer e.Store.Close()

@@ -50,7 +50,28 @@ func validateIdempotencyKey(key string) error {
 // the identifier, the session, the submitter, the creation time — are
 // excluded: a retry after a controller restart targets a new session and must
 // still match.
+//
+// The task and attempt revisions are excluded too. The CLI reads them from
+// the saved run at submission, so they are preconditions the controller
+// checks, not content the caller chose. The first application moves them,
+// and a digest that covered them made every keyed retry after success a
+// conflict instead of the replay AX-012 promises. The request still carries
+// them, so the controller still refuses a request read against a stale task.
 type canonicalPayload struct {
+	Tasks          []Task                     `json:"tasks,omitempty"`
+	Fields         map[string]json.RawMessage `json:"fields,omitempty"`
+	Reset          bool                       `json:"reset,omitempty"`
+	PlanDigests    []string                   `json:"plan_digests,omitempty"`
+	TaskID         string                     `json:"task_id,omitempty"`
+	Cascade        bool                       `json:"cascade,omitempty"`
+	RecoveryChoice string                     `json:"recovery_choice,omitempty"`
+	RecoveryToken  string                     `json:"recovery_token,omitempty"`
+}
+
+// legacyCanonicalPayload is the canonical form receipts recorded before the
+// revisions left the digest. The field order matches the old struct exactly,
+// so an old receipt's digest is reproducible.
+type legacyCanonicalPayload struct {
 	Tasks            []Task                     `json:"tasks,omitempty"`
 	Fields           map[string]json.RawMessage `json:"fields,omitempty"`
 	Reset            bool                       `json:"reset,omitempty"`
@@ -85,6 +106,25 @@ func requestPayloadDigest(req *SettingsRequest, planDigests []string) string {
 	}
 	b, err := json.Marshal(canonicalPayload{
 		Tasks: req.Tasks, Fields: req.Fields, Reset: req.Reset,
+		TaskID: req.TaskID, Cascade: req.Cascade,
+		RecoveryChoice: req.RecoveryChoice, RecoveryToken: req.RecoveryToken,
+	})
+	if err != nil {
+		return ""
+	}
+	return digest(b)
+}
+
+// legacyRequestPayloadDigest reproduces the digest a receipt recorded before
+// the revisions left the canonical payload. It is empty when the request
+// carries no revision: for such a request the old and new forms are the same
+// bytes, and requestPayloadDigest already covers it.
+func legacyRequestPayloadDigest(req *SettingsRequest) string {
+	if req == nil || (req.TaskRevision == "" && req.AttemptsRevision == "") || publicRequestType(req.Type) == PublicRequestAddPlan {
+		return ""
+	}
+	b, err := json.Marshal(legacyCanonicalPayload{
+		Tasks: req.Tasks, Fields: req.Fields, Reset: req.Reset,
 		TaskID: req.TaskID, TaskRevision: req.TaskRevision, Cascade: req.Cascade,
 		RecoveryChoice: req.RecoveryChoice, RecoveryToken: req.RecoveryToken,
 		AttemptsRevision: req.AttemptsRevision,
@@ -93,6 +133,16 @@ func requestPayloadDigest(req *SettingsRequest, planDigests []string) string {
 		return ""
 	}
 	return digest(b)
+}
+
+// payloadDigestMatches reports whether one recorded digest names the same
+// content as a submission: the current digest, or the legacy digest an older
+// receipt recorded. An empty digest never matches.
+func payloadDigestMatches(recorded, current, legacy string) bool {
+	if recorded == "" {
+		return false
+	}
+	return recorded == current || (legacy != "" && recorded == legacy)
 }
 
 // planContentDigests lists the content digests of one captured plan batch, in
@@ -137,7 +187,7 @@ func (e *Engine) resolveIdempotencyKey(req *SettingsRequest, planDigests []strin
 	if found == nil {
 		return digest, nil, nil
 	}
-	if digest != "" && found.PayloadDigest == digest {
+	if digest != "" && payloadDigestMatches(found.PayloadDigest, digest, legacyRequestPayloadDigest(req)) {
 		return digest, found, nil
 	}
 	return digest, nil, found
@@ -169,7 +219,6 @@ func (e *Engine) replayIdempotentAck(req *SettingsRequest, original *RequestReco
 		ack.Status = AckError
 		ack.Message = fmt.Sprintf("the original request %s is %s: %s", original.ID, original.State, orDefault(original.Error, original.Summary))
 	}
-	e.rememberAck(req.ID, ack)
 	if e.State != nil {
 		state, decided := original.State, ""
 		if !requestStateTerminal(original.State) {
@@ -185,6 +234,10 @@ func (e *Engine) replayIdempotentAck(req *SettingsRequest, original *RequestReco
 		} else {
 			decided = time.Now().UTC().Format(time.RFC3339Nano)
 		}
+		// The in-flight adjustments above are part of the answer the caller
+		// and the mirror record see, so the cache fill follows them; caching
+		// first would pin the pre-adjustment acknowledgement.
+		e.rememberAck(req.ID, ack)
 		e.upsertRequest(&RequestRecord{
 			ID: req.ID, Type: publicRequestType(req.Type), State: state,
 			Session: e.controllerSessionID(), TargetSession: req.Session,
@@ -196,6 +249,8 @@ func (e *Engine) replayIdempotentAck(req *SettingsRequest, original *RequestReco
 		if err := e.Store.Save(e.State); err != nil && e.err == nil {
 			e.err = err
 		}
+	} else {
+		e.rememberAck(req.ID, ack)
 	}
 	return ack
 }
@@ -238,7 +293,10 @@ func idempotencyLookup(dir, requestType, key string) *RequestRecord {
 // key is a conflict. handled false means the key has no retained receipt: the
 // caller publishes and the controller owns the outcome, with the claim-time
 // resolution covering the races a pre-check cannot see.
-func answerFromRetainedKey(c Config, dir, requestType, key, payloadDigest string, out, stderr io.Writer) (int, bool) {
+//
+// legacy optionally carries the revision-covering digest an older receipt may
+// have recorded for the same content (legacyRequestPayloadDigest).
+func answerFromRetainedKey(c Config, dir, requestType, key, payloadDigest string, out, stderr io.Writer, legacy ...string) (int, bool) {
 	if key == "" {
 		return 0, false
 	}
@@ -246,11 +304,34 @@ func answerFromRetainedKey(c Config, dir, requestType, key, payloadDigest string
 	if original == nil {
 		return 0, false
 	}
-	if payloadDigest == "" || original.PayloadDigest != payloadDigest {
+	legacyDigest := ""
+	if len(legacy) > 0 {
+		legacyDigest = legacy[0]
+	}
+	if payloadDigest == "" || !payloadDigestMatches(original.PayloadDigest, payloadDigest, legacyDigest) {
 		return emitError(c, idempotencyConflictError(key, original, payloadDigest), out, stderr), true
 	}
+	if c.Wait && !requestStateTerminal(original.State) {
+		// The original is still running. A submitted --wait waits out the same
+		// bound for the controller's acknowledgement, so the replay waits for
+		// the durable outcome instead of returning a pending receipt at once.
+		deadline := time.Now().Add(c.waitBound())
+		for time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			if next := idempotencyLookup(dir, requestType, key); next != nil && requestStateTerminal(next.State) {
+				original = next
+				break
+			}
+		}
+	}
 	if c.Wait && requestStateTerminal(original.State) {
-		return emitWaitRecord(c, requestQueryRecordFromReceipt(original, nil, wallClock()), original.ID, out, stderr), true
+		code := emitWaitRecord(c, requestQueryRecordFromReceipt(original, nil, wallClock()), original.ID, out, stderr)
+		// A rejected or failed original answers the wait with the non-zero
+		// exit its own --wait would report, never a clean zero.
+		if original.State == RequestRejected || original.State == RequestFailed {
+			return 1, true
+		}
+		return code, true
 	}
 	createdAt := orDefault(original.SubmittedAt, wallClock().UTC().Format(time.RFC3339Nano))
 	r := keyedMutationReceipt(newMutationReceipt(original.ID, requestType, original.State, createdAt, original.Session),

@@ -186,7 +186,7 @@ func TestInputWaitPublishesImmediately(t *testing.T) {
 				e.State.Finished = false
 			}
 			before := hashJSON(e.State)
-			e.publishView(false)
+			e.publishView()
 			e.waitForInput(errors.New(c.Todo + ": invalid status"))
 			v := LoadView(e.Dir)
 			if v == nil || v.Finished || v.State != "waiting" || !strings.Contains(v.ActivityDetail, c.Todo) || !strings.Contains(v.ActivityDetail, "Correct the file") {

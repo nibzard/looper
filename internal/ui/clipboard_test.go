@@ -67,7 +67,7 @@ func TestCopyKeyAndFeedback(t *testing.T) {
 	m.initWorkspace()
 	m.workspace.searching = true
 	m.workspace.search.Focus()
-	next, cmd = m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	next, _ = m.keys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if next.(model).workspace.search.Value() != "c" {
 		t.Fatal("copy key intercepted search")
 	}

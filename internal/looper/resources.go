@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -95,7 +92,7 @@ func beginResourceOperation(ctx context.Context, dir string) (context.Context, f
 	} else if !os.IsNotExist(err) {
 		return ctx, nil, err
 	}
-	identity, err := resourceProcessIdentity(os.Getpid())
+	identity, err := runIdentityCommand(os.Getpid())
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -118,25 +115,12 @@ func beginResourceOperation(ctx context.Context, dir string) (context.Context, f
 }
 
 func resourceOwnerAlive(lease ResourceLease) bool {
-	identity, err := resourceProcessIdentity(lease.PID)
+	identity, err := runIdentityCommand(lease.PID)
 	if err != nil {
 		// An unreadable process is not proof that its owner has exited.
 		return !errors.Is(syscall.Kill(lease.PID, 0), syscall.ESRCH)
 	}
 	return identity == lease.Identity
-}
-
-func resourceProcessIdentity(pid int) (string, error) {
-	if runtime.GOOS == "linux" {
-		return runIdentityCommand(pid)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	data, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
-	if err != nil || strings.TrimSpace(string(data)) == "" {
-		return "", fmt.Errorf("cannot identify resource owner %d", pid)
-	}
-	return strings.TrimSpace(string(data)), nil
 }
 
 func cleanResourceLease(lease *ResourceLease) error {

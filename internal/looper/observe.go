@@ -166,6 +166,7 @@ func statusReport(c Config, snap *StoreSnapshot, timing TimingReport, statistics
 	state.ReviewedTree = ""
 	state.ReviewedComplete = false
 	state.ReviewedImports = 0
+	state.ReviewedBacklog = ""
 	// The structured block reason is version 2 output (OW-10): the legacy
 	// and --full documents share this frozen shape and admit no
 	// block_reason key on nested tasks. The compact documents carry it.
@@ -1125,6 +1126,11 @@ func (e *Engine) pollWorkerActivity() {
 			}
 			if e.controller != nil {
 				start, _ := time.Parse(time.RFC3339, e.controller.Started)
+				// Filesystem mtime granularity is coarser than the started
+				// stamp's nanoseconds, so a log created in the first
+				// milliseconds of the session reads as older than the session
+				// itself. Truncating to the second keeps those logs visible.
+				start = start.Truncate(time.Second)
 				if st, err := os.Stat(p); err != nil || st.ModTime().Before(start) {
 					continue
 				}

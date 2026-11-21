@@ -187,8 +187,9 @@ func runRequeueOnline(c Config, revision, attemptsRevision string, out, stderr i
 			return emitError(c, requestSubmitError(err), out, stderr)
 		}
 	}
-	payloadDigest := requestPayloadDigest(&SettingsRequest{Type: reqType, TaskID: c.RequeueTask, TaskRevision: revision, AttemptsRevision: attemptsRevision}, nil)
-	if code, handled := answerFromRetainedKey(c, dir, public, c.IdempotencyKey, payloadDigest, out, stderr); handled {
+	keyed := &SettingsRequest{Type: reqType, TaskID: c.RequeueTask, TaskRevision: revision, AttemptsRevision: attemptsRevision}
+	payloadDigest := requestPayloadDigest(keyed, nil)
+	if code, handled := answerFromRetainedKey(c, dir, public, c.IdempotencyKey, payloadDigest, out, stderr, legacyRequestPayloadDigest(keyed)); handled {
 		return code
 	}
 	req := SettingsRequest{Version: SettingsRequestVersion, Type: reqType, Session: info.Session,
@@ -250,12 +251,37 @@ func runRequeueStopped(c Config, revision, attemptsRevision string, out, stderr 
 		p.Message = "no saved run; the store holds no state yet"
 		return emitError(c, p, out, stderr)
 	}
-	e := &Engine{Config: c, Repo: r, Store: store, State: s, Dir: dir, Output: io.Discard, acks: map[string]SettingsAck{}}
+	// The same identity the stopped recovery application enforces: a saved
+	// run that belongs to another project or task file never requeues here.
+	if s.Version != 2 || s.Root != c.Root || s.Todo != c.Todo {
+		p := operationFailure("run_not_current", "The saved run belongs to another project or task file.")
+		p.Retry = retryNo
+		p.Observed = map[string]any{"saved_root": clampString(s.Root, maxErrorString), "saved_todo": clampString(s.Todo, maxErrorString)}
+		return emitError(c, p, out, stderr)
+	}
 	req := &SettingsRequest{Version: SettingsRequestVersion, ID: identifier("requeue"), Type: RequestTypeRequeue,
 		TaskID: c.RequeueTask, TaskRevision: revision, AttemptsRevision: attemptsRevision,
 		IdempotencyKey: c.IdempotencyKey, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if c.RequeueFresh {
 		req.Type = RequestTypeRequeueFresh
+	}
+	e := &Engine{Config: c, Repo: r, Store: store, State: s, Dir: dir, Output: io.Discard, acks: map[string]SettingsAck{}}
+	// A caller key replays through the bare engine (AX-012): a retry after
+	// the stopped application answers from the retained receipt and records
+	// the mirror receipt a replay owes, instead of applying the requeue
+	// twice. A changed payload under the same key refuses with the conflict.
+	if original := idempotencyLookup(dir, publicRequestType(req.Type), c.IdempotencyKey); original != nil {
+		digest := requestPayloadDigest(req, nil)
+		if digest == "" || !payloadDigestMatches(original.PayloadDigest, digest, legacyRequestPayloadDigest(req)) {
+			return emitError(c, idempotencyConflictError(c.IdempotencyKey, original, digest), out, stderr)
+		}
+		ack := e.replayIdempotentAck(req, original)
+		if e.err != nil {
+			return emitError(c, persistenceError(e.err.Error()), out, stderr)
+		}
+		return reportRequeueAck(c, &ack, nil, out, stderr)
+	}
+	if c.RequeueFresh {
 		ack := e.applyRequeueFreshRequest(req)
 		if e.err != nil && ack.Status == AckApplied {
 			return emitError(c, persistenceError(e.err.Error()), out, stderr)

@@ -502,8 +502,8 @@ func (e *Engine) review(ctx context.Context, final bool, scope reviewScope) erro
 	}
 	e.activity = "reviewing"
 	e.activityAgent = e.Config.ReviewAgent
-	e.publishView(false)
-	defer func() { e.activity, e.activityAgent = "", ""; e.publishView(false) }()
+	e.publishView()
+	defer func() { e.activity, e.activityAgent = "", ""; e.publishView() }()
 	name := identifier("review")
 	work, err := e.Repo.Workspace(name, e.State.Tip, e.State.Backlog)
 	if err != nil {
@@ -628,6 +628,7 @@ func (e *Engine) applyReviewSkip(scope reviewScope, final bool) error {
 	e.State.ReviewedTip = e.State.Tip
 	e.State.ReviewPending = false
 	e.State.ReviewedTree = e.State.Published
+	e.State.ReviewedBacklog = backlogShape(e.State.Backlog)
 	e.State.Finished = final && e.State.ReviewedComplete && !e.openWork()
 	if err := e.export(); err != nil {
 		findings.rollback()
@@ -663,6 +664,7 @@ func (e *Engine) applyReview(result reviewResult, final bool, name string) error
 	e.State.ReviewedTree = e.State.Published
 	e.State.ReviewedComplete = result.Complete
 	e.State.ReviewedImports = appliedImportCount(e.State)
+	e.State.ReviewedBacklog = backlogShape(e.State.Backlog)
 	e.State.Finished = final && result.Complete && !e.openWork()
 	if err := e.export(); err != nil {
 		findings.rollback()

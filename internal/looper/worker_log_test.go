@@ -12,7 +12,7 @@ func TestWorkerLogTracksRetriesAndChecks(t *testing.T) {
 	e := snapshotEngine(t)
 	a := e.State.Attempts[0]
 	a.Directory = filepath.Join(e.Dir, "task-a")
-	e.publishView(false)
+	e.publishView()
 	if _, text, err := workerLog(e.Dir, a.ID); err != nil || !strings.Contains(text, "Waiting for worker output") {
 		t.Fatalf("empty log: %q %v", text, err)
 	}
@@ -42,7 +42,7 @@ func TestWorkerLogTracksRetriesAndChecks(t *testing.T) {
 		t.Fatalf("retry log: %s %q %v", path, text, err)
 	}
 	a.Phase = "verifying"
-	e.publishView(false)
+	e.publishView()
 	if _, text, err := workerLog(e.Dir, a.ID); err != nil || !strings.Contains(text, "Waiting") {
 		t.Fatal("showed implementation output as a check")
 	}
@@ -55,7 +55,7 @@ func TestWorkerLogTracksRetriesAndChecks(t *testing.T) {
 		t.Fatal("accepted unknown attempt")
 	}
 	a.Phase = "done"
-	e.publishView(false)
+	e.publishView()
 	if _, text, err := workerLog(e.Dir, a.ID); err != nil || text == "" {
 		t.Fatal("completed task lost its retained logs")
 	}

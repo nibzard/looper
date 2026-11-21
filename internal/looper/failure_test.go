@@ -95,7 +95,7 @@ func cleanupLeaseFixture(t *testing.T, dir, script string) ResourceLease {
 	if err := os.WriteFile(filepath.Join(dir, resourceCleanupFile), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	identity, err := resourceProcessIdentity(os.Getpid())
+	identity, err := runIdentityCommand(os.Getpid())
 	if err != nil {
 		t.Skipf("process identity unavailable: %v", err)
 	}
@@ -273,6 +273,34 @@ func TestFailureContextBoundsAndScrubs(t *testing.T) {
 	}
 	if got := boundedContextOf([]byte("\x1b[31mred control text\x1b[0m\nsecond")); got != "red control text\nsecond" {
 		t.Fatalf("escape sequences must be consumed: %q", got)
+	}
+}
+
+// TestBoundedContextScrubsBeforeSlicing pins the two leak shapes the scrubber
+// order fixed: a private key block wider than the line window, and an
+// auth header whose scheme word used to eat the redaction while the
+// credential survived.
+func TestBoundedContextScrubsBeforeSlicing(t *testing.T) {
+	key := "-----BEGIN RSA PRIVATE KEY-----\n"
+	for i := 0; i < maxFailureContextLines+3; i++ {
+		key += "MIIEpAIBAAKCAQEA7f3LmQ3V9d2R0cHJvZm9ybQ" + strings.Repeat("Xy", 8) + "\n"
+	}
+	key += "-----END RSA PRIVATE KEY-----\n"
+	got := boundedContextOf([]byte("tool --key server-1\n" + key))
+	if strings.Contains(got, "BEGIN RSA PRIVATE KEY") || strings.Contains(got, "MIIEpAIBAAKCAQEA") {
+		t.Fatalf("private key material survived the line window: %q", got)
+	}
+	if !strings.Contains(got, "[redacted private key]") {
+		t.Fatalf("the key block must be marked redacted: %q", got)
+	}
+	for header, leak := range map[string]string{
+		"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.s3cr3ts1gn4tur3": "s3cr3ts1gn4tur3",
+		"Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==":                            "dXNlcjpwYXNzd29yZA==",
+		"authorization: opensesame":                                                  "opensesame",
+	} {
+		if got := scrubSecrets(header); strings.Contains(got, leak) {
+			t.Fatalf("credential survived header scrubbing: %q -> %q", header, got)
+		}
 	}
 }
 
@@ -630,5 +658,28 @@ func TestWorkerActivityToolErrorExcerpt(t *testing.T) {
 	actions = workerActivity(input)
 	if len(actions) != 1 || actions[0] != "Tool started: Bash" {
 		t.Fatalf("tool input leaked or action changed: %v", actions)
+	}
+}
+
+// TestBoundedContextScrubsPartialKeyBlocks pins the byte-window cut: a key
+// block that starts before the byte window loses its BEGIN line, and a log
+// that ends mid-key loses its END line. Neither partial block may survive.
+func TestBoundedContextScrubsPartialKeyBlocks(t *testing.T) {
+	body := ""
+	for i := 0; i < 80; i++ {
+		body += "MIIEpAIBAAKCAQEA7f3LmQ3V9d2R0cHJvZm9ybQ" + strings.Repeat("Xy", 8) + "\n"
+	}
+	head := "-----BEGIN RSA PRIVATE KEY-----\n" + body
+	tail := "-----END RSA PRIVATE KEY-----\nverify failed: exit 1\n"
+	got := boundedContextOf([]byte(head + tail))
+	if strings.Contains(got, "MIIEpAIBAAKCAQEA") || !strings.Contains(got, "[redacted private key]") {
+		t.Fatalf("a key block cut at the window start leaked: %q", got)
+	}
+	if !strings.Contains(got, "verify failed: exit 1") {
+		t.Fatalf("the output after the key must stay: %q", got)
+	}
+	got = boundedContextOf([]byte("running tool\n" + head))
+	if strings.Contains(got, "MIIEpAIBAAKCAQEA") || !strings.Contains(got, "[redacted private key]") {
+		t.Fatalf("a key block cut at the window end leaked: %q", got)
 	}
 }

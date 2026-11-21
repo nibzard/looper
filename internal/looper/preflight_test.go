@@ -505,7 +505,7 @@ func TestPreflightBoundsBinaryFields(t *testing.T) {
 	// Escape-heavy content: every ampersand emits six bytes, so a raw-byte
 	// clamp would let 256 recorded bytes become 1536 emitted ones.
 	t.Setenv("CLAUDE_BIN", strings.Repeat("amp&<>\x01", 500))
-	code, doc, raw = runPreflightCLI(t, true)
+	code, doc, _ = runPreflightCLI(t, true)
 	if code != 1 {
 		t.Fatalf("the escape-heavy missing binary keeps its error finding, got exit %d", code)
 	}

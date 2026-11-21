@@ -297,7 +297,7 @@ func TestStartupDrainScopedRequests(t *testing.T) {
 		{"process", func(string) stopRequest { return stopRequest{PID: os.Getpid()} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e, c, closeEngine := assessRunEngine(t, "", 0)
+			_, c, closeEngine := assessRunEngine(t, "", 0)
 			closeEngine()
 			startEngine := func() (*Engine, func()) {
 				t.Helper()
@@ -316,7 +316,7 @@ func TestStartupDrainScopedRequests(t *testing.T) {
 				t.Cleanup(close)
 				return e, close
 			}
-			e, closeEngine = startEngine()
+			e, closeEngine := startEngine()
 			if err := writeStopRequest(e.Dir, tc.request(e.controller.Session)); err != nil {
 				t.Fatal(err)
 			}
@@ -463,7 +463,7 @@ func TestStartupDrainWithRetainedNilPlanWork(t *testing.T) {
 	// repeating implementation.
 	shutdown()
 	log = agentLogPath(t)
-	e, shutdown = retainedResumeEngine(t, c)
+	e, _ = retainedResumeEngine(t, c)
 	code, err = e.Run(ctx)
 	if code != 0 || err != nil {
 		t.Fatalf("resume after retained-work drain: %d %v", code, err)

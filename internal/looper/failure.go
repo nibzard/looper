@@ -1,6 +1,7 @@
 package looper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -228,14 +229,28 @@ func boundedFailureContext(path string) string {
 func boundedContextOf(data []byte) string {
 	const window = maxFailureContextBytes * 2
 	if len(data) > window {
+		dropped := data[:len(data)-window]
 		data = data[len(data)-window:]
+		// A key block open at the cut would reach the window with neither
+		// marker when the block is wider than the window. Carry the open
+		// BEGIN line in, so the scrubbers below see where the key starts.
+		if begin := bytes.LastIndex(dropped, []byte("-----BEGIN ")); begin >= 0 &&
+			bytes.Contains(dropped[begin:], []byte("PRIVATE KEY-----")) &&
+			!bytes.Contains(dropped[begin:], []byte("-----END ")) {
+			data = append([]byte("-----BEGIN PRIVATE KEY-----\n"), data...)
+		}
 	}
-	text := sanitize(string(data))
+	// Secrets are scrubbed before the line window is taken: a private key
+	// block spans more lines than the window keeps, so slicing first would
+	// cut off its BEGIN line and leak the remaining key material. The byte
+	// window above can still cut a block; the scrubbers redact a partial
+	// block at either edge of the excerpt.
+	text := scrubSecrets(sanitize(string(data)))
 	lines := strings.Split(text, "\n")
 	if len(lines) > maxFailureContextLines {
 		lines = lines[len(lines)-maxFailureContextLines:]
 	}
-	return strings.TrimSpace(clampContext(scrubSecrets(strings.Join(lines, "\n")), maxFailureContextBytes))
+	return strings.TrimSpace(clampContext(strings.Join(lines, "\n"), maxFailureContextBytes))
 }
 
 // scrubSecrets replaces credential shapes in excerpted text. Summaries quote
@@ -247,7 +262,17 @@ var secretScrubbers = []struct {
 	replacement string
 }{
 	{regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.|\n)*?-----END [A-Z ]*PRIVATE KEY-----`), "[redacted private key]"},
-	{regexp.MustCompile(`(?i)\b(authorization|proxy-authorization)(\s*:\s*)(\S+)`), "$1$2[redacted]"},
+	// An excerpt is a byte window of a longer log, so it can start inside a
+	// key block or end inside one. After the complete blocks above are gone,
+	// an END line with no BEGIN means the window began mid-key: everything
+	// before it is key material. A BEGIN line with no END means the excerpt
+	// ends mid-key: everything after it is key material.
+	{regexp.MustCompile(`(?s)\A.*?-----END [A-Z ]*PRIVATE KEY-----`), "[redacted private key]"},
+	{regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*\z`), "[redacted private key]"},
+	// The header scrubber consumes the optional auth-scheme word before the
+	// credential: matching the scheme alone would replace "Bearer" and leave
+	// the token itself in the clear.
+	{regexp.MustCompile(`(?i)\b(authorization|proxy-authorization)(\s*:\s*(?:(?:bearer|basic|token|digest)\s+)?)(\S+)`), "$1$2[redacted]"},
 	{regexp.MustCompile(`(?i)\b(bearer)(?:\s+|%20|\+)([A-Za-z0-9._+/=-]{8,})`), "$1[redacted]"},
 	{regexp.MustCompile(`(?i)\b([A-Z0-9_-]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API[-_]?KEY|CREDENTIAL)[A-Z0-9_-]*)(\s*[=:]\s*)(["']?)[A-Za-z0-9._+/=-]{3,}(["']?)`), "$1$2$3[redacted]$4"},
 	{regexp.MustCompile(`(?i)(\s)(-u|--user|--username)(=|\s+)([^/\s:]+:[^/\s]*)`), "$1$2$3[redacted]"},

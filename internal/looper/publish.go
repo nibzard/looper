@@ -109,8 +109,7 @@ type publishEvidence struct {
 	mergeInProg string
 	staged      []string
 
-	workingChanges []string
-	unrelated      []string
+	unrelated []string
 
 	taskTracked    bool
 	schemaTracked  bool
@@ -204,13 +203,18 @@ func mergeState(common string) string {
 // enter from the accepted side; tracked control files keep their tracked
 // place, and the tracked task file carries the accepted exported bytes.
 func (ev *publishEvidence) compose() error {
-	entries := map[string]string{}
-	head := map[string]string{}
+	var entries, head map[string]string
 	var err error
 	if entries, err = lsTreeEntries(ev.c.Root, ev.s.Published); err != nil {
 		return fmt.Errorf("the accepted tree could not be listed: %w", err)
 	}
-	if head, err = lsTreeEntries(ev.c.Root, ev.head); err != nil {
+	if ev.head == "" {
+		// Unborn branch: no HEAD tree exists. The head_attached guard this
+		// state trips has already refused the publication; an empty project
+		// side composes the preview beside it instead of failing the whole
+		// preview on `git ls-tree ""`.
+		head = map[string]string{}
+	} else if head, err = lsTreeEntries(ev.c.Root, ev.head); err != nil {
 		return fmt.Errorf("the project HEAD tree could not be listed: %w", err)
 	}
 	ev.headEntries = head
@@ -322,9 +326,9 @@ func collectPublishEvidence(c Config, dir string, repo *Repository, snap *StoreS
 	} else {
 		ev.indexDigest = "unreadable"
 	}
-	_, err = os.Stat(filepath.Join(repo.Common, "index.lock"))
+	_, err = os.Stat(filepath.Join(repo.GitDir, "index.lock"))
 	ev.indexLock = err == nil
-	ev.mergeInProg = mergeState(repo.Common)
+	ev.mergeInProg = mergeState(repo.GitDir)
 	if staged, err := gitCommand(c.Root, nil, nil, "diff", "--cached", "--name-only", "-z", "HEAD"); err == nil {
 		ev.staged = splitZPaths(string(staged))
 	}
@@ -713,12 +717,11 @@ func publishRuntimeViewOf(paths []string) publishRuntimeView {
 	return view
 }
 
-// buildPublishPreview composes the preview document from fresh evidence.
-func buildPublishPreview(c Config, dir string, repo *Repository, snap *StoreSnapshot, s *State) (*publishPreviewDocument, error) {
-	ev, err := collectPublishEvidence(c, dir, repo, snap, s)
-	if err != nil {
-		return nil, err
-	}
+// buildPublishPreview composes the preview document from evidence the caller
+// already collected. Collecting again here would spawn every git query a
+// second time beside the first collection's results.
+func buildPublishPreview(ev *publishEvidence) (*publishPreviewDocument, error) {
+	s, snap := ev.s, ev.snap
 	changes := ev.composedDiff()
 	doc := &publishPreviewDocument{
 		ContractVersion: ContractVersionV2,
@@ -937,7 +940,10 @@ func publishOpenEvidence(c Config, dir string) (*publishEvidence, *Store, error)
 }
 
 func runPublishPreview(c Config, dir string, out, stderr io.Writer) int {
-	if repositoryOwned(c) {
+	// The preview changes no file: the ownership probe must not create the
+	// repository lock file the shared repositoryOwned helper opens with
+	// O_CREATE.
+	if repositoryOwnedNoCreate(c) {
 		p := operationFailure("controller_owns_repository", "A controller owns this repository. Stop it before publishing; the handoff needs the stopped-run lock.")
 		p.Actions = []ErrorAction{{Description: "Request a drain and wait for the controller to stop.", Command: "looper stop --wait"}}
 		p.withLegacy("A controller owns this repository. Stop it before publishing.", 1)
@@ -948,7 +954,7 @@ func runPublishPreview(c Config, dir string, out, stderr io.Writer) int {
 		return emitError(c, publishEvidenceError(err), out, stderr)
 	}
 	defer store.Close()
-	doc, err := buildPublishPreview(c, dir, ev.repo, ev.snap, ev.s)
+	doc, err := buildPublishPreview(ev)
 	if err != nil {
 		return emitError(c, publishEvidenceError(err), out, stderr)
 	}
@@ -978,9 +984,10 @@ func publishEvidenceError(err error) *PublicError {
 }
 
 // publishAcquireIndexLock creates the real Git index lock exclusively. An
-// existing lock always belongs to someone else and is never removed.
-func publishAcquireIndexLock(common string) (*os.File, error) {
-	return os.OpenFile(filepath.Join(common, "index.lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+// existing lock always belongs to someone else and is never removed. The lock
+// is per-worktree, so it lives in the checkout's own git directory.
+func publishAcquireIndexLock(gitDir string) (*os.File, error) {
+	return os.OpenFile(filepath.Join(gitDir, "index.lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 }
 
 // publishBuildTree writes the composed tree through one prepared index and
@@ -1042,16 +1049,16 @@ func publishCommit(c Config, repo *Repository, tree, parent, message string, ev 
 // publishInstallIndex installs the prepared index under the held index lock:
 // the prepared bytes replace the lock file and rename over the index, which
 // releases the lock atomically with the installation.
-func publishInstallIndex(common, prepared string) error {
+func publishInstallIndex(gitDir, prepared string) error {
 	data, err := os.ReadFile(prepared)
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(common, "index.lock")
+	lockPath := filepath.Join(gitDir, "index.lock")
 	if err := os.WriteFile(lockPath, data, 0600); err != nil {
 		return err
 	}
-	return os.Rename(lockPath, filepath.Join(common, "index"))
+	return os.Rename(lockPath, filepath.Join(gitDir, "index"))
 }
 
 // runPublishApply applies one previewed publication. The guards and the token
@@ -1196,14 +1203,14 @@ func completePublishJournal(c Config, dir string, r *Repository, store *Store, s
 	defer func() {
 		if lockFile != nil {
 			lockFile.Close()
-			os.Remove(filepath.Join(r.Common, "index.lock"))
+			os.Remove(filepath.Join(r.GitDir, "index.lock"))
 		}
 	}()
 	ensureLock := func() error {
 		if lockFile != nil {
 			return nil
 		}
-		f, err := publishAcquireIndexLock(r.Common)
+		f, err := publishAcquireIndexLock(r.GitDir)
 		if err != nil {
 			return fmt.Errorf("the Git index lock could not be acquired; another Git command holds it")
 		}
@@ -1290,6 +1297,15 @@ func completePublishJournal(c Config, dir string, r *Repository, store *Store, s
 				return writePublishJournal(dir, j)
 			}
 		case publishCommitted:
+			// The index installs only onto the branch this publication moved.
+			// An operator who moved HEAD or switched branches after the crash
+			// keeps their checkout: the conflict preserves the commit without
+			// overwriting the index first.
+			if head, branch, _ := r.HeadDetail(); head != j.NewCommit || branch != j.Branch {
+				j.State = publishConflict
+				j.Conflict = fmt.Sprintf("the branch holds %s on %s after the publication committed %s; the publication commit is preserved and the index was not overwritten", shortRevision(head), branchLabel(branch), shortRevision(j.NewCommit))
+				return writePublishJournal(dir, j)
+			}
 			if err := ensureLock(); err != nil {
 				return err
 			}
@@ -1308,11 +1324,12 @@ func completePublishJournal(c Config, dir string, r *Repository, store *Store, s
 			if err != nil {
 				return err
 			}
-			if err = publishInstallIndex(r.Common, prepared); err != nil {
+			if err = publishInstallIndex(r.GitDir, prepared); err != nil {
 				return err
 			}
 			os.Remove(prepared)
-			lockFile = nil // the rename released the lock
+			lockFile.Close() // the rename released the lock; the descriptor closes here
+			lockFile = nil
 			j.State = publishInstalled
 			if err = writePublishJournal(dir, j); err != nil {
 				return err
@@ -1422,6 +1439,20 @@ func resolvePublishJournal(c Config, dir string, r *Repository, store *Store, s 
 	if err != nil {
 		return j.State, err
 	}
+	// A journal that has not built its commit yet must still clear the
+	// publication guards in the world it now resolves in. The crash that
+	// left the journal interrupted ended the operator's session; whatever
+	// they started since — a merge, staged work, a moved branch — refuses
+	// the completion exactly as it would refuse a fresh application, instead
+	// of committing over it. Steps past the commit keep going: their
+	// decision was made and the per-step guards below own the rest. The
+	// journal_resolved guard names this very journal and never counts: it is
+	// unresolved precisely because this resolution is completing it.
+	if j.State == publishPrepared && j.NewCommit == "" && !resolutionGuardsPass(ev) {
+		j.State = publishConflict
+		j.Conflict = "the repository no longer passes the publication guards (staged work, merge state, or branch state changed after the interruption); the prepared publication is preserved and nothing moved. Reconcile by hand and publish again."
+		return j.State, writePublishJournal(dir, j)
+	}
 	if err := completePublishJournal(c, dir, r, store, s, j, ev); err != nil {
 		return j.State, err
 	}
@@ -1434,6 +1465,17 @@ func mustSnapshot(store *Store) *StoreSnapshot {
 		return &StoreSnapshot{}
 	}
 	return snap
+}
+
+// resolutionGuardsPass reports whether every publication guard passes except
+// journal_resolved, which names the journal this resolution is completing.
+func resolutionGuardsPass(ev *publishEvidence) bool {
+	for _, g := range ev.guards {
+		if g.Code != "journal_resolved" && g.Verdict != "pass" {
+			return false
+		}
+	}
+	return true
 }
 
 func publishOperationalError(err error) *PublicError {

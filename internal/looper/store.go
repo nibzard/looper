@@ -178,15 +178,6 @@ type EventCursor struct {
 	ControllerSession string `json:"controller_session,omitempty"`
 }
 
-// Scope reports the cursor's continuation scope. Store positions survive
-// controller restarts; session positions end with their controller.
-func (c EventCursor) Scope() string {
-	if c.ControllerSession != "" {
-		return "session"
-	}
-	return "store"
-}
-
 // cursorInvalidError reports a continuation cursor that does not belong to
 // the store being read. The message always names the recovery: restart
 // observation from the current store, or continue from the store cursor.

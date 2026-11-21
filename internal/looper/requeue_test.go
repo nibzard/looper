@@ -373,3 +373,38 @@ func TestRequeueFreshCapabilityRefused(t *testing.T) {
 	}
 	_ = e
 }
+
+// A keyed stopped retry of requeue --fresh finds the requeue-fresh receipt
+// the first application recorded and replays it. The lookup once searched
+// the plain requeue type and applied again; the digest once covered the
+// revisions the first application moved and refused with a conflict.
+func TestRequeueFreshCLIStoppedKeyedRetryReplays(t *testing.T) {
+	e, _, lock := freshRequeueEngine(t)
+	if err := e.Store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr strings.Builder
+	cc := v2Config(e.Config, "requeue", false)
+	cc.RequeueTask, cc.RequeueFresh, cc.IdempotencyKey = "T001", true, "fresh-once"
+	if code := runRequeue(cc, &out, &stderr); code != exitOK {
+		t.Fatalf("apply exit %d: %s%s", code, out.String(), stderr.String())
+	}
+	_, dir := projectPaths(e.Config)
+	original := ""
+	for _, r := range savedState(t, dir).Requests {
+		if r != nil && r.IdempotencyKey == "fresh-once" {
+			original = r.ID
+		}
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := runRequeue(cc, &out, &stderr); code != exitOK {
+		t.Fatalf("the keyed retry must replay: %d %s%s", code, out.String(), stderr.String())
+	}
+	if !strings.Contains(out.String(), original) {
+		t.Fatalf("the replay must name the original request %s: %s", original, out.String())
+	}
+}

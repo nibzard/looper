@@ -260,7 +260,7 @@ func TestReviewDueAndDispatchReason(t *testing.T) {
 		if e.reviewDue() != tc.want {
 			t.Fatalf("due: %+v", tc)
 		}
-		v := e.snapshot(false)
+		v := e.snapshot()
 		if tc.want && v.DispatchReason != "Milestone review is due before dispatch" {
 			t.Fatalf("reason: %+v", v)
 		}

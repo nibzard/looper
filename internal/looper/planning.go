@@ -19,10 +19,10 @@ func (e *Engine) runPlanner(ctx context.Context, op operation, work, dir, prompt
 	done := make(chan result, 1)
 	e.activity, e.activityDetail = "planning", "Starting the planning agent"
 	e.activityAgent = op.config.ReviewAgent
-	e.publishView(false)
+	e.publishView()
 	defer func() {
 		e.activity, e.activityDetail, e.activityLog, e.activityUpdated, e.activityAgent = "", "", "", "", ""
-		e.publishView(false)
+		e.publishView()
 	}()
 	go func() {
 		raw, err := op.agent.run(ctx, op.config.ReviewAgent, work, dir, prompt, false, func(detail, log string) {
@@ -58,14 +58,14 @@ func (e *Engine) runPlanner(ctx context.Context, op operation, work, dir, prompt
 			}
 			e.activityDetail, e.activityLog = p.detail, p.log
 			e.event("plan", fmt.Sprintf("Planning: %s. Log: %s", p.detail, p.log))
-			e.publishView(false)
+			e.publishView()
 		case <-tick.C:
 			poll()
 			seconds++
 			if seconds%30 == 0 {
 				e.event("plan", fmt.Sprintf("Controller waiting for planner (%s). Last activity: %s", time.Since(started).Round(time.Second), e.activityDetail))
 			}
-			e.publishView(false)
+			e.publishView()
 		}
 	}
 }

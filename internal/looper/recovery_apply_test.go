@@ -594,6 +594,7 @@ func TestRecoveryApplyLiveControllerRequestPath(t *testing.T) {
 		if err = writeJSON(c.Todo, edited); err != nil {
 			t.Fatal(err)
 		}
+		beforeDigest := digestFile(c.Todo)
 		_, doc, _ := runPreviewCLI(t, "--contract", "v2", "--json")
 		e := &Engine{Dir: dir, Output: io.Discard, Store: store, State: state, Config: c,
 			controller: &ControllerInfo{Version: 1, Session: "run-live", PID: os.Getpid()},
@@ -604,7 +605,7 @@ func TestRecoveryApplyLiveControllerRequestPath(t *testing.T) {
 		if ack.Status != AckConflict || !strings.Contains(ack.Message, "in flight") {
 			t.Fatalf("the in-flight guard must own the import: %+v", ack)
 		}
-		if digestFile(c.Todo) != digestFile(c.Todo) || state.ExportHash != digest(data) {
+		if digestFile(c.Todo) != beforeDigest || state.ExportHash != digest(data) {
 			t.Fatal("the refusal mutated the run")
 		}
 		if kept, _ := os.ReadFile(c.Todo); !strings.Contains(string(kept), "edited outside Looper") {

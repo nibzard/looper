@@ -58,7 +58,7 @@ func (a *dashboardAttachment) interrupt() error {
 	if err != nil || info.Session != a.session {
 		return fmt.Errorf("The controller changed or disconnected. Wait for the dashboard to reconnect, then retry.")
 	}
-	if err = signalController(a.dir, syscall.SIGINT); err != nil {
+	if err = signalController(info, syscall.SIGINT); err != nil {
 		return fmt.Errorf("The controller could not be interrupted: %w", err)
 	}
 	return nil

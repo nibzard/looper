@@ -14,7 +14,7 @@ func TestCompletedDiffExplainsCleanup(t *testing.T) {
 	a := e.State.Attempts[1]
 	a.Worktree = filepath.Join(t.TempDir(), "removed")
 	a.Base = "base"
-	e.publishView(false)
+	e.publishView()
 	text, err := attemptDiff(e.Dir, a.ID)
 	if err != nil || !strings.Contains(text, "T1") || !strings.Contains(text, "completed") || !strings.Contains(text, "logs") {
 		t.Fatalf("completed checkout cleanup should be contextual information: %q %v", text, err)
@@ -98,7 +98,7 @@ func TestAttemptDiffSanitizesTerminalControls(t *testing.T) {
 	e := snapshotEngine(t)
 	a := e.State.Attempts[0]
 	a.Worktree, a.Base = work, base
-	e.publishView(false)
+	e.publishView()
 	text, err := attemptDiff(e.Dir, a.ID)
 	if err != nil {
 		t.Fatal(err)

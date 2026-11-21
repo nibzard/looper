@@ -58,10 +58,10 @@ func TestDiagnosePublishesActivityEvidence(t *testing.T) {
 		_, ok := e.diagnose(context.Background(), a, "check failed: T001.txt missing")
 		done <- ok
 	}()
-	v := waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
+	_ = waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
 		return v.State == "diagnosing" && v.ActivityAgent == "claude" && strings.Contains(v.ActivityLog, "diagnose-")
 	})
-	v = waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
+	v := waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
 		return v.ActivityDetail == "Read to-do.json" && v.ActivityUpdated != ""
 	})
 	select {

@@ -26,7 +26,6 @@ type Engine struct {
 	Repo                *Repository
 	Store               *Store
 	State               *State
-	Agent               Agent
 	Dir, Logs           string
 	Output              io.Writer
 	Render              *Presenter
@@ -50,6 +49,11 @@ type Engine struct {
 	// accepted state and the user's file stay untouched while it is set.
 	inputPending bool
 	inputProblem string
+
+	// draining records that the loop observed a stop request bound to this
+	// controller. The view keeps reporting the drain after the request is
+	// consumed, because the drain exits publish while winding down.
+	draining bool
 
 	// suppressRequestWake keeps one pass's idle wait from waking on queued
 	// request envelopes the boundary could not finish: a claim error, or a
@@ -208,7 +212,7 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 		lock.Close()
 		return nil, nil, err
 	}
-	engine := &Engine{Config: c, Repo: r, Store: s, Agent: Agent{c}, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, viewNotify: make(chan ui.ViewSnapshot, 1), checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs, sweptRequests: swept, quotaPauses: map[string]*providerPause{}}
+	engine := &Engine{Config: c, Repo: r, Store: s, Dir: dir, Logs: logs, Output: out, controller: info, acks: map[string]SettingsAck{}, viewNotify: make(chan ui.ViewSnapshot, 1), checkSlots: make(chan struct{}, c.Checks), capacity: c.Jobs, sweptRequests: swept, quotaPauses: map[string]*providerPause{}}
 	// The presentation cursor starts at the retained store's committed
 	// high-water mark, so the first view a restart publishes points observers
 	// at a valid continuation position instead of the beginning of history.
@@ -225,6 +229,19 @@ func NewEngine(c Config, out io.Writer) (*Engine, *os.File, error) {
 		engine.Render = NewPresenter(DetectMode(os.Stdin, out, c.Plain), out, width)
 	}
 	return engine, lock, nil
+}
+
+// Close releases the engine's ownership records and store. A finished run
+// already cleared them under the repository lock; clearing again is a no-op
+// because the records carry the session. A caller that never reached Run —
+// an initialization failure between NewEngine and the loop — must not leave
+// a stale controller.json and view.json behind for observers to trust.
+func (e *Engine) Close() error {
+	if e.controller != nil {
+		clearView(e.Dir)
+		removeController(e.Dir, e.controller.Session)
+	}
+	return e.Store.Close()
 }
 
 // eventIdentity is the structured identity one lifecycle event carries
@@ -360,6 +377,31 @@ func (e *Engine) export() error {
 	}
 	data = append(data, '\n')
 	next := digest(data)
+	// Verify the on-disk task file before any pending export state is
+	// recorded. A refused export must leave ExportPending and ExportBefore
+	// untouched: setting them first left the saved state wedged at a guard
+	// the boundary import that follows had already satisfied, so every later
+	// export failed against a stale ExportBefore until the controller
+	// aborted (full-codebase audit, 2026-11-20).
+	expected := e.State.ExportHash
+	if e.State.ExportPending {
+		expected = e.State.ExportBefore
+	}
+	current, err := os.ReadFile(e.Config.Todo)
+	if err != nil {
+		return err
+	}
+	observed := digest(current)
+	if observed != expected && observed != next {
+		edit := e.classifyBacklog(current)
+		if !edit.Equivalent {
+			return e.retain(pendingExportGuardError(e, expected, observed, edit))
+		}
+		// Equivalent formatting (AX-018): the external edit changed no
+		// content, so the export below replaces it with the canonical
+		// projection of the same backlog, exactly as it replaces the
+		// previously accepted bytes.
+	}
 	if !e.State.ExportPending {
 		// The journal that follows overwrites the task file, so record the
 		// accepted bytes first: a replay this edit blocks names this copy as
@@ -370,21 +412,6 @@ func (e *Engine) export() error {
 		if err = e.save(); err != nil {
 			return err
 		}
-	}
-	current, err := os.ReadFile(e.Config.Todo)
-	if err != nil {
-		return err
-	}
-	observed := digest(current)
-	if observed != e.State.ExportBefore && observed != next {
-		edit := e.classifyBacklog(current)
-		if !edit.Equivalent {
-			return e.retain(pendingExportGuardError(e, e.State.ExportBefore, observed, edit))
-		}
-		// Equivalent formatting (AX-018): the external edit changed no
-		// content, so the export below replaces it with the canonical
-		// projection of the same backlog, exactly as it replaces the
-		// previously accepted bytes.
 	}
 	if observed != next {
 		if err = atomicWrite(e.Config.Todo, data, 0600); err != nil {
@@ -725,7 +752,6 @@ func (e *Engine) initializeState(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			b = clone(s.Backlog)
 		}
 		if retained(s) {
 			if observed := digest(data); observed != s.ExportHash {
@@ -1498,7 +1524,16 @@ func (e *Engine) applyResult(a *Attempt) error {
 	// The worker stage carries the attempt, so a reconciliation the worker
 	// reports is guarded against the revision that attempt verified (T139).
 	findings := e.beginWorkerStage(a)
+	// The dispatched task's own outcome is ordinary progression: when the
+	// recorded review shape still described the backlog before this result,
+	// it is re-recorded after the flip so the next review keeps its focused
+	// or skip scope (T128). Follow-ups the worker reports land after this
+	// point and still move the shape.
+	shapeCurrent := e.State.ReviewedBacklog != "" && backlogShape(e.State.Backlog) == e.State.ReviewedBacklog
 	t.Status = s.Status
+	if shapeCurrent {
+		e.State.ReviewedBacklog = backlogShape(e.State.Backlog)
+	}
 	// History accumulates across attempts; the latest report never erases
 	// earlier evidence, and a hold keeps the files already recorded. A
 	// reported entry no scope can use is rejected at this merge, so the files

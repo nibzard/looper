@@ -281,7 +281,7 @@ func TestStartPlanUnderLiveControllerServesStructuredRefusal(t *testing.T) {
 		t.Fatalf("a version 2 JSON error must stay one document on stdout: %q", stderr.String())
 	}
 	var doc errorDocument
-	if err := json.Unmarshal([]byte(out.String()), &doc); err != nil {
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("stdout is not one error document: %v\n%s", err, out.String())
 	}
 	if doc.Command != "looper start --contract v2" {

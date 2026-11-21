@@ -716,3 +716,29 @@ func TestAmendOptionParsing(t *testing.T) {
 		t.Fatal("controllers do not advertise amend-task requests")
 	}
 }
+
+// A real CLI retry reads the task revision again after the amendment moved
+// it; the same amended content under the same key replays.
+func TestAmendKeyedRetryAfterSuccessReplays(t *testing.T) {
+	e := amendEngine(t, []Task{{ID: "T1", Title: "one", Priority: 1, Status: "todo"}})
+	revised := Task{ID: "T1", Title: "one revised", Priority: 1, Status: "todo"}
+	first := amendRequest(e, revised)
+	first.IdempotencyKey = "amend-once"
+	original := e.applyAmendRequest(first)
+	if original.Status != AckApplied {
+		t.Fatalf("keyed amend: %+v", original)
+	}
+	retry := amendRequest(e, revised)
+	retry.IdempotencyKey = "amend-once"
+	if retry.TaskRevision == first.TaskRevision {
+		t.Fatal("fixture: the amendment must move the task revision")
+	}
+	if ack := e.applyAmendRequest(retry); ack.Status != AckApplied || !strings.Contains(ack.Message, original.Message) {
+		t.Fatalf("the retry after success must replay: %+v", ack)
+	}
+	changed := amendRequest(e, Task{ID: "T1", Title: "one changed again", Priority: 1, Status: "todo"})
+	changed.IdempotencyKey = "amend-once"
+	if ack := e.applyAmendRequest(changed); ack.Status != AckConflict {
+		t.Fatalf("changed content under the key must still conflict: %+v", ack)
+	}
+}

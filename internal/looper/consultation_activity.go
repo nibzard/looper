@@ -59,12 +59,15 @@ func (e *Engine) runConsultation(ctx context.Context, op operation, work, dir, p
 	identity := c.identity
 	identity.Session = session
 	e.eventData(c.openKind, c.openMessage+". Log: "+e.activityLog, identity.merge(map[string]any{"log": e.activityLog}))
-	// The loop owns the drain flag; a consultation that blocks it keeps
-	// reporting the same request so a stop stays visible.
-	e.publishView(e.drainingNow())
+	// A consultation blocks the loop goroutine that owns the drain flag, so
+	// it samples the stop request itself before each publication, exactly
+	// like a loop boundary: a stop sent mid-consultation stays visible.
+	e.refreshDraining()
+	e.publishView()
 	defer func() {
 		e.activity, e.activityDetail, e.activityLog, e.activityUpdated, e.activityAgent = "", "", "", "", ""
-		e.publishView(e.drainingNow())
+		e.refreshDraining()
+		e.publishView()
 	}()
 	go func() {
 		raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
@@ -106,7 +109,8 @@ func (e *Engine) runConsultation(ctx context.Context, op operation, work, dir, p
 			if seconds%every == 0 {
 				e.eventData(c.waitKind, fmt.Sprintf("Controller waiting for %s (%s). Last activity: %s", c.waitLabel, time.Since(started).Round(time.Second), e.activityDetail), identity.merge(map[string]any{"log": e.activityLog}))
 			}
-			e.publishView(e.drainingNow())
+			e.refreshDraining()
+			e.publishView()
 		}
 	}
 }

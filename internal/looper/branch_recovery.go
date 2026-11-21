@@ -17,7 +17,6 @@ const (
 	branchRecoverable = "recoverable"
 	branchMoved       = "moved"
 	branchUnborn      = "unborn"
-	branchDetached    = "detached"
 	branchUnreadable  = "unreadable"
 	branchUnknown     = "unknown"
 )
@@ -30,7 +29,6 @@ const (
 type branchRead struct {
 	state   string
 	reason  string // why the state is not acceptable, or what an acceptance accepted
-	unborn  bool
 	unknown string // why a check could not run
 }
 
@@ -391,6 +389,9 @@ func (e *Engine) recoverCommittedHead() (bool, error) {
 	if current != head || currentBranch != branch {
 		return false, moved("the branch moved again while the comparison ran")
 	}
+	// A pending publication stays set: the startup application completes it
+	// against the moved head, exactly as it does without the owner commit.
+	// Only the fold below requeues one, against the base it folds.
 	old := e.State.Head
 	e.State.Head = head
 	if err := e.save(); err != nil {
@@ -483,17 +484,20 @@ func (e *Engine) foldOwnerCommit(head string, paths []string) (folded bool, refu
 	if current != head || currentBranch != e.State.Branch {
 		return false, "the branch moved again while the acceptance ran", nil, nil
 	}
+	// Resolve the publication's attempt before anything is written, so an
+	// unknown attempt refuses with the ref and the state untouched.
+	var requeued *Attempt
+	oldPhase, oldPublication := "", e.State.Publication
 	if p := e.State.Publication; p != nil {
 		a := e.attempt(p.AttemptID)
 		if a == nil {
 			return false, "", nil, fmt.Errorf("publication references an unknown attempt")
 		}
-		// The verified result re-prepares against the folded base and
-		// verifies again; its saved verification stays recorded beside the
-		// attempt for inspection.
-		a.Phase = "ready"
-		e.State.Publication = nil
+		requeued, oldPhase = a, a.Phase
 	}
+	// The commit and the ref move before any state mutates. A failed save
+	// below restores the state and points the ref back at the old tip, so the
+	// run's error path and a restart both see the pre-fold state.
 	seed, cerr := e.Repo.Commit(tree, []string{e.State.Tip, head}, "Accept project commit for Looper")
 	if cerr != nil {
 		return false, "", nil, cerr
@@ -502,13 +506,29 @@ func (e *Engine) foldOwnerCommit(head string, paths []string) (folded bool, refu
 		return false, "", nil, err
 	}
 	oldHead, oldTip, oldPublished := e.State.Head, e.State.Tip, e.State.Published
+	oldFinished, oldReviewedTip := e.State.Finished, e.State.ReviewedTip
 	e.State.Head = head
 	e.State.Tip = seed
 	e.State.Published = tree
 	e.State.Finished = false
 	e.State.ReviewedTip = ""
+	if requeued != nil {
+		// The verified result re-prepares against the folded base and
+		// verifies again; its saved verification stays recorded beside the
+		// attempt for inspection.
+		requeued.Phase = "ready"
+		e.State.Publication = nil
+	}
 	if err = e.save(); err != nil {
 		e.State.Head, e.State.Tip, e.State.Published = oldHead, oldTip, oldPublished
+		e.State.Finished, e.State.ReviewedTip = oldFinished, oldReviewedTip
+		e.State.Publication = oldPublication
+		if requeued != nil {
+			requeued.Phase = oldPhase
+		}
+		if rerr := e.Repo.Ref(e.State.Ref, oldTip); rerr != nil {
+			return false, "", nil, fmt.Errorf("%w; restoring %s to %s also failed: %v", err, e.State.Ref, oldTip, rerr)
+		}
 		return false, "", nil, err
 	}
 	listed, total := boundPaths(delta)

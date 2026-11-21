@@ -84,6 +84,7 @@ type findingStage struct {
 	reviewedTree     string
 	reviewedComplete bool
 	reviewedImports  int
+	reviewedBacklog  string
 	// revision is the accepted revision this transaction applies against. A
 	// reconciliation must have verified exactly it, so evidence gathered on an
 	// older tree cannot release or close a task the controller has moved on.
@@ -116,6 +117,7 @@ func (e *Engine) beginFindingStage() *findingStage {
 		reviewedTree:     e.State.ReviewedTree,
 		reviewedComplete: e.State.ReviewedComplete,
 		reviewedImports:  e.State.ReviewedImports,
+		reviewedBacklog:  e.State.ReviewedBacklog,
 		revision:         e.State.Tip,
 	}
 }
@@ -178,6 +180,7 @@ func (s *findingStage) rollback() {
 	e.State.ReviewedTree = s.reviewedTree
 	e.State.ReviewedComplete = s.reviewedComplete
 	e.State.ReviewedImports = s.reviewedImports
+	e.State.ReviewedBacklog = s.reviewedBacklog
 	s.notes = nil
 }
 

@@ -15,7 +15,7 @@ func TestSnapshotAllTasksAndRecoveryAreIndependent(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks[2].UnblockWhen = "Configure credentials"
 	e.State.Backlog.Tasks[3].DependsOn = []string{"T3"}
-	v := e.snapshot(false)
+	v := e.snapshot()
 	if len(v.Tasks) != 4 || v.Tasks[0].Status != "done" || v.Tasks[2].UnblockWhen != "Configure credentials" || len(v.Tasks[3].WaitingOn) != 1 {
 		t.Fatalf("missing inspector data: %+v", v.Tasks)
 	}
@@ -146,7 +146,7 @@ func TestObserverInspectorIncludesChecksAndRetainedWork(t *testing.T) {
 
 func TestObserverViewRejectsDifferentOrStoppedController(t *testing.T) {
 	e := snapshotEngine(t)
-	e.publishView(false)
+	e.publishView()
 	if err := writeJSON(controllerPath(e.Dir), e.controller); err != nil {
 		t.Fatal(err)
 	}

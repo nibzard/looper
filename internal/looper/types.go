@@ -603,6 +603,15 @@ type State struct {
 	ReviewedTree     string `json:"reviewed_tree,omitempty"`
 	ReviewedComplete bool   `json:"reviewed_complete,omitempty"`
 	ReviewedImports  int    `json:"reviewed_imports,omitempty"`
+	// ReviewedBacklog is the completion shape of the backlog the last applied
+	// review recorded: every ordinary task's identifier and status. A due
+	// review whose backlog shape differs — tasks added, reopened, cancelled,
+	// or closed outside a review — cannot borrow the recorded verdict,
+	// because the published tree never carries the task file and a shape
+	// change is exactly what the verdict did not see. Optional like the
+	// other coverage fields: states saved before the field load with none,
+	// and their first review records it.
+	ReviewedBacklog string `json:"reviewed_backlog,omitempty"`
 	// StartupSeed marks a state written only so a starting controller's run
 	// is publicly queryable before readiness is reported (AX-022). It is not
 	// a baseline to resume: initialization treats it as absent and seeds the

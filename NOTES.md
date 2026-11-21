@@ -2048,3 +2048,892 @@ Validation, 2026-11-20:
   startup import ("Analyzing imported requirements"), left no bootstrap
   staging record, and kept the operator's backlog authoritative.
 - Full-package and full-repo results are recorded in the task report.
+
+## Full-codebase reliability, correctness, and simplification audit, 2026-11-20
+
+Read-only review of the complete codebase (`cmd/looper`, `internal/looper`,
+`internal/ui`, `internal/contractschema`, `install.sh`, `uninstall.sh`,
+`Makefile`, and `scripts/*`) at commit `d0b01fc` (`0.12.1-dev.1`), verified
+against source and baseline checks (`go vet ./cmd/... ./internal/...` pass,
+`go test -timeout 40m ./cmd/... ./internal/...` pass in 778.6 s, and
+`staticcheck ./cmd/... ./internal/...` with 17 concrete findings). No
+production code was modified during this review.
+
+### 1. Controller main loop, lifecycle, signals, and process management
+
+- **Main loop boundary gaps (`looper stop` ignored across synchronous phases;
+  explains the 2026-11-13 "Stop ignored" incident)**
+  (`internal/looper/run.go:148-681`, `internal/looper/controller.go:326-339`,
+  `internal/looper/planning.go:22,25,61,68`,
+  `internal/looper/review_activity.go:28,31,76`,
+  `internal/looper/engine.go:505,506`,
+  `internal/looper/run.go:1104,1113`):
+  - `draining := e.drainingNow()` is sampled only at the top of each loop
+    iteration (`run.go:148`) and re-checked only before entering
+    `reviewCycle` (`run.go:462, 531`).
+  - There is no `e.drainingNow()` or external task-file edit check after
+    synchronous `e.processControllerRequests(ctx)` (`run.go:235`, which runs
+    multi-minute `processPlanImports`), `e.recoverRun(ctx)` (`run.go:549`),
+    `e.reviewCycle(ctx, ...)` (`run.go:475, 578`), or `e.plan(ctx)`
+    (`run.go:484, 631`).
+  - If `looper stop` arrives during a milestone or final review that produces
+    new ready findings (`len(ready) > 0`), `Run` immediately enters a
+    multi-minute `e.plan(ctx)` (`run.go:631`) and falls straight through to
+    worker dispatch (`run.go:646`) with the stale `draining == false` variable
+    from the start of the iteration, spawning new workers after stop was
+    requested.
+  - Under `--once`, if `looper stop` arrives during a final review that
+    produces no ready tasks (`len(ready) == 0`), `run.go:603-612` exits
+    immediately as `"complete"` or `"no_runnable_tasks"` without honoring the
+    drain, and `defer e.releaseStopRequests()` (`run.go:78`,
+    `controller.go:326-339`) marks the stop request `RequestRejected`
+    (`"the controller ended before it could honor this stop request"`).
+  - Simultaneously, `planning.go:22,25,61,68`, `review_activity.go:28,31,76`,
+    `engine.go:505,506`, and `run.go:1104,1113` call `e.publishView(false)`
+    instead of `e.publishView(e.drainingNow())` (unlike
+    `consultation_activity.go:64`), erasing `draining: true` from `view.json`
+    throughout reviews and planning.
+  - **Fix**: Re-check `if e.drainingNow()` (and `continue` to the top of the
+    loop so the drain exit path runs) after `processControllerRequests`,
+    `recoverRun`, `reviewCycle`, and `plan`. Remove the `draining bool`
+    parameter from `publishView` and have `snapshot()` read `e.drainingNow()`
+    directly.
+
+- **External `to-do.json` edit during `reviewCycle` or `applyPlanImport`
+  poisons `ExportPending` and `ExportBefore`**
+  (`internal/looper/engine.go:363-398`,
+  `internal/looper/integration.go:624-679`,
+  `internal/looper/findings.go:74-182`,
+  `internal/looper/imports.go:748-768`,
+  `internal/looper/run.go:505, 578-598, 1002-1027`):
+  - `e.export()` (`engine.go:363-373`) sets
+    `e.State.ExportBefore = e.State.ExportHash` and
+    `e.State.ExportPending = true` and saves `e.State` to SQLite *before*
+    reading `to-do.json` from disk and checking for an external edit.
+  - If the operator edited `to-do.json` while `reviewCycle` or
+    `applyPlanImport` was running, `e.export()` returns
+    `pendingExportGuardError` (`*retentionError`) at `engine.go:387`.
+  - Both `findings.rollback()` (`integration.go:633, 668`,
+    `findings.go:170-182`) and `staged.rollback()` (`imports.go:766`) restore
+    only in-memory backlog fields, leaving `ExportPending = true` and
+    `ExportBefore = <old hash>` in both `e.State` and SQLite.
+  - Furthermore, `run.go:578-598` treats `*retentionError` (and even
+    `ctx.Err()`) from `reviewCycle` as a retryable `review-error`
+    (`reviewFailures++`, `continue`). On the next iteration, `refreshIdle()`
+    (`run.go:505, 1002-1027`) imports the edited `to-do.json` and updates
+    `e.State.ExportHash = <new hash>` without clearing `ExportPending` or
+    `ExportBefore`. The next two `reviewCycle` retries fail immediately in
+    `e.export()` because `disk == e.State.ExportBefore` compares `<new hash>`
+    against stale `<old hash>`, aborting the controller after 3 wasted
+    reviews with `state.db` wedged at `ExportPending = true`.
+  - **Fix**: In `e.export()`, verify `to-do.json` on disk against `expected`
+    before setting `ExportPending = true` and saving `e.State` (or clear and
+    persist `ExportPending = false` and `ExportBefore = ""` on pre-write
+    guard rollback). In `run.go:578`, check `ctx.Err()` and `*retentionError`
+    before treating a `reviewCycle` error as a retryable agent failure.
+
+- **Cancelled attempt permanently starves a reopened task and causes a 50 ms
+  busy-spin**
+  (`internal/looper/run.go:658-666`, `internal/looper/cancel.go:412`,
+  `internal/looper/view.go:77`):
+  - `commitCancellation` (`cancel.go:412`) sets `a.Phase = "cancelled"`.
+    While `view.go:77` and `findings.go:250` exclude `a.Phase == "cancelled"`,
+    the worker dispatch check at `run.go:660` checks only:
+    `a.Task.ID == task.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "resume"`.
+  - If a cancelled task is later reopened to `"todo"` in `to-do.json`,
+    `Backlog.Ready()` includes it, `run.go:660` permanently treats it as
+    `claimed = true` and never dispatches it, `--once` never terminates
+    because `len(ready) > 0`, and continuous mode busy-spins every 50 ms
+    running `refreshIdle()` (including git snapshots).
+  - **Fix**: Add `&& a.Phase != "cancelled"` at `run.go:660` (or centralize
+    in an `attemptClaimsTask(a)` helper).
+
+- **`controllerAlive` never checks process start identity and fails
+  unconditionally on macOS (`T019`)**
+  (`internal/looper/controller.go:18-32, 110-152`,
+  `internal/looper/resources.go:129-140`,
+  `internal/looper/dashboard_attachment.go:54-65`):
+  - Despite its doc comment (*"It compares the recorded process start time
+    when the host exposes it"*), `ControllerInfo` has no `Identity` field and
+    `controllerAlive` (`controller.go:112-120`) calls
+    `_, err := runIdentityCommand(info.PID)` and discards the returned start
+    time, returning `true` for any reused PID on Linux.
+  - `signalController` (`controller.go:140-152`) reads `controller.json` and
+    sends `SIGINT` to `info.PID` without verifying `info.Session` against a
+    target session (even in `dashboard_attachment.go:57-61`, where
+    `readController` is checked and then re-read inside `signalController`)
+    and without comparing process start identity, risking sending `SIGINT` to
+    an unrelated process if the PID was recycled.
+  - `runIdentityCommand` (`controller.go:123-138`) reads `/proc/<pid>/stat`
+    only (Linux-only), whereas `resources.go:129-140` already implements
+    cross-platform `resourceProcessIdentity(pid)` using `/proc/<pid>/stat` on
+    Linux and `ps -p <pid> -o lstart=` on Darwin. Because
+    `runIdentityCommand` is Linux-only, `controllerAlive`,
+    `signalController`, `submitterAlive`, and live `Store.Timing` /
+    `Store.Statistics` all fail unconditionally on macOS.
+  - **Fix**: Unify `runIdentityCommand` and `resourceProcessIdentity`, record
+    `Identity string` in `ControllerInfo` when writing `controller.json`,
+    compare `current == info.Identity` when non-empty, and pass the expected
+    session ID into `signalController`.
+
+- **Signal handlers installed in `looper start` parent and before daemon
+  readiness / `maybeFirstRun`**
+  (`internal/looper/cli.go:325`, `internal/looper/daemon.go:172, 212`):
+  - `Main` (`cli.go:325`) calls `installControllerSignals(c, cancel)` for
+    both `"run"` and `"start"` *before* `maybeFirstRun` and *before*
+    `StartDetached`.
+  - When a user runs `looper start` or is inside the interactive first-run
+    form, the parent CLI process traps `SIGINT` and `SIGTERM`: pressing
+    Ctrl+C is swallowed once, and `SIGTERM` writes a stray `stop` file into
+    the runtime directory from the parent CLI instead of terminating it.
+  - In `RunDaemon` (`daemon.go:212`), `installControllerSignals` is installed
+    before `NewEngine` and readiness. If `NewEngine` hangs before writing
+    `readyFile`, `StartDetached` times out after 10 s and sends `SIGTERM`
+    (`daemon.go:172`); the child's `SIGTERM` handler intercepts it, writes a
+    `stop` file instead of exiting, and forces `StartDetached` to hang an
+    extra 5 s until `SIGKILL`.
+  - **Fix**: Install controller signal handlers only in the actual controller
+    process (`runCLIController` after `maybeFirstRun`, `RunDaemon` after
+    `NewEngine` acquires the repository lock, and `runDashboardController`).
+
+- **`runProcess` deferred `SIGKILL` runs after `cmd.Wait()` and SQLite fsync**
+  (`internal/looper/process_unix.go:195-259`):
+  - Line 195 registers `defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)`,
+    which executes at function return—*after* `cmd.Wait()` (line 235) reaps
+    the process group leader and *after* `writeProcessObservation` and
+    `store.endProcess` (SQLite fsync, lines 253-257).
+  - Once `cmd.Wait()` reaps the process group leader, the OS kernel can
+    recycle the PID/PGID during the SQLite fsync, and the deferred `SIGKILL`
+    can kill an unrelated process group.
+  - **Fix**: Send `syscall.Kill(-pid, syscall.SIGKILL)` immediately before or
+    immediately upon `cmd.Wait()` returning (or in the cancellation goroutine
+    while the leader is still un-reaped), never after `cmd.Wait()` and
+    post-wait I/O.
+
+- **`readStopRequest` turns a racing `ENOENT` into a synthetic active stop
+  request**
+  (`internal/looper/controller.go:194-212`):
+  - `readStopRequest` calls `os.Stat(path)` and then `os.ReadFile(path)`. If
+    the `stop` file is removed between `Stat` and `ReadFile`, `os.ReadFile`
+    returns `ENOENT`, and lines 202-204 return `&stopRequest{}` (an active,
+    unscoped stop request that matches any session!) instead of `nil`.
+  - **Fix**: Call `os.ReadFile(path)` directly and return `nil` when
+    `os.IsNotExist(err)`.
+
+- **`Engine.Close` omits `clearController` and `clearView`**
+  (`internal/looper/engine.go:88-96`, `internal/looper/lifecycle.go:34-43`):
+  - If a caller invokes `e.Close()` after `NewEngine` without running
+    `e.Run(ctx)` (or if initialization after `NewEngine` aborts before
+    `Run`'s `defer e.finishSession`), `controller.json` and `view.json` are
+    left behind on disk after `e.lock.Close()`.
+
+---
+
+### 2. Git integration, branch recovery, plan imports, and `looper publish`
+
+- **`looper publish` uses `--git-common-dir` instead of `--git-dir` for
+  worktree-private `index`, `index.lock`, and merge state**
+  (`internal/looper/publish.go:206-215, 325-327, 940-954, 1303, 1323, 1417-1429`):
+  - `publish.go` resolves `index`, `index.lock`, and
+    `MERGE_HEAD` / `CHERRY_PICK_HEAD` / `REVERT_HEAD` / `rebase-merge` /
+    `rebase-apply` under `r.Common` (`git rev-parse --git-common-dir`).
+  - Per `gitrepository-layout(5)`, `index` and sequencer/merge-state files
+    are per-worktree (`--git-dir`), whereas `--git-common-dir` points to the
+    shared main repository `.git` directory.
+  - Running `looper publish` inside a linked Git worktree (which `AGENTS.md`
+    explicitly recommends for concurrent edits) overwrites the main
+    checkout's `.git/index` and checks merge state in the wrong worktree.
+  - **Fix**: Add `GitDir string` (`git rev-parse --git-dir`, resolved to an
+    absolute path) to `Repository` and use `r.GitDir` for `index`,
+    `index.lock`, and `mergeState`.
+
+- **`completePublishJournal` leaks the `index.lock` file descriptor**
+  (`internal/looper/publish.go:1303-1315`):
+  - `completePublishJournal` opens `index.lock` with `os.OpenFile` and uses a
+    `defer` that closes `lockFile` only if `lockFile != nil`. At line 1315,
+    right after `os.Rename(lockPath, filepath.Join(ev.repo.Common, "index"))`,
+    it sets `lockFile = nil` without calling `lockFile.Close()`, leaking the
+    open file descriptor on every publish.
+
+- **`resolvePublishJournal` skips safety guards on startup recovery**
+  (`internal/looper/publish.go:1215-1294`, `internal/looper/engine.go:711`):
+  - `NewEngine` automatically runs `resolvePublishJournal` on startup.
+  - When `j.Phase == publishPrepared` and `j.NewCommit == ""`, it calls
+    `completePublishJournal(ev, j)` using fresh `ev` without checking
+    `ev.publishable` or `ev.mergeInProg` (unlike normal publish at line 996),
+    committing even if the user started a merge/rebase or modified the tree
+    after the crash.
+  - When `j.Phase == publishCommitted`, line 1270 calls
+    `writePublishIndex(ev.repo.Common, j.NewCommit, j.IndexEntries)` *before*
+    line 1277 checks `head == j.NewCommit && branch == j.Branch`, overwriting
+    `.git/index` even if the operator moved `HEAD` or switched branches after
+    the crash.
+
+- **`looper publish --preview` crashes on unborn `HEAD`, creates `looper.lock`,
+  and collects evidence twice**
+  (`internal/looper/publish.go:351-355, 868-881, 909`):
+  - In `collectPublishEvidence.compose()` (`publish.go:351-355`),
+    `lsTreeEntries(ev.repo.Root, ev.head)` runs unconditionally even when
+    `ev.head == ""` (unborn branch), failing with
+    `git ls-tree "": fatal: Not a valid object name` and aborting
+    `looper publish --preview` with `state_unreadable` instead of returning
+    the `head_attached` refusal guard that `evaluate()` recorded at line 299.
+  - `publishOpenEvidence` (`publish.go:909`) calls `repositoryOwned(c)`
+    (which creates `looper.lock` via `O_CREATE`) instead of
+    `repositoryOwnedNoCreate(c)`, violating the read-only contract of
+    `--preview`.
+  - `runPublish` (`publish.go:868-881`) calls `publishOpenEvidence` (which
+    runs `collectPublishEvidence`) and then `buildPublishPreview` (which runs
+    `collectPublishEvidence` a second time, spawning ~10 redundant `git`
+    subprocesses).
+
+- **`Repository.Apply` uses unhardened porcelain `git diff` / `git apply`**
+  (`internal/looper/git.go:515-525`):
+  - `Apply` runs `r.output("diff", "--binary", "--full-index", before, after, "--")`
+    and pipes it to `git apply --index --3way --whitespace=nowarn`.
+  - Unlike `Snapshot` and `attemptDiff` (which pass `--no-ext-diff --no-textconv`),
+    `Apply` does not disable external diff drivers, textconv, or custom
+    prefix settings (`diff.noprefix=true`, `diff.mnemonicPrefix=true`), so
+    user/repo `.gitconfig` settings can produce patches `git apply` rejects.
+    Also, if `before == after` (or the diff is empty), `patch` is empty and
+    `git apply` exits with `error: unrecognized input`.
+  - **Fix**: Short-circuit `if before == after` and
+    `if len(bytes.TrimSpace(patch)) == 0`, and use
+    `diff-tree --binary --full-index --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ -p`.
+
+- **`recoverCommittedHead` crashes `Engine.publish` on empty or excluded-only
+  owner commits, and `foldOwnerCommit` mutates state before commit/save**
+  (`internal/looper/branch_recovery.go:366-402, 450-513`,
+  `internal/looper/integration.go:389-397`,
+  `internal/looper/run.go:353-362`):
+  - When `Engine.publish()` detects that `HEAD` moved during a check, it
+    calls `e.recoverCommittedHead("publish")` (`integration.go:389`).
+  - If the owner made an empty commit (`git commit --allow-empty`) or
+    committed only excluded files (`to-do.json`), `recoverCommittedHead`
+    takes the unchanged-tree fast path (`matched == true`,
+    `branch_recovery.go:366-402`): it updates `e.State.Head = current.head`,
+    does *not* requeue `e.State.Publication`, and returns `(true, nil)`
+    (`moved = true`).
+  - `Engine.publish()` sees `if moved { return errBaselineMoved }`, and
+    `run.go:358` sees `e.State.Publication != nil` and aborts the controller
+    with `"the accepted commit left the publication of <ID> unrequeued"`.
+  - In `foldOwnerCommit` (`branch_recovery.go:450-513`), `dirty` is only
+    checked against `delta` (`s.Head..current.head`), not whether `delta`
+    overlaps `diff(s.Head, s.Published)`; if they overlap,
+    `r.Apply(s.Head, current.head)` on a worktree seeded from `s.Tip` can
+    absorb uncommitted working-tree edits into `s.Tip`. `foldOwnerCommit`
+    also mutates `a.Phase = "ready"` and `e.State.Publication = nil`
+    (lines 483-491) before `r.Commit`, `r.UpdateRef`, and `e.save()`, without
+    rolling back on error.
+
+- **`reviewScope` skips final reviews for new tasks outside `source_files`
+  and strands runs after cancelling the last blocked task**
+  (`internal/looper/review_scope.go:51-133`,
+  `internal/looper/integration.go:624-635`):
+  - `ReviewedTree` and `ReviewedComplete` are set when a review completes
+    (`integration.go:628-629`) and are never cleared when tasks are added,
+    amended, cancelled, or integrated.
+  - `coversSources(s, changed)` (`review_scope.go:121-133`) checks whether
+    changed paths overlap `s.Backlog.Sources`, which bootstrap defines as
+    requirements documents (for example, `["PROJECT.md"]`, `engine.go:412`), not the
+    project's source code files.
+  - **False completion without review**: After a run completes
+    (`ReviewedComplete = true`, `ReviewedTree = T1`,
+    `Backlog.Sources = ["PROJECT.md"]`), adding a task via `looper add-task`
+    sets `Finished = false` while `ReviewedComplete` remains `true`. When the
+    worker modifies code outside `Backlog.Sources` (`Published = T2`),
+    `reviewScope` at final review (`final == true`) sees
+    `s.ReviewedComplete == true` and `!coversSources(s, changed)`
+    (`review_scope.go:76-81`) and returns `skip: true`, marking
+    `e.State.Finished = true` without ever reviewing the new task's code.
+  - **Stranded run after cancellation**: If a final review runs while a task
+    is blocked (`ReviewedTree = T1`, `ReviewedComplete = false`,
+    `Finished = false`) and the operator then cancels that last blocked task
+    (`looper cancel`), `Published` is still `T1`. The next
+    `reviewCycle(ctx, true)` sees `s.Published == s.ReviewedTree`
+    (`review_scope.go:59`), returns `skip: true`, and sets
+    `e.State.Finished = e.State.ReviewedComplete` (`false`). Under `--once`,
+    the controller exits with code 2 (`no_runnable_tasks`) instead of 0
+    (`complete`); in continuous mode, `Finished` remains permanently `false`.
+  - **Fix**: Clear `ReviewedComplete = false` whenever tasks are added,
+    reopened, amended, or cancelled (or bind `ReviewedTree` to a backlog
+    status/contract digest), and never skip a final review when
+    `s.Finished != s.ReviewedComplete` or `s.Integrated > s.ReviewedAt`.
+
+---
+
+### 3. Persistence, recovery preview/apply, receipts, and idempotency
+
+- **`recovery_preview.go` diverges from startup and `recovery_apply.go`**
+  (`internal/looper/recovery_preview.go:419-441, 587-614, 691-800, 1174-1269`,
+  `internal/looper/recovery_apply.go:106-340`,
+  `internal/looper/requeue.go:350-430`):
+  - **Published new files falsely fail `project_tree_changed`**: Because
+    Looper publishes accepted work as unstaged working-tree edits (`r.Apply`
+    + `r.Reset`), any new file created in `s.Published` is untracked in
+    `HEAD` and appears in `git ls-files --others --exclude-standard`
+    (`ev.untracked`). Unlike `Engine.reconcile` (which compares a full
+    snapshot against `s.Published`), `recovery_preview.go:697-702` flags any
+    non-empty `ev.untracked` as `project_tree_changed: fail`, falsely blocking
+    `discard-retained` and `reset-to-baseline` whenever a run created a new
+    file.
+  - **`already_applied` publication falsely fails `project_tree_changed`**:
+    In `workingTreeComparison` (`recovery_preview.go:588-598`), when
+    `s.Publication != nil` and `ev.publicationOutcome == "already_applied"`,
+    `expected` is set to `s.Publication.Before` instead of
+    `s.Publication.Tree`, so `git diff p.Before` reports the already-applied
+    publication as unexpected working-tree drift.
+  - **`collectListings` swallows git errors as a clean tree**: In
+    `recovery_preview.go:419-441`, `if out, err := gitCommand(...); err == nil`
+    silently ignores git errors on `diff --name-only` and `ls-files --others`,
+    leaving `ev.dirty` and `ev.untracked` empty so `matches_published`
+    evaluates to `"pass"` when git fails.
+  - **`commitRecoveryReceipt` never sets `rec.Ack`**: In
+    `recovery_apply.go:250-280`, `rec.Ack = &ack` is omitted, so if the
+    controller crashes after `commitRecoveryReceipt` saves to SQLite and
+    before writing `ackDir/<id>.json`, `replayedAck` (`receipt.go:256`) fails
+    to reconstruct the ack on restart.
+  - **Stopped recovery and stopped requeue skip `answerFromRetainedKey`**:
+    Neither `applyStoppedRecovery` (`recovery_apply.go:316`) nor
+    `runRequeueStopped` (`requeue.go:350`) checks `answerFromRetainedKey`, so
+    replaying a stopped-mode `--idempotency-key` fails with conflict instead
+    of replaying the retained receipt. `runRequeueStopped` also omits the
+    `s.Version != StateVersion || s.Root != c.Root || s.Todo != c.Todo`
+    check that `applyStoppedRecovery` enforces.
+  - **`applyRestoreTaskFile` refuses to restore a deleted `to-do.json`**:
+    `recovery_preview.go:751, 1050` offers
+    `looper recovery --apply restore-task-file` when `to-do.json` is missing
+    (`os.IsNotExist`), and `Engine.restoreExport` restores a missing file on
+    startup, yet `applyRestoreTaskFile` (`recovery_apply.go:173-176`) rejects
+    `if ev.todoErr != nil` for all errors including `os.IsNotExist`.
+
+- **Idempotency & `--wait` contract bugs**
+  (`internal/looper/idempotency.go:160-264`,
+  `internal/looper/receipt.go:203-214`,
+  `internal/looper/imports.go:420-434`,
+  `internal/looper/config_cmd.go:765-788, 1146`):
+  - **`answerFromRetainedKey` with `--wait` returns exit code 0 on rejected /
+    failed receipts and skips waiting on in-flight receipts**
+    (`idempotency.go:239-263`): It calls `emitMutationReceipt` (which always
+    returns `exitOK = 0`), whereas normal `--wait` returns
+    `exitFromReceipt(c, rec)` (non-zero on `RequestRejected` /
+    `RequestFailed`) and waits via `waitSubmittedReceipt` when `rec.State` is
+    still `RequestAccepted` or `RequestWaiting`.
+  - **`replayIdempotentAck` caches `ack` before mutating it and writes
+    incomplete rejected receipts** (`idempotency.go:186-215`): Line 187 calls
+    `e.rememberAck(req.ID, ack)` *before* lines 206-213 set
+    `ack.Status = AckConflict` and `ack.Message = ...` for an in-flight
+    original request, caching an empty `AckError` in `e.acks[req.ID]`. Lines
+    191-194 (`if ack.Message == ""`) are dead code because
+    `if original.Ack != nil` returned at line 188, and lines 197-200 append a
+    raw `RequestRecord` missing `Session`, `CreatedAt`, `DecidedAt`, `Ack`,
+    and `AffectedTasks`.
+  - **Conflict rejections stamp the colliding `IdempotencyKey` and new
+    `PayloadDigest` onto the rejected receipt**: When a request fails an
+    idempotency conflict check (`conflict != nil`),
+    `rejectRequestReceipt(req, ack)` (`receipt.go:203-214`) copies
+    `req.IdempotencyKey` and the conflicting `PayloadDigest` onto the new
+    `RequestRejected` receipt. Because `findIdempotencyRecord` scans
+    oldest-first and `trimRequestRecords` prunes past 200 receipts, once the
+    original receipt is pruned, the rejected conflict receipt hijacks
+    ownership of `IdempotencyKey` with the conflicting digest. Similarly,
+    `dedupImportReceipt` (`imports.go:428`) copies `applied.IdempotencyKey`
+    onto a later duplicate import that carried a different key or no key.
+  - **`runConfigProjectStopped` ignores idempotency payload conflicts, and
+    `configPatchMap` conflates `--set field=""` with `--unset field`**:
+    `runConfigProjectStopped` (`config_cmd.go:1146`) calls
+    `answerFromRetainedKey` without checking whether a retained receipt with
+    the same key had a different `PayloadDigest`, silently applying the
+    conflicting mutation under the existing key. And `configPatchMap`
+    (`config_cmd.go:765-788`) serializes both `--set model=""` and
+    `--unset model` to `""` (and `--set jobs=0` and `--unset jobs` to `"0"`),
+    so `configPayloadDigest` produces the same digest for distinct operations.
+
+- **Secret scrubber corrupts `Authorization: Bearer`/`Basic` headers and leaks
+  tokens / 24-line-truncated PEM keys**
+  (`internal/looper/failure.go:228-263`):
+  - In `secretScrubbers` (`failure.go:251-252`), regex 1
+    (`(?i)\b(authorization|proxy-authorization)(\s*:\s*)(\S+)`) runs before
+    regex 2 (`(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]{8,})`). On
+    `Authorization: Bearer <jwt>`, regex 1 matches `\S+` against `"Bearer"`
+    and replaces it with `Authorization: [redacted] <jwt>`; regex 2 then sees
+    `[redacted]` instead of `Bearer` and fails to match, leaking `<jwt>` (and
+    `Basic <base64>`) in cleartext into public events and failure summaries.
+  - `boundedContextOf` (`failure.go:228-246`) slices output to the last 24
+    lines *before* calling `scrubSecrets`. Because a 2048-bit PEM private key
+    is ~27 lines, slicing to 24 lines cuts off
+    `-----BEGIN RSA PRIVATE KEY-----` while keeping 23 lines of base64 key
+    material and `-----END RSA PRIVATE KEY-----`, causing the multiline PEM
+    regex to miss it.
+  - **Fix**: Update the header regex to consume an optional scheme before the
+    credential
+    (`(?i)\b(authorization|proxy-authorization)(\s*:\s*(?:(?:bearer|basic|token|digest)\s+)?)(\S+)`),
+    and run `scrubSecrets` before slicing lines in `boundedContextOf`.
+
+---
+
+### 4. Agents, quota pauses, observation, and dashboard (`internal/ui`)
+
+- **Quota pause edge cases and 50 ms busy-spin**
+  (`internal/looper/run.go:229, 449-526`,
+  `internal/looper/recovery.go:332-376`,
+  `internal/looper/imports.go:610-633`,
+  `internal/looper/agent.go:468`,
+  `internal/looper/quota.go:235-246`):
+  - `expireQuotaPauses(backlogHold)` (`run.go:229`) runs when idle
+    (`backlogHold == false`) *before* `refreshIdle()` (`run.go:505`). If
+    `to-do.json` was edited while a task was paused on quota,
+    `expireQuotaPauses` calls `e.export()` before `refreshIdle` imports the
+    edit, crashing the controller with `pendingExportGuardError`.
+  - When retained ready work exists with `e.State.Plan == nil` and the
+    reviewer profile is quota-paused (`run.go:449-493`), `e.plan(ctx)` is
+    skipped (`!e.reviewerQuotaPaused()`), `e.State.Plan == nil` hits
+    `continue` at line 492 before reaching `quotaIdleWait` (line 526), and
+    the controller busy-spins at 50 ms (`idlePoll`) for up to 24 hours
+    without emitting a waiting event.
+  - `recoverRun` (`recovery.go:332-376`) and `processPlanImports`
+    (`imports.go:610-633`) do not check
+    `e.pauseOnQuota(e.Config.ReviewAgent, "", err)` or `ctx.Err()` on
+    `Consult` / `AnalyzePlanImport` failure: `recoverRun` logs
+    `diagnosis-error` and increments `RunRecoveryCount` (burning the 1-attempt
+    recovery budget on a 429 or Ctrl+C), and `processPlanImports` permanently
+    marks the import `ImportFailed` on a race with a newly encountered
+    reviewer quota error or context cancellation.
+  - `quotaResetRelative` (`agent.go:468`) requires `[,\s]+` between duration
+    units, so compact durations like `"Resets in 4h57m58s"` match only `"4h"`
+    and drop `"57m58s"`, waking 58 minutes early. Change `[,\s]+` to
+    `[,\s]*`.
+  - `quotaHeldAttempts` (`quota.go:235-246`) does not check
+    `!attemptRetired(a)`, so after `looper requeue --fresh` retires a
+    quota-held attempt, the retired attempt still matches
+    `quotaHeldAttempts`, re-arming expired pauses on startup
+    (`restoreQuotaPauses`) and emitting duplicate `quota-resume` events.
+
+- **`pollWorkerActivity` skips worker logs created in the first milliseconds
+  after controller start**
+  (`internal/looper/observe.go:1126-1131`):
+  - `e.controller.Started` (formatted as `time.RFC3339Nano`) is parsed with
+    `time.Parse(time.RFC3339, e.controller.Started)` (which in Go still
+    parses fractional nanoseconds) and compared via
+    `st.ModTime().Before(start)`. Because filesystem mtime granularity is
+    often coarser (1 ms–10 ms) than `CLOCK_REALTIME`, any worker log created
+    within the first few milliseconds after controller startup has
+    `st.ModTime().Before(start) == true` and is skipped until a subsequent
+    write advances its mtime. Truncate `start` to `time.Second`.
+
+- **Dashboard (`internal/ui` and `internal/looper/dashboard.go`) issues**
+  (`internal/looper/dashboard.go:259, 573-622`,
+  `internal/ui/dashboard.go:153-154, 417-426`,
+  `internal/ui/workspace.go:880-894`):
+  - In `tasksScreen` (`internal/ui/workspace.go:880-894`), when
+    `m.width >= 110`, `left := truncate(scope, m.width) + "\n" + m.workspace.taskTable.View()`
+    truncates `scope` (or `m.workspace.search.View()`) to `m.width` instead
+    of `listWidth`, causing `lipgloss.NewStyle().Width(listWidth).Render(left)`
+    at line 893 to wrap the header onto a second line and push the bottom row
+    of `taskTable` past `paneHeight`.
+  - In `internal/ui/dashboard.go:417-426`, pressing `[l]` on a selected
+    attempt looks up `m.logTask` only in `m.snap.Attempts` (active attempts)
+    unless `m.hasWorkspace()` has a matching `m.workspaceTask()`. Also,
+    `workerLog` (`internal/looper/dashboard.go:597-602`) only includes
+    `checks/*/setup.log` and `checks/*/verify.log` when `attempt.Phase` is
+    `"verifying"`, `"done"`, or `"blocked"`, omitting `"cancelled"`.
+  - In `internal/ui/dashboard.go:153-154`, `case "add-plan":` in
+    `RunDashboard` is unreachable dead code because `dialog == "add-plan"` is
+    handled inline in `dialogKeys`. In `internal/looper/dashboard.go:259`,
+    `submitSettingsFromForm` takes an unused `in *os.File` parameter.
+
+---
+
+### 5. Staticcheck findings: tautological test assertions, overwritten assignments, and dead code
+
+Running `~/go/bin/staticcheck ./cmd/... ./internal/...` flagged 17 items, all
+verified against source:
+
+- **Tautological `x != x` test assertions (`SA4000`)**:
+  1. `internal/looper/backlog_equivalence_test.go:373`:
+     `if e.State.PlanSignature != beforeSig || !e.State.Finished || e.State.ReviewedTip != e.State.ReviewedTip`
+     — compares `e.State.ReviewedTip` against itself instead of a captured
+     `beforeTip`.
+  2. `internal/looper/recovery_apply_test.go:607`:
+     `if !strings.Contains(stderr.String(), "unknown recovery choice") || digestFile(c.Todo) != digestFile(c.Todo)`
+     — compares `digestFile(c.Todo)` against itself instead of a pre-call
+     digest.
+- **Overwritten / unused assignments (`SA4006`)**:
+  3. `internal/looper/engine.go:728`: `b = clone(s.Backlog)` inside
+     `if s.ExportPending` is never read before `b, err = parseBacklog(data)`
+     overwrites it at line 742.
+  4. `internal/looper/publish.go:207`: `entries := map[string]string{}` is
+     allocated and immediately overwritten at line 212.
+  5. `internal/looper/publish.go:208`: `head := map[string]string{}` is
+     allocated and immediately overwritten at line 216.
+- **Unused functions, constants, types, and struct fields (`U1000`)**:
+  6. `internal/looper/branch_recovery.go:20`: unused const `branchDetached`.
+  7. `internal/looper/branch_recovery.go:33`: unused field
+     `branchRead.unborn`.
+  8. `internal/looper/config.go:619`: unused map `configModeOptionNames`.
+  9. `internal/looper/daemon.go:233`: unused function `daemonTail`.
+  10. `internal/looper/engine.go:29`: unused field `Engine.Agent`
+      (`Engine.Runner` is used everywhere).
+  11. `internal/looper/publish.go:112`: unused field
+      `publishEvidence.workingChanges`.
+  12. `internal/looper/recovery_apply.go:589`: unused const
+      `recoveryApplyUsage`.
+  13. `internal/looper/retention.go:100`: unused function `diffLines`.
+  14. `internal/looper/store.go:115, 183, 397`: `Store.Events`,
+      `EventCursor.Scope`, and `Store.EventsPage` have no production callers
+      (only their own unit tests in `store_test.go`; superseded by
+      `RecentEvents` and `queryEvents`).
+
+---
+
+### 6. High-payoff simplifications and deduplication (~2,500–3,000 LOC reduction)
+
+1. **Unify the 7 controller request processors and 6 staged backlog mutation
+   handlers (~600 LOC savings)**:
+   - `processSettingsRequests` (`settings.go:326`), `processAddTaskRequests`
+     (`add_task.go:244`), `processRequeueRequests` (`dashboard_data.go:242`),
+     `processRequeueFreshRequests` (`dashboard_data.go:380`),
+     `processCancelRequests` (`cancel.go:166`), `processAmendRequests`
+     (`amend.go:211`), and `processRecoveryRequests`
+     (`recovery_apply.go:204`) are 7 identical claim-apply-writeAck-remove
+     loops.
+   - Inside `applyAddTaskRequest`, `applyRequeueRequest`,
+     `applyRequeueFreshRequest`, `applyCancelRequest`, `applyAmendRequest`,
+     and `applyRecoveryRequest`, the 35-line request preamble (in-memory
+     `e.acks`, durable `replayedAck`, `resolveIdempotencyKey` +
+     `replayIdempotentAck` + conflict rejection, `refuse`,
+     `defer e.rememberAck`, session match check, and external task-file edit
+     check) and the 25-line `stagedBacklogRequest` export/rollback epilogue
+     are duplicated 6 times.
+   - Extracting `e.drainRequestType(reqType, handler)` and
+     `e.withBacklogMutation(req, payload, mutateFn)` eliminates ~600 lines
+     and ensures all mutations stage and roll back `ExportPending` /
+     `ExportBefore` and `rec.Ack` uniformly.
+
+2. **Unify `findingStage` (`findings.go`), `stagedBacklogRequest`
+   (`add_task.go`), and `stagedImport` (`imports.go`)**:
+   - All three snapshot and roll back `Engine.State` around `e.export()`, but
+     each snapshots a different subset of `State` fields (and none restores
+     `ExportPending` / `ExportBefore`). A single `e.beginStateStage()` fixes
+     the rollback bug everywhere at once.
+
+3. **Unify the 8 v2 contract fit-ladder / byte-budget engines (~400 LOC
+   savings)**:
+   - `status_compact.go`, `inspect_compact.go`, `eventsquery.go`,
+     `requestsquery.go`, `recovery_preview.go`, `publish.go`, `preflight.go`,
+     and `runs.go` each define their own `<kind>Fit` loop and
+     `<kind>Encoded(doc)` JSON length measurer. A single generic helper
+     `renderWithinBudget[F any, D any](budget int, fits []F, render func(F) D) D`
+     replaces all 8 copies.
+
+4. **Share working-tree and task-file guard evaluation across startup,
+   `recovery --preview`, `recovery --apply`, and stopped `requeue` (~500 LOC
+   savings)**:
+   - `Engine.reconcile` / `Engine.restoreExport` (`engine.go`),
+     `collectRecoveryPreviewEvidence` (`recovery_preview.go`),
+     `applyRecoveryChoice` (`recovery_apply.go`), and `runRequeueStopped`
+     (`requeue.go`) each re-implement working-tree comparison, task-file
+     equivalence classification, and state identity validation slightly
+     differently—causing the divergence bugs in Section 3 above.
+
+5. **Consolidate controller activity trackers (`planning.go`,
+   `review_activity.go`, `consultation_activity.go`)**:
+   - The three files contain near-identical `begin*Activity`,
+     `update*Activity`, and `end*Activity` functions differing only in the
+     activity state string, and two of the three hardcode
+     `e.publishView(false)`.
+
+6. **Speed up the 13-minute `internal/looper` test suite (`T108`)**:
+   - Caching a template `.git` repository in `TestMain` (copying it per test
+     instead of spawning 4–6 `git` subprocesses per test fixture) and
+     providing an opt-in test knob to relax SQLite `synchronous=FULL` /
+     directory fsyncs in unit tests that do not test crash durability will
+     reduce suite wall time by 3–5×.
+
+---
+
+## Audit implementation, 2026-11-21
+
+The full-codebase audit above (recorded 2026-11-20 at `d0b01fc`) was
+implemented as unstaged edits on top of `d0b01fc`. Status per section:
+
+### Section 1 (controller loop, lifecycle, processes) — done
+
+- `export()` reordered: the on-disk digest is verified before
+  `ExportPending`/`ExportBefore` are touched, so a refused export leaves no
+  stale guard state behind (engine.go).
+- `Engine.Close()` added; `cli.go`, `daemon.go`, and the dashboard wrapper
+  defer it, so the store and the published controller record are released on
+  every exit path.
+- Controller identity: `ControllerInfo.Identity` records
+  `/proc/<pid>/stat` field 19 (Linux) or `ps -p <pid> -o lstart=` (darwin)
+  via one shared `runIdentityCommand`; `controllerAlive` compares it, so a
+  recycled PID can no longer read as a live controller. `resourceProcessIdentity`
+  was removed; callers share the new command.
+- Signals install after the first-run form and the start branch, only in the
+  process that will own the controller; `readStopRequest` pins the stop file
+  inode with an open handle against the unlink-race; early-error paths in
+  `process_unix.go` now kill the process group through one `killAndWait`
+  helper, and a `reaped` flag stops the panic path from double-waiting.
+- Drain re-checks: the loop refreshes `draining` after
+  `processControllerRequests`, and the retained nil-plan block routes
+  `drainingNow()` to the drain exits instead of the dispatch gate.
+- Review failures: `ctx.Err()` exits 130; a `*retentionError` exits once
+  with the guard's restore demand instead of burning the review budget.
+- Dispatch claim skips attempts whose phase is `cancelled`.
+
+### Section 2 (git, publish, branch recovery) — done
+
+- `Repository.GitDir` resolved once (`rev-parse --absolute-git-dir`); the
+  publish index-lock and index-install paths use the worktree git dir, the
+  repository lock keeps the shared common dir, and `collectPublishEvidence`
+  stats `index.lock`/merge state on the worktree dir.
+- `publishCommitted` detects a moved `NewCommit`/branch conflict before
+  installing the index; `compose()` tolerates an unborn project HEAD; the
+  publication evidence file handle is closed before release; the preview
+  path uses the no-create ownership probe.
+- `Apply` hardened: before==after short-circuit, `--no-ext-diff
+  --no-textconv` with fixed prefixes, empty-patch short-circuit.
+- `foldOwnerCommit` commits and moves the ref before any state mutates and
+  rolls back fully on a save error; the pending publication it requeues
+  moves with the same transaction. A matched-path requeue in
+  `recoverCommittedHead` was tried and reverted: the startup application
+  completes a pending publication against the moved head (that is the
+  accepted-resume contract `TestResumeAfterCommittingPublishedFiles`
+  pins), and only the fold requeues one. The audit's `r.Apply` overlap
+  concern in the fold path does not match the current code (no apply call
+  there) — recorded as not applicable.
+
+### Section 3 (persistence, recovery, receipts, idempotency) — done
+
+- Recovery preview: `collectListings` records the first failed query in
+  `ev.readErr`; the working-tree comparison reports unknown on it, the
+  branch comparison names it in the document, and `publicationOutcome`
+  refuses to derive an `applies` verdict from an unreadable local-edit
+  listing.
+- `already_applied` publications compare directly against `p.Tree`; only
+  `applies_at_resume` keeps the before-basis filtering.
+- New read-only `untrackedDrift` filter: untracked paths the resume tree
+  carries byte-identically (Looper's published unstaged edits) are no longer
+  reported as `project_tree_changed` drift. One `ls-tree` plus one batched
+  `hash-object --stdin-paths` (no `-w`); unhashable paths count as drift.
+- Settings journal: entries record `unsets` separately, so `--set field=""`
+  and `--unset field` are distinct edits; `runConfigProjectStopped` now
+  refuses a reused key with different content (`idempotency_key_conflict`)
+  instead of silently applying. Legacy entries without the unset spelling
+  keep their old comparison. The live wire protocol treats the two
+  spellings as one operation (both clear the field), so its payload digest
+  intentionally stays shared.
+- Stopped recovery/requeue replay receipts and the task-file restore
+  acceptance are in (`answerFromRetainedKey` before stopped application;
+  `applyRestoreTaskFile` accepts a missing file; identity check in
+  `runRequeueStopped`).
+- Idempotency: `answerFromRetainedKey` with `--wait` polls the in-flight
+  original and returns exit 1 on rejected/failed receipts;
+  `replayIdempotentAck` caches the ack after the in-flight adjustments;
+  conflict rejections never inherit the colliding key; import mirrors clear
+  the key fields.
+- Secret scrubber: `boundedContextOf` scrubs before the line window is
+  taken, and the header regex consumes the optional auth scheme, so
+  `Authorization: Bearer <jwt>` loses the token, not the word "Bearer".
+  Covered by `TestBoundedContextScrubsBeforeSlicing`.
+
+### Section 4 (quota, observation, dashboard) — done
+
+- `expireQuotaPauses` defers a resume that hits the export guard: the
+  deadline re-arms and the boundary imports the external edit first, so a
+  mid-pause `to-do.json` edit no longer crashes the controller.
+- Retained nil-plan work under a closed reviewer window sleeps the poll
+  interval with the quota wait message instead of a 50 ms busy-spin.
+- `recoverRun` drops its started record and returns the error on quota or
+  cancellation (the one-attempt budget stays unspent); `processPlanImports`
+  keeps the receipt in its current state instead of failing it.
+- `quotaResetRelative` joins units with `[,\s]*`, so `4h57m58s` parses in
+  full.
+- `quotaHeldAttempts` skips retired attempts, so `requeue --fresh` work no
+  longer re-arms expired pauses at startup.
+- `pollWorkerActivity` truncates the controller start to the second, so
+  logs created in the first milliseconds are observed.
+- Dashboard: the tasks header truncates to the pane width; `[l]` resolves
+  the task from active attempts or any task's retained attempt
+  (`taskOfAttempt`); `workerLog` includes check logs for `cancelled`
+  attempts; the dead `add-plan` exit case and the unused `in *os.File`
+  parameter are gone.
+
+### Section 5 (staticcheck) — done
+
+- Tautological assertions fixed with captured before-values
+  (`backlog_equivalence_test.go`, `recovery_apply_test.go`); SA4006 test
+  values fixed (`consultation_activity_test.go`, `import_view_test.go`,
+  `lifecycle_test.go` ×2); `SchemaPath` uses unconditional `TrimSuffix`.
+- Removed: `branchDetached`, `branchRead.unborn`, `configModeOptionNames`,
+  `daemonTail`, `Engine.Agent` (field, literal, and two test assignments),
+  `publishEvidence.workingChanges`, `recoveryApplyUsage`, `diffLines`,
+  `EventCursor.Scope`, and the earlier `clone`/map SA4006s.
+- Kept on purpose: `Store.Events` and `Store.EventsPage` have no production
+  callers but ~10 test files read them; deleting them would rewrite the
+  suites for no behavioral gain. `ST1005` error-string style in the
+  dashboard files was also left: those strings are the UI's sentence-case
+  voice, deliberately unchanged.
+
+### Section 6 (simplifications) — deferred
+
+The six refactors are real but each crosses 8–15 files of guarded mutation
+code that milestone reviews validated per task (T018–T148, AX-001–AX-028).
+Doing them in the same change as this audit's correctness fixes would make
+the diff unauditable. Proposed order when picked up: `beginStateStage`
+first (it fixes the shared rollback gap), then the request-processor
+unification, then the fit-ladder engine, with the suite speed-up (T108)
+last since it changes test infrastructure only.
+
+### Follow-up fixes the focused runs caught
+
+Three first-draft implementations failed their focused suites and were
+corrected in the same pass:
+
+- The drain flag: computing `Draining` from the stop file at snapshot time
+  loses the flag at the drain exits, which publish after the request is
+  consumed. The flag is now engine state (`Engine.draining`) that the loop
+  sets when it observes a bound request and the snapshot reads directly.
+- Journal resolution: the prepared-journal guard evaluated
+  `ev.publishable`, which includes the `journal_resolved` guard — that one
+  always fails while resolving this very journal, so every prepared
+  resolution reported conflict. `resolutionGuardsPass` now evaluates every
+  guard except `journal_resolved`.
+- Stopped idempotent replays: answering a stopped-mode retry purely from
+  the retained receipt skips the mirror receipt the replay contract owes
+  (AX-012). The stopped recovery and requeue paths now replay through the
+  bare engine (`replayIdempotentAck`), which records the mirror, and refuse
+  changed payloads with the shared `idempotency_key_conflict` error.
+
+The full `make test` run caught two more, both in the review-scope shape
+and the matched resume path:
+
+- The shape guard now fires only when a recorded shape exists: synthetic
+  test states and runs saved before the field carry none, and an empty
+  `ReviewedBacklog` must stay inert instead of forcing every review full.
+  The shape also normalizes `doing` to `todo` — dispatch is the
+  controller's own transition, and every review boundary sits between
+  dispatches, so ordinary progression must not widen a review's scope. The
+  legacy status projection clears `ReviewedBacklog` beside the other T128
+  coverage fields, keeping the frozen document's shape.
+- The matched-path publication requeue (see Section 2 above) broke the
+  accepted-resume contract; it is reverted.
+
+### Validation
+
+- `go build`, `go vet`, `gofmt` clean.
+- Staticcheck: every SA4000/SA4006/U1000/S1017/S1030 finding is resolved,
+  including five extra pre-existing SA4006 test bindings the audit's list
+  missed (`worker_reconcile_test.go`, `preflight_test.go`, `runs_test.go`,
+  `internal/ui/clipboard_test.go`) and one S1030. What remains by choice:
+  ST1005 (the dashboard files' error strings are the UI's sentence-case
+  voice), S1016 (struct-literal-to-conversion suggestions in
+  `receipt.go`/`requestsquery.go`), and S1011 (one append-spread loop in
+  `retention.go`) — behavior-neutral style the audit did not request.
+- `scripts/scrub-check.py`: clean.
+- Focused suites: config, quota, scrubber, drain/resume lifecycle,
+  equivalence, recovery preview/apply, publish, imports, idempotency,
+  dashboard, and view tests all pass (three regressions found by the
+  focused runs were fixed and re-verified; see the environment note).
+- Full `make test` gate: green (exit 0) — build, scrub-check, the whole
+  `go test` suite over `cmd`/`internal` (looper 606 s under the host's IO
+  pressure), vet, the install/build/package smoke scripts, and the skill
+  regression checks.
+
+### Environment note
+
+`TestStopWaitEndsWhenControllerExitsWithoutHonoring` failed three times
+during this work with the stop-wait timeout signature. The failures
+reproduce on the unmodified baseline under the same host pressure
+(/proc/pressure/io "full" avg60 80–90), with goroutine dumps showing the
+controller wedged in `syscall.Fsync` for minutes — the documented T151
+fsync-stall class, not a regression. Re-validated in isolation after the
+audit edits whenever the suite runs.
+
+The same class touched two drain tests once:
+`TestStartupDrainAndResume/before_engine=true` and
+`TestStartupDrainScopedRequests/session` failed with `resume after drain:
+130 context deadline exceeded` in one batch (the shared `testBudget`
+context covers two fsync-bound engine runs, and the drain consumed it),
+while their ordering twins passed in the same batch. Both tests pass on a
+plain rerun of the same tree — timing, not a wedge.
+
+### Review of the implementation, 2026-11-21
+
+A diff review of the unstaged audit work found seven defects in the new
+code and two older ones. All nine are fixed, and each has a regression test
+that fails without its fix.
+
+- `requeue.go` (stopped path): the idempotency lookup ran before
+  `req.Type` became `requeue-fresh`, so a keyed retry of `requeue --fresh`
+  searched the plain requeue type and applied again. The type is now set
+  before the lookup. Test: `TestRequeueFreshCLIStoppedKeyedRetryNeverReapplies`.
+
+- `review_scope.go` and `engine.go` `applyResult`: `backlogShape` moved on
+  every task close, so after ordinary progress every review ran at full
+  scope and the T128 focused and skip modes stopped working. Decision: the
+  dispatched task's own worker outcome (done, blocked, or cancelled) is
+  progression. `applyResult` records the shape again after that flip when
+  the shape still matched before it. Follow-up tasks, reopens, additions,
+  and closes made outside the controller still widen the review. Test:
+  `TestApplyResultKeepsReviewShapeForOwnTask`.
+
+- `config_cmd.go`: a current journal entry with no unsets stored nil, which
+  looked like a legacy entry, so `--unset X` replayed a recorded
+  `--set X=`. `unsets` now always serializes (no `omitempty`;
+  `configPatchUnsets` never returns nil), so only a legacy entry lacks the
+  field. The matching logic is one helper, `configJournalMatches`. Test:
+  `TestConfigJournalKeepsSetEmptyAndUnsetDistinct`.
+
+- `quota.go` `requeueQuotaHeld`: a refused export left the held tasks
+  half-requeued in memory, and the re-armed pause could no longer find
+  them. The backlog, `Finished`, and `PlanSignature` now roll back on an
+  export error. Test: `TestQuotaRequeueRollsBackOnRefusedExport`.
+
+- `daemon.go`, `cli.go`, and `dashboard.go` signals: moving the handlers
+  after `NewEngine` left a window where SIGTERM took the default action and
+  left `controller.json` and `view.json` behind. Installing them before the
+  lock (the older foreground path) let a process that never got the lock
+  overwrite another controller's stop file. `controllerSignals` now
+  installs before the lock and only latches signals. `own()`, called after
+  `NewEngine` succeeds, replays them. An early SIGTERM still drains at the
+  first boundary. Tests: `TestControllerSignals` and
+  `TestSigTermBeforeEngineDrainsAtFirstBoundary`, which now asserts that no
+  stop file appears before `own()`.
+
+- `consultation_activity.go`: the tick published the cached drain flag, so
+  a stop sent during a long consultation stayed hidden. The new helper
+  `refreshDraining` (also used at the two loop sites) samples the request
+  before each publication.
+
+- `branch_recovery.go` fold: the ref moved before the publication's attempt
+  was resolved, and a failed save did not move the ref back. The attempt
+  now resolves first, and a save failure restores the ref to the old tip.
+  Test: `TestFoldUnknownAttemptLeavesRefUntouched`.
+
+- `failure.go` (older defect): the 4 KiB byte window could start or end
+  inside a private key block. An open BEGIN line in the dropped prefix is
+  now carried into the window, and two scrubbers redact a partial block at
+  either edge. Test: `TestBoundedContextScrubsPartialKeyBlocks`.
+
+Follow-up resolved the same day: the canonical payload digest
+(`idempotency.go`) no longer covers `TaskRevision` or `AttemptsRevision`.
+The CLI reads those at submission, so they are preconditions, not caller
+content. They stay on the request, and the controller still refuses a
+request read against a stale task. Before this change, a keyed retry after
+a successful `cancel`, `amend`, or `requeue` read moved revisions and
+always got `idempotency_key_conflict`. It now replays. Receipts written
+before the change still match through `legacyRequestPayloadDigest`, which
+rebuilds the old digest with the exact old field order, and
+`payloadDigestMatches` accepts either digest. All comparison sites use the
+matcher: claim-time `resolveIdempotencyKey`, `answerFromRetainedKey`, and
+the stopped requeue and recovery paths. Docs: `AGENT-CONTRACTS.md` (key
+section) and a 2026-11-21 row in `AGENT-CONTRACT-MIGRATION.md`. Tests:
+`TestCancelKeyedRetryAfterSuccessReplays` (includes the legacy-digest
+case), `TestAmendKeyedRetryAfterSuccessReplays`, and
+`TestRequeueFreshCLIStoppedKeyedRetryReplays`.
+
+Validation: `go vet` and `gofmt` clean; the full `make test` gate passed
+(exit 0) after these fixes, at host io pressure avg60 about 37, and again
+after the digest follow-up.

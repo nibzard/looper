@@ -265,11 +265,19 @@ func (e *Engine) rejectRequestReceipt(req *SettingsRequest, ack SettingsAck) {
 			SubmittedAt:   orDefault(req.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano)),
 		}
 		if req.IdempotencyKey != "" {
-			rec.IdempotencyKey = req.IdempotencyKey
-			// A plan import's payload digest is its content, which this
-			// refusal does not carry; the empty digest makes a later reuse of
-			// the key a conflict, never a false replay.
-			rec.PayloadDigest = requestPayloadDigest(req, nil)
+			// A rejected request owns its key only while no other request
+			// already recorded it. The idempotency-conflict refusal names the
+			// owner in its message; inheriting the key here would let the
+			// rejected receipt hijack the key once the owner's receipt is
+			// pruned past the retention bound, refusing the original payload's
+			// own retries.
+			if owner := e.requestByIdempotencyKey(publicRequestType(req.Type), req.IdempotencyKey); owner == nil || owner.ID == req.ID {
+				rec.IdempotencyKey = req.IdempotencyKey
+				// A plan import's payload digest is its content, which this
+				// refusal does not carry; the empty digest makes a later reuse
+				// of the key a conflict, never a false replay.
+				rec.PayloadDigest = requestPayloadDigest(req, nil)
+			}
 		}
 	} else if requestStateTerminal(rec.State) {
 		return

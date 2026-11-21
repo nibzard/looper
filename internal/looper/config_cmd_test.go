@@ -917,3 +917,39 @@ func TestConfigProjectSetUnknownRoleRefuses(t *testing.T) {
 		t.Fatalf("unexpected error %q", text)
 	}
 }
+
+// A current journal entry always records its unset list, even empty, so a
+// key that recorded `--set agent=` refuses a later `--unset agent` instead of
+// replaying it. Only a legacy entry without the field compares patches alone.
+func TestConfigJournalKeepsSetEmptyAndUnsetDistinct(t *testing.T) {
+	set, err := parseConfigPatch(configScopeProject, []string{"agent="}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unset, err := parseConfigPatch(configScopeProject, nil, []string{"agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := configJournalEntry{ID: "cfgset-1", Key: "k", State: "done", Patch: configPatchMap(set), Unsets: configPatchUnsets(set)}
+	path := filepath.Join(t.TempDir(), configJournalName)
+	if err := saveConfigJournal(path, &configJournalFile{Entries: []configJournalEntry{entry}}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := loadConfigJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Entries[0].Unsets == nil {
+		t.Fatal("a current entry must round-trip a non-nil unset list")
+	}
+	if findConfigJournalReplay(j, "k", unset) != nil || findConfigJournalConflict(j, "k", unset) == nil {
+		t.Fatal("an unset under a key that recorded set-empty must conflict, not replay")
+	}
+	if findConfigJournalReplay(j, "k", set) == nil {
+		t.Fatal("the same set-empty edit must replay")
+	}
+	j.Entries[0].Unsets = nil
+	if findConfigJournalReplay(j, "k", unset) == nil {
+		t.Fatal("a legacy entry compares the patch map alone")
+	}
+}

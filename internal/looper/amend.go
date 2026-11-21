@@ -584,10 +584,11 @@ func runAmend(c Config, out, stderr io.Writer) int {
 		p.Actions = []ErrorAction{{Description: "Edit the task file itself; Looper imports the edit at a safe boundary.", Command: c.Todo}}
 		return emitError(c, p, out, stderr)
 	}
-	payloadDigest := requestPayloadDigest(&SettingsRequest{Type: RequestTypeAmend, TaskID: c.AmendTask, TaskRevision: revision, Tasks: []Task{amended}}, nil)
+	keyed := &SettingsRequest{Type: RequestTypeAmend, TaskID: c.AmendTask, TaskRevision: revision, Tasks: []Task{amended}}
+	payloadDigest := requestPayloadDigest(keyed, nil)
 	// A caller key answers from the retained receipts before any envelope is
 	// published (AX-012).
-	if code, handled := answerFromRetainedKey(c, dir, PublicRequestAmendTask, c.IdempotencyKey, payloadDigest, out, stderr); handled {
+	if code, handled := answerFromRetainedKey(c, dir, PublicRequestAmendTask, c.IdempotencyKey, payloadDigest, out, stderr, legacyRequestPayloadDigest(keyed)); handled {
 		return code
 	}
 	envelope := SettingsRequest{Version: SettingsRequestVersion, Type: RequestTypeAmend, Session: info.Session,

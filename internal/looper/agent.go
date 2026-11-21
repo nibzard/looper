@@ -465,7 +465,12 @@ var quotaResetCue = regexp.MustCompile(`(?i)\b(?:reset|resume|retry|reopen)[^\n]
 // quotaResetStamp matches a full datetime anywhere, for the fallback that
 // reads a message reporting a reset stamp without any cue wording.
 var quotaResetStamp = regexp.MustCompile(`\b(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)\b`)
-var quotaResetRelative = regexp.MustCompile(`(?i)\b(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)[,\s]+)*(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s))?)`)
+
+// quotaResetRelative reads a relative delay. Units join with or without a
+// separator: "4h 57m", "4h, 57m", and the compact "4h57m58s" all carry the
+// whole delay, so the joiner is `[,\s]*` — requiring a separator dropped every
+// unit after the first in the compact spelling and woke the pause early.
+var quotaResetRelative = regexp.MustCompile(`(?i)\b(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)[,\s]*)*(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s))?)`)
 var quotaResetUnit = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)`)
 
 func quotaResetTime(s string, now time.Time) (time.Time, bool) {

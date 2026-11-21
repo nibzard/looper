@@ -775,3 +775,44 @@ func TestCancelOptionParsing(t *testing.T) {
 		t.Fatal("the shipped schema lost the cancelled status")
 	}
 }
+
+// A real CLI retry reads the task revision again, and the first cancellation
+// moved it. The revision is a precondition, not content, so the retry still
+// replays the recorded outcome instead of refusing with a key conflict. A
+// receipt recorded before the revisions left the digest keeps replaying too.
+func TestCancelKeyedRetryAfterSuccessReplays(t *testing.T) {
+	e := cancelEngine(t, []Task{
+		{ID: "T1", Title: "one", Priority: 1, Status: "todo"},
+		{ID: "T2", Title: "two", Priority: 1, Status: "todo"},
+	})
+	first := cancelRequest(e, "T1", false)
+	first.IdempotencyKey = "cancel-once"
+	original := e.applyCancelRequest(first)
+	if original.Status != AckApplied {
+		t.Fatalf("keyed cancel: %+v", original)
+	}
+	retry := cancelRequest(e, "T1", false)
+	retry.IdempotencyKey = "cancel-once"
+	if retry.TaskRevision == first.TaskRevision {
+		t.Fatal("fixture: the cancellation must move the task revision")
+	}
+	if ack := e.applyCancelRequest(retry); ack.Status != AckApplied || !strings.Contains(ack.Message, original.Message) {
+		t.Fatalf("the retry after success must replay: %+v", ack)
+	}
+
+	legacy := cancelRequest(e, "T2", false)
+	legacy.IdempotencyKey = "cancel-legacy"
+	if ack := e.applyCancelRequest(legacy); ack.Status != AckApplied {
+		t.Fatalf("keyed cancel: %+v", ack)
+	}
+	rec := e.requestReceipt(legacy.ID)
+	rec.PayloadDigest = legacyRequestPayloadDigest(legacy)
+	if rec.PayloadDigest == "" || rec.PayloadDigest == requestPayloadDigest(legacy, nil) {
+		t.Fatal("fixture: the legacy digest must differ from the current one")
+	}
+	again := *legacy
+	again.ID = identifier("cancel")
+	if ack := e.applyCancelRequest(&again); ack.Status != AckApplied {
+		t.Fatalf("a receipt with the legacy digest must still replay: %+v", ack)
+	}
+}

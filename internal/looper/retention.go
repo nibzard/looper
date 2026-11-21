@@ -96,17 +96,6 @@ func unbornDifference(label, from string) pathDifference {
 	}
 }
 
-// diffLines splits one git name-only listing into its non-empty paths.
-func diffLines(out string) []string {
-	var paths []string
-	for _, p := range strings.Split(out, "\n") {
-		if p = strings.TrimSpace(p); p != "" {
-			paths = append(paths, p)
-		}
-	}
-	return paths
-}
-
 // boundPaths clamps a changed-path listing to the guard bound and keeps the
 // complete count, so the document states what it omitted.
 func boundPaths(paths []string) ([]string, int) {

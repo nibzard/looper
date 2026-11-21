@@ -77,14 +77,14 @@ func TestWorkerFollowupReconcilesFromItsOwnBase(t *testing.T) {
 // own verification commit, whose tree is the base plus that worker's verified
 // changes, so evidence gathered on the base still holds.
 func TestWorkerFollowupReconcilesAfterItsOwnVerification(t *testing.T) {
-	e, task, base := workerReconcileEngine(t)
+	e, _, base := workerReconcileEngine(t)
 	a := workerAttempt(e, base, workerReconciliation("Import records can start", base))
 	a.Verification = &Candidate{Base: base, Commit: "verify-1", OK: true}
 	e.State.Tip = "verify-1"
 	if err := e.applyResult(a); err != nil {
 		t.Fatal(err)
 	}
-	if task = e.State.Backlog.Task("T2"); task.Status != "todo" || len(task.Blockers) != 0 {
+	if task := e.State.Backlog.Task("T2"); task.Status != "todo" || len(task.Blockers) != 0 {
 		t.Fatalf("the verified worker report did not resume the blocked task: %+v", task)
 	}
 	assertFindingEvidence(t, e, "T2", "Reconciled resume")
@@ -94,14 +94,14 @@ func TestWorkerFollowupReconcilesAfterItsOwnVerification(t *testing.T) {
 // beyond what this worker read, so its evidence is stale exactly as a review
 // at an older revision is: the report is refused with the teaching note.
 func TestWorkerFollowupRefusesABaselineItNeverRead(t *testing.T) {
-	e, task, base := workerReconcileEngine(t)
+	e, _, base := workerReconcileEngine(t)
 	a := workerAttempt(e, base, workerReconciliation("Import records can start", base))
 	a.Verification = &Candidate{Base: "coworker-1", Commit: "verify-1", OK: true}
 	e.State.Tip = "verify-1"
 	if err := e.applyResult(a); err != nil {
 		t.Fatal(err)
 	}
-	if task = e.State.Backlog.Task("T2"); task.Status != "blocked" || len(task.Blockers) != 1 {
+	if task := e.State.Backlog.Task("T2"); task.Status != "blocked" || len(task.Blockers) != 1 {
 		t.Fatalf("a reconciliation past unread work changed the task: %+v", task)
 	}
 	assertFindingEvidence(t, e, "", "the accepted revision holds work this attempt never read")
@@ -113,14 +113,14 @@ func TestWorkerFollowupRefusesABaselineItNeverRead(t *testing.T) {
 func TestWorkerFollowupRefusesARevisionItCannotKnow(t *testing.T) {
 	for _, revision := range []string{"verify-1", "older-1"} {
 		t.Run(revision, func(t *testing.T) {
-			e, task, base := workerReconcileEngine(t)
+			e, _, base := workerReconcileEngine(t)
 			a := workerAttempt(e, base, workerReconciliation("Import records can start", revision))
 			a.Verification = &Candidate{Base: base, Commit: "verify-1", OK: true}
 			e.State.Tip = "verify-1"
 			if err := e.applyResult(a); err != nil {
 				t.Fatal(err)
 			}
-			if task = e.State.Backlog.Task("T2"); task.Status != "blocked" {
+			if task := e.State.Backlog.Task("T2"); task.Status != "blocked" {
 				t.Fatalf("an unknowable revision changed the task: %+v", task)
 			}
 			assertFindingEvidence(t, e, "", "Ignored reconciliation")
@@ -131,12 +131,12 @@ func TestWorkerFollowupRefusesARevisionItCannotKnow(t *testing.T) {
 // An attempt that records no base — a synthetic hold or a legacy retained
 // result — cannot vouch for any revision, so its reconciliation is refused.
 func TestWorkerFollowupWithoutABaseIsRefused(t *testing.T) {
-	e, task, _ := workerReconcileEngine(t)
+	e, _, _ := workerReconcileEngine(t)
 	a := workerAttempt(e, "", workerReconciliation("Import records can start", e.State.Tip))
 	if err := e.applyResult(a); err != nil {
 		t.Fatal(err)
 	}
-	if task = e.State.Backlog.Task("T2"); task.Status != "blocked" {
+	if task := e.State.Backlog.Task("T2"); task.Status != "blocked" {
 		t.Fatalf("a baseless attempt reconciled recorded work: %+v", task)
 	}
 	assertFindingEvidence(t, e, "", "Ignored reconciliation")
@@ -317,7 +317,7 @@ func TestWorkerReconciliationRunsThroughTheWorkerAgent(t *testing.T) {
 // verification, so the replayed reconciliation re-applies against the same
 // guard instead of duplicating state.
 func TestWorkerReconciliationReplaysFromRetainedState(t *testing.T) {
-	e, task, base := workerReconcileEngine(t)
+	e, _, base := workerReconcileEngine(t)
 	a := workerAttempt(e, base, workerReconciliation("Import records can start", base))
 	a.Verification = &Candidate{Base: base, Commit: "verify-1", OK: true}
 	e.State.Tip = "verify-1"
@@ -327,7 +327,7 @@ func TestWorkerReconciliationReplaysFromRetainedState(t *testing.T) {
 	if err := e.applyResult(a); err != nil {
 		t.Fatal(err)
 	}
-	if task = e.State.Backlog.Task("T2"); task.Status != "todo" || len(task.Blockers) != 0 {
+	if task := e.State.Backlog.Task("T2"); task.Status != "todo" || len(task.Blockers) != 0 {
 		t.Fatalf("the replayed reconciliation changed the resumed task: %+v", task)
 	}
 	if reconciled := messages(journal(t, e), "finding", "Reconciled resume"); len(reconciled) != 1 {

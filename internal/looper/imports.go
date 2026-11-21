@@ -426,6 +426,11 @@ func (e *Engine) dedupImportReceipt(requestID string, applied *ImportRecord) {
 	}
 	rec := requestReceiptForImport(applied, e.controllerSessionID())
 	rec.ID = requestID
+	// The mirror reports content, not key ownership: the import that actually
+	// applied keeps its key, and this duplicate's mirror never inherits it —
+	// an inherited key would compete with the applied receipt once pruning
+	// removes the older record.
+	rec.IdempotencyKey, rec.PayloadDigest = "", ""
 	rec.Summary = importOutcome(applied.AddedTasks, applied.Covered) + "; matches import " + applied.RequestID
 	e.upsertRequest(rec)
 	if err := e.Store.Save(e.State); err != nil && e.err == nil {
@@ -620,6 +625,19 @@ func (e *Engine) processPlanImports(ctx context.Context) {
 				}
 				continue
 			}
+			quota := e.pauseOnQuota(err, e.Config.ReviewAgent)
+			if quota || ctx.Err() != nil {
+				// A closed reviewer window or a cancellation interrupted the
+				// analysis. The import has not failed: its receipt stays in
+				// its current state and the reopened boundary — or the next
+				// run — analyzes it again (T125).
+				reason := "waits for cancellation to clear; the next run analyzes it again"
+				if quota {
+					reason = "waits for the provider quota window to reopen"
+				}
+				e.requestEvent("import", fmt.Sprintf("Plan import %s %s.", record.RequestID, reason), record.RequestID)
+				return
+			}
 			e.requestEvent("import-error", fmt.Sprintf("Plan import %s failed: %v", record.RequestID, err), record.RequestID)
 			record.Status = ImportFailed
 			record.Error = err.Error()
@@ -704,7 +722,7 @@ func (e *Engine) applyPlanImport(ctx context.Context, record *ImportRecord) erro
 		// Analysis runs the agent synchronously and blocks the loop, so the
 		// next boundary publish would only arrive after it finishes. Publish
 		// now so dashboards see the planning state while the agent works.
-		e.publishView(false)
+		e.publishView()
 	}
 	// Refresh the baseline through the existing checks before analysis.
 	if err = e.refreshIdle(); err != nil {

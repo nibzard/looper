@@ -80,7 +80,6 @@ func TestPublishedViewCarriesImportRecords(t *testing.T) {
 	conflict := `{"additions":[],"covered":[],"conflicts":["unsupported requirement"]}`
 	bin, _ := fakeAgent(t, conflict)
 	e.Config.CodexBin, e.Config.ClaudeBin = bin, bin
-	e.Agent = Agent{e.Config}
 	failed, err := submitPlanImport(e.Dir, e.controller.Session, "", []string{planFile(t, "Replace storage.")})
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +88,7 @@ func TestPublishedViewCarriesImportRecords(t *testing.T) {
 	if e.err != nil {
 		t.Fatal(e.err)
 	}
-	e.publishView(false)
+	e.publishView()
 	v := LoadView(e.Dir)
 	if v == nil {
 		t.Fatal("no published view")
@@ -139,7 +138,7 @@ func TestQueuedImportPublishesBeforeProcessing(t *testing.T) {
 	if e.err != nil {
 		t.Fatal(e.err)
 	}
-	e.publishView(false)
+	e.publishView()
 	v := LoadView(e.Dir)
 	if imp := importViewByRequest(v, id); imp == nil || imp.Status != ImportQueued {
 		t.Fatalf("queued receipt not published: %+v", v.Imports)
@@ -195,7 +194,7 @@ func TestImportPlanningStatePublishesDuringAnalysis(t *testing.T) {
 	if e.err != nil {
 		t.Fatal(e.err)
 	}
-	e.publishView(false)
+	e.publishView()
 	imp = waitForViewImport(t, e.Dir, id)
 	if imp.Status != ImportApplied || len(imp.AddedTasks) != 1 {
 		t.Fatalf("final result missing from view: %+v", imp)
@@ -340,10 +339,10 @@ func TestImportAnalysisPublishesActivityEvidence(t *testing.T) {
 	e.importHeartbeat = time.Second
 	done := make(chan struct{}, 1)
 	go func() { e.processPlanImports(context.Background()); done <- struct{}{} }()
-	v := waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
+	_ = waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
 		return v.State == "planning" && v.ActivityAgent == "claude" && strings.Contains(v.ActivityLog, "import-analysis-")
 	})
-	v = waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
+	v := waitForActivityView(t, e.Dir, func(v *ui.ViewSnapshot) bool {
 		return v.ActivityDetail == "Read to-do.json" && v.ActivityUpdated != ""
 	})
 	select {

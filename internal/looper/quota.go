@@ -138,6 +138,7 @@ func (e *Engine) expireQuotaPauses(held bool) error {
 		if p.retryAt.IsZero() || now.Before(p.retryAt) {
 			continue
 		}
+		deadline := p.retryAt
 		p.retryAt = time.Time{}
 		if p.consecutive > e.Config.RetryLimit {
 			// The operator's pause budget is spent. The quota-held work
@@ -151,6 +152,15 @@ func (e *Engine) expireQuotaPauses(held bool) error {
 			continue
 		}
 		if err := e.resumeQuotaTasks(profile); err != nil {
+			var guard *retentionError
+			if errors.As(err, &guard) && guard.code == "backlog_contract_changed" {
+				// The resume mutates the exported task file, and an external
+				// edit is waiting at the export guard. Re-arm the deadline and
+				// let this boundary import the edit first; the next boundary
+				// after the import resumes the provider.
+				p.retryAt = deadline
+				continue
+			}
 			return err
 		}
 		e.eventData("quota-resume", fmt.Sprintf(
@@ -231,11 +241,14 @@ func (e *Engine) quotaWaitMessage() string {
 
 // quotaHeldAttempts returns the blocked attempts one agent profile's closed
 // quota window holds. Control tags stay authoritative gates: a closed window
-// never reopens an operator or deferral hold.
+// never reopens an operator or deferral hold. A retired attempt is history,
+// never held work: requeue --fresh leaves the attempt blocked while retiring
+// it, and counting it would re-arm an expired pause at startup for work the
+// fresh dispatch already replaced.
 func (e *Engine) quotaHeldAttempts(profile string) []*Attempt {
 	var held []*Attempt
 	for _, a := range e.State.Attempts {
-		if a.Agent != profile || a.Phase != "blocked" {
+		if a.Agent != profile || a.Phase != "blocked" || attemptRetired(a) {
 			continue
 		}
 		t := e.State.Backlog.Task(a.Task.ID)
@@ -256,6 +269,10 @@ func (e *Engine) quotaHeldAttempts(profile string) []*Attempt {
 // attempts keep their acceptance identity and dispatch resumes their partial
 // implementation.
 func (e *Engine) requeueQuotaHeld(profile string) ([]string, error) {
+	// The requeue stages until the export commits it. A refused export (an
+	// external edit waiting at the guard) restores the held tasks and flags,
+	// so the re-armed pause still finds them at the next boundary.
+	backlog, finished, planSig := clone(e.State.Backlog), e.State.Finished, e.State.PlanSignature
 	var resumed []string
 	for _, a := range e.quotaHeldAttempts(profile) {
 		t := e.State.Backlog.Task(a.Task.ID)
@@ -274,6 +291,7 @@ func (e *Engine) requeueQuotaHeld(profile string) ([]string, error) {
 	// before the next dispatch reads a stale scope.
 	e.State.PlanSignature = ""
 	if err := e.export(); err != nil {
+		e.State.Backlog, e.State.Finished, e.State.PlanSignature = backlog, finished, planSig
 		return nil, err
 	}
 	return resumed, nil

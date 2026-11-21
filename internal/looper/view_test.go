@@ -29,7 +29,7 @@ func snapshotEngine(t *testing.T) *Engine {
 
 func TestSnapshotCopiesPresentationState(t *testing.T) {
 	e := snapshotEngine(t)
-	v := e.snapshot(false)
+	v := e.snapshot()
 	if v.Root != e.Config.Root || v.Session != e.controller.Session || v.Mode != ControllerModeForeground {
 		t.Fatalf("identity missing: %+v", v)
 	}
@@ -62,8 +62,8 @@ func TestSnapshotCopiesPresentationState(t *testing.T) {
 
 func TestPublishViewCoalesces(t *testing.T) {
 	e := snapshotEngine(t)
-	e.publishView(false)
-	e.publishView(false)
+	e.publishView()
+	e.publishView()
 	if len(e.viewNotify) > 1 {
 		t.Fatalf("bounded channel must coalesce: %d", len(e.viewNotify))
 	}
@@ -73,7 +73,8 @@ func TestPublishViewCoalesces(t *testing.T) {
 	}
 	// A slow reader gets only the latest snapshot.
 	first := <-e.viewNotify
-	e.publishView(true)
+	e.draining = true
+	e.publishView()
 	second := <-e.viewNotify
 	if !first.Finished == second.Finished && first.Draining == second.Draining {
 		t.Fatal("coalesced snapshot is not the latest")
@@ -141,7 +142,7 @@ func TestReadonlyStore(t *testing.T) {
 
 func TestAttemptDiffBoundedAndSafe(t *testing.T) {
 	e := snapshotEngine(t)
-	e.publishView(false)
+	e.publishView()
 	// The fake worktree does not exist; removal is reported, not fatal.
 	if _, err := attemptDiff(e.Dir, "a1"); err == nil {
 		t.Fatal("removed worktree must be reported")
@@ -200,7 +201,7 @@ func TestViewContractTypes(t *testing.T) {
 func TestSnapshotCountsCancelledWork(t *testing.T) {
 	e := snapshotEngine(t)
 	e.State.Backlog.Tasks[1].Status = "cancelled"
-	v := e.snapshot(false)
+	v := e.snapshot()
 	if v.Counters.Cancelled != 1 || v.Counters.Total != 4 {
 		t.Fatalf("counters wrong: %+v", v.Counters)
 	}

@@ -25,10 +25,10 @@ func (e *Engine) runReviewAgent(ctx context.Context, op operation, work, dir, pr
 	if e.err != nil {
 		return nil, e.err
 	}
-	e.publishView(false)
+	e.publishView()
 	defer func() {
 		e.activityLog, e.activityDetail, e.activityUpdated = "", "", ""
-		e.publishView(false)
+		e.publishView()
 	}()
 	go func() {
 		raw, err := op.agent.Run(ctx, op.config.ReviewAgent, work, dir, prompt, false)
@@ -73,7 +73,7 @@ func (e *Engine) runReviewAgent(ctx context.Context, op operation, work, dir, pr
 			if e.err != nil {
 				cancel()
 			}
-			e.publishView(false)
+			e.publishView()
 		}
 	}
 }

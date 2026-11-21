@@ -664,11 +664,17 @@ type configJournalEntry struct {
 	OldDigest string            `json:"old_digest"`
 	NewDigest string            `json:"new_digest"`
 	Patch     map[string]string `json:"patch"`
-	Key       string            `json:"key,omitempty"`
-	State     string            `json:"state"`
-	Result    string            `json:"result,omitempty"`
-	CreatedAt string            `json:"created_at"`
-	UpdatedAt string            `json:"updated_at"`
+	// Unsets names the paths the patch removed rather than assigned. An
+	// assignment to the empty string clears the same field an unset removes,
+	// so the recorded spelling is what keeps the two edits distinct. A
+	// current entry always writes the list, even empty; only a legacy entry
+	// lacks it.
+	Unsets    []string `json:"unsets"`
+	Key       string   `json:"key,omitempty"`
+	State     string   `json:"state"`
+	Result    string   `json:"result,omitempty"`
+	CreatedAt string   `json:"created_at"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 type configJournalFile struct {
@@ -760,19 +766,40 @@ func resolveConfigJournal(path, profilePath string) error {
 	return nil
 }
 
+// configJournalMatches reports whether one recorded entry carries the same
+// edit as a patch. A legacy entry records no unset spelling (the field is
+// absent and decodes to nil), so its patch map alone decides, exactly as when
+// it was written. A current entry always records the list, empty or not, so
+// an assignment to the empty string and an unset stay distinct.
+func configJournalMatches(e *configJournalEntry, patch *configPatch) bool {
+	if fmt.Sprint(e.Patch) != fmt.Sprint(configPatchMap(patch)) {
+		return false
+	}
+	return e.Unsets == nil || fmt.Sprint(e.Unsets) == fmt.Sprint(configPatchUnsets(patch))
+}
+
 // findConfigJournalReplay returns the recorded terminal entry for one caller
 // key when the same patch is submitted again.
 func findConfigJournalReplay(j *configJournalFile, key string, patch *configPatch) *configJournalEntry {
+	return findConfigJournalEntry(j, key, func(e *configJournalEntry) bool { return configJournalMatches(e, patch) })
+}
+
+// findConfigJournalConflict returns the terminal entry one caller key already
+// recorded under different content. A reused key replays its recorded outcome
+// or refuses; it never silently applies changed content (AX-012).
+func findConfigJournalConflict(j *configJournalFile, key string, patch *configPatch) *configJournalEntry {
+	return findConfigJournalEntry(j, key, func(e *configJournalEntry) bool { return !configJournalMatches(e, patch) })
+}
+
+// findConfigJournalEntry returns the newest terminal entry under one caller
+// key that satisfies want.
+func findConfigJournalEntry(j *configJournalFile, key string, want func(*configJournalEntry) bool) *configJournalEntry {
 	if key == "" {
 		return nil
 	}
-	wanted := configPatchMap(patch)
 	for i := len(j.Entries) - 1; i >= 0; i-- {
 		e := &j.Entries[i]
-		if e.Key != key || !configJournalTerminal(e.State) {
-			continue
-		}
-		if fmt.Sprint(e.Patch) == fmt.Sprint(wanted) {
+		if e.Key == key && configJournalTerminal(e.State) && want(e) {
 			return e
 		}
 	}
@@ -785,6 +812,19 @@ func configPatchMap(patch *configPatch) map[string]string {
 		m[path] = patch.fields[path]
 	}
 	return m
+}
+
+// configPatchUnsets names the paths one patch removes rather than assigns.
+// The list is never nil, so a recorded entry is distinguishable from a legacy
+// one that predates the field.
+func configPatchUnsets(patch *configPatch) []string {
+	unsets := []string{}
+	for _, path := range patch.order {
+		if patch.unsets[path] {
+			unsets = append(unsets, path)
+		}
+	}
+	return unsets
 }
 
 // runConfigHeadless dispatches the explicit configuration modes. None of
@@ -1158,6 +1198,17 @@ func runConfigProjectStopped(c Config, patch *configPatch, out, stderr io.Writer
 		}
 		return emitConfigJSON(c, doc, renderConfigSaved(&doc), out)
 	}
+	if conflict := findConfigJournalConflict(journal, c.IdempotencyKey, patch); conflict != nil {
+		p := operationFailure("idempotency_key_conflict", fmt.Sprintf(
+			"Idempotency key %s already recorded settings edit %s with different content; submit the changed content under a new key.",
+			c.IdempotencyKey, conflict.ID))
+		p.Retry = retryAfterChange
+		p.Expected = map[string]any{"idempotency_key": clampString(c.IdempotencyKey, maxIdempotencyKeyBytes), "recorded_edit": conflict.ID}
+		p.Observed = map[string]any{"patch": configPatchMap(patch), "recorded_patch": conflict.Patch}
+		p.Paths = []string{journalPath}
+		p.withLegacy("The idempotency key already recorded a different settings edit; use a new key.", 1)
+		return emitError(c, p, out, stderr)
+	}
 
 	// Validate everything before the first write: the intended bytes are
 	// fixed here, so the journal records a digest that a save can match.
@@ -1169,7 +1220,7 @@ func runConfigProjectStopped(c Config, patch *configPatch, out, stderr io.Writer
 	entry := configJournalEntry{
 		ID: identifier("cfgset"), Scope: configScopeProject,
 		OldDigest: profileDigest(c.ProfilePath), NewDigest: newDigest,
-		Patch: configPatchMap(patch), Key: c.IdempotencyKey,
+		Patch: configPatchMap(patch), Unsets: configPatchUnsets(patch), Key: c.IdempotencyKey,
 		State: "prepared", CreatedAt: configNow(), UpdatedAt: configNow(),
 	}
 	journal.Entries = append(journal.Entries, entry)

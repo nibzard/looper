@@ -297,3 +297,33 @@ func TestRequeueClearsReasonWithBlockers(t *testing.T) {
 		t.Fatalf("requeue must clear the barrier: %+v", task)
 	}
 }
+
+// A worker result that closes its own dispatched task is ordinary
+// progression: the recorded review shape follows it, so the next review keeps
+// its focused or skip scope (T128). A shape that was already stale stays
+// stale, and a follow-up task the worker reports still moves the shape.
+func TestApplyResultKeepsReviewShapeForOwnTask(t *testing.T) {
+	e, _ := exportTestEngine(t)
+	e.State.Backlog.Tasks[0].Status = "doing"
+	task := e.State.Backlog.Tasks[0]
+	a := &Attempt{ID: "task-1", Task: task, Directory: e.Config.Root}
+	e.State.Attempts = append(e.State.Attempts, a)
+	e.State.ReviewedBacklog = backlogShape(e.State.Backlog)
+	a.Summary = &Summary{TaskID: task.ID, Status: "done", Summary: "done", Files: []string{}, Blockers: []string{}}
+	if err := e.applyResult(a); err != nil {
+		t.Fatal(err)
+	}
+	if e.State.ReviewedBacklog != backlogShape(e.State.Backlog) {
+		t.Fatal("closing the dispatched task must not widen the next review")
+	}
+
+	stale := "stale-shape"
+	e.State.Backlog.Tasks[0].Status = "doing"
+	e.State.ReviewedBacklog = stale
+	if err := e.applyResult(a); err != nil {
+		t.Fatal(err)
+	}
+	if e.State.ReviewedBacklog != stale {
+		t.Fatal("a shape that no longer described the backlog must stay stale")
+	}
+}

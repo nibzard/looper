@@ -877,7 +877,13 @@ func (m model) tasksScreen() string {
 	if m.workspace.searching || m.workspace.search.Value() != "" {
 		scope = m.workspace.search.View()
 	}
-	left := truncate(scope, m.width) + "\n" + m.workspace.taskTable.View()
+	// The header truncates to the pane width it renders in: at full width it
+	// wraps to a second line and pushes the table's bottom row past the pane.
+	headerWidth := m.width
+	if m.width >= 110 {
+		headerWidth = (m.width - 3) * 45 / 100
+	}
+	left := truncate(scope, headerWidth) + "\n" + m.workspace.taskTable.View()
 	if len(m.filteredTasks()) == 0 {
 		left += "\nNo matching tasks. [f] Change filter or / edit search."
 	}

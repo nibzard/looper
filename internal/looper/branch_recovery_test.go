@@ -474,3 +474,26 @@ func TestDoctorExplainsRetainedBranchAndShutdown(t *testing.T) {
 		t.Fatal("retained work appears active")
 	}
 }
+
+// A fold whose publication names an unknown attempt refuses before anything
+// is written: the controller ref still points at the recorded tip, so the
+// ref and the saved state never disagree after the error.
+func TestFoldUnknownAttemptLeavesRefUntouched(t *testing.T) {
+	e, _ := scopedFixture(t, "internal/")
+	ownerCommit(t, e, "NOTES.md", "owner note\n")
+	e.State.Publication.AttemptID = "no-such-attempt"
+	if err := e.save(); err != nil {
+		t.Fatal(err)
+	}
+	oldTip := e.State.Tip
+	if err := e.initializeState(context.Background()); err == nil {
+		t.Fatal("a publication with an unknown attempt must not fold")
+	}
+	ref, err := gitText(e.Config.Root, "rev-parse", e.State.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(ref) != oldTip || e.State.Tip != oldTip {
+		t.Fatalf("the refused fold moved the ref: ref=%s tip=%s want %s", strings.TrimSpace(ref), e.State.Tip, oldTip)
+	}
+}

@@ -508,7 +508,7 @@ func TestRunsBoundsLargeCounts(t *testing.T) {
 		t.Fatalf("the refusal must name the bound: %q", stderr.String())
 	}
 	// The largest page parses and reports the complete count honestly.
-	code, doc, raw = runListingCLI(t, "--contract", "v2", "--json", "--limit", "100")
+	code, doc, _ = runListingCLI(t, "--contract", "v2", "--json", "--limit", "100")
 	if code != 0 || doc.RunTotal != total {
 		t.Fatalf("the largest page must parse and count honestly: %d %+v", code, doc)
 	}

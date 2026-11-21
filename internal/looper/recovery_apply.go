@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -254,6 +253,19 @@ func (e *Engine) commitRecoveryReceipt(rec *RequestRecord, state, summary, errTe
 	rec.State = state
 	rec.DecidedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	rec.Summary, rec.Error = summary, errText
+	// The acknowledgement rides the durable receipt: a crash between this
+	// save and the ack file below leaves the receipt able to reconstruct the
+	// answer on restart (replayedAck reads exactly this field).
+	ack := SettingsAck{Version: SettingsRequestVersion, ID: rec.ID, Session: e.controllerSessionID(), Message: orDefault(summary, errText)}
+	switch state {
+	case RequestApplied:
+		ack.Status = AckApplied
+	case RequestRejected:
+		ack.Status = AckConflict
+	default:
+		ack.Status = AckError
+	}
+	rec.Ack = &ack
 	e.upsertRequest(rec)
 	if err := e.persistRequestReceipts(); err != nil && e.err == nil {
 		e.err = err
@@ -267,10 +279,13 @@ func (e *Engine) commitRecoveryReceipt(rec *RequestRecord, state, summary, errTe
 // bytes digest to the same value. Any other situation keeps the edit and
 // reports the concrete limitation.
 func (e *Engine) applyRestoreTaskFile(ev *recoveryEvidence) (string, error) {
-	if ev.todoErr != nil {
+	if ev.todoErr != nil && !os.IsNotExist(ev.todoErr) {
 		return "", &recoveryRefusal{message: fmt.Sprintf("the task file could not be read: %v", ev.todoErr)}
 	}
-	if ev.todoDigest == e.State.ExportHash {
+	// A missing task file is the strongest form of an external edit: the
+	// restore writes the accepted bytes over the absence, exactly as the
+	// startup restore recovers a deleted file.
+	if ev.todoErr == nil && ev.todoDigest == e.State.ExportHash {
 		return "", &recoveryRefusal{message: "the task file already matches the saved contract; there is no edit to discard"}
 	}
 	restore, source, err := restoreSourceFor(e.Dir, e.State)
@@ -515,15 +530,30 @@ func applyStoppedRecovery(c Config, dir string, out, stderr io.Writer) int {
 		p.Observed = map[string]any{"saved_root": clampString(s.Root, maxErrorString), "saved_todo": clampString(s.Todo, maxErrorString)}
 		return emitError(c, p, out, stderr)
 	}
+	req := &SettingsRequest{
+		Version: SettingsRequestVersion, ID: identifier("recovery"), Type: RequestTypeRecovery,
+		RecoveryChoice: c.RecoveryChoice, RecoveryToken: c.RecoveryToken, IdempotencyKey: c.IdempotencyKey,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
 	// A bare engine owns the application: no controller identity, no view, no
 	// workers. Its events journal with no session, exactly like the receipts
 	// it records, and its output stays out of the CLI contract because the
 	// decided outcome below is the answer.
 	e := &Engine{Config: c, Repo: r, Store: store, State: s, Dir: dir, Output: io.Discard, acks: map[string]SettingsAck{}}
-	req := &SettingsRequest{
-		Version: SettingsRequestVersion, ID: identifier("recovery"), Type: RequestTypeRecovery,
-		RecoveryChoice: c.RecoveryChoice, RecoveryToken: c.RecoveryToken, IdempotencyKey: c.IdempotencyKey,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	// A caller key replays through the bare engine (AX-012): a retry after
+	// the stopped application answers from the retained receipt and records
+	// the mirror receipt a replay owes, instead of applying the recovery
+	// twice. A changed payload under the same key refuses with the conflict.
+	if original := idempotencyLookup(dir, publicRequestType(req.Type), c.IdempotencyKey); original != nil {
+		digest := requestPayloadDigest(req, nil)
+		if digest == "" || !payloadDigestMatches(original.PayloadDigest, digest, legacyRequestPayloadDigest(req)) {
+			return emitError(c, idempotencyConflictError(c.IdempotencyKey, original, digest), out, stderr)
+		}
+		ack := e.replayIdempotentAck(req, original)
+		if e.err != nil {
+			return emitError(c, persistenceError(e.err.Error()), out, stderr)
+		}
+		return reportRecoveryAck(c, &ack, nil, out, stderr)
 	}
 	ack := e.applyRecoveryRequest(req)
 	if e.err != nil && ack.Status == AckApplied {
@@ -582,12 +612,4 @@ func recoveryAckRecordView(ack *SettingsAck) *requestQueryRecord {
 	q := ackRecordView(ack.ID, PublicRequestRecovery, state, summary, nil)
 	q.errText = ack.Message
 	return q
-}
-
-// recoveryApplyUsage names the supported application choices for help and
-// refusals, in preview order.
-func recoveryApplyUsage() string {
-	return strings.Join([]string{
-		RecoveryChoiceRestoreTaskFile, RecoveryChoiceImportBacklog,
-	}, ", ")
 }

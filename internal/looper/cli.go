@@ -322,7 +322,6 @@ func Main(args []string, out, stderr io.Writer) int {
 func runCLIController(args []string, c Config, out, stderr io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	installControllerSignals(c, cancel)
 	var start bool
 	var err error
 	c, start, err = maybeFirstRun(args, c, os.Stdin, out, stderr)
@@ -342,6 +341,13 @@ func runCLIController(args []string, c Config, out, stderr io.Writer) int {
 		}
 		return StartDetached(c, out, stderr)
 	}
+	// The controller signal handlers belong to the controller process, and on
+	// this path the CLI is that process. Installing them earlier would trap
+	// SIGINT during the first-run form and swallow one interrupt; the start
+	// path above spawns a daemon child that installs its own handlers. Until
+	// NewEngine holds the lock the handlers only latch, so a process that
+	// never becomes the controller writes no stop file (controllerSignals).
+	signals := installControllerSignals(c, cancel)
 	// The foreground launch description precedes any controller, agent, or
 	// runtime record: it reports what a start is about to use (AX-023).
 	emitLaunchDescription(c, out)
@@ -354,7 +360,8 @@ func runCLIController(args []string, c Config, out, stderr io.Writer) int {
 		return emitError(c, err, out, stderr)
 	}
 	defer lock.Close()
-	defer e.Store.Close()
+	defer e.Close()
+	signals.own()
 	// Recheck after acquiring the lock: a profile written while the form or
 	// startup ran is reported, never silently replaced.
 	if profileAtStart != "" && profileDigest(c.ProfilePath) != profileAtStart && !c.JSON {
@@ -486,7 +493,7 @@ func runStopInterrupt(c Config, dir string, out, stderr io.Writer) int {
 	}
 	info, err := readController(dir)
 	if err == nil {
-		err = signalController(dir, syscall.SIGINT)
+		err = signalController(info, syscall.SIGINT)
 	}
 	if err != nil {
 		p := operationFailure("controller_not_signaled", "The controller could not be interrupted: "+err.Error())

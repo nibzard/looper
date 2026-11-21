@@ -28,7 +28,7 @@ const (
 // ExitAction reports why the dashboard stopped. The wrapper may run a form
 // and restart the dashboard for form actions.
 type ExitAction struct {
-	Kind string // "", "settings", "add-plan", "drain", "interrupt"
+	Kind string // "", "settings", "drain", "interrupt"
 }
 
 // Controls connects the dashboard to a controller without importing the
@@ -151,8 +151,6 @@ func RunDashboard(c Controls) (ExitAction, error) {
 	switch finished.dialog {
 	case "settings":
 		return ExitAction{Kind: "settings"}, nil
-	case "add-plan":
-		return ExitAction{Kind: "add-plan"}, nil
 	}
 	// An attached client leaves a drain running in the controller it
 	// detached from, so the wrapper can say what continues after exit.
@@ -416,14 +414,7 @@ func (m model) keys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.logAttempt, m.logTask, m.logPath = "", "", ""
 		if id := m.selectedAttempt(); id != "" && m.ctrl.WorkerLog != nil {
 			m.logAttempt = id
-			for _, a := range m.snap.Attempts {
-				if a.ID == id {
-					m.logTask = a.TaskID
-				}
-			}
-			if t := m.workspaceTask(); m.hasWorkspace() && t != nil {
-				m.logTask = t.ID
-			}
+			m.logTask = m.taskOfAttempt(id)
 		} else if m.snap != nil && m.snap.ActivityLog != "" && m.ctrl.Log != nil {
 			m.logPath = m.snap.ActivityLog
 		} else {
@@ -724,6 +715,26 @@ func (m model) selectedAttempt() string {
 		}
 	}
 	return m.snap.Attempts[0].ID
+}
+
+// taskOfAttempt names the task one attempt belongs to, active or retained:
+// the board lists active attempts, the workspace lists every task's newest
+// attempt, and either selection can open the worker log.
+func (m model) taskOfAttempt(id string) string {
+	if m.snap == nil {
+		return ""
+	}
+	for _, a := range m.snap.Attempts {
+		if a.ID == id {
+			return a.TaskID
+		}
+	}
+	for _, t := range m.snap.Tasks {
+		if t.Attempt != nil && t.Attempt.ID == id {
+			return t.ID
+		}
+	}
+	return ""
 }
 
 // trackBootstrap records stream growth between polls. The spinner animates

@@ -98,19 +98,20 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	// Main dispatches tui before its controller signal block, so this
 	// controller installs the same handlers itself: SIGTERM drains like
 	// `looper stop` without cancelling, and SIGINT cancels with retained
-	// work. Signals install before the lock, exactly like the daemon path, so
-	// an early drain request stays pending until the loop reaches its first
-	// boundary. The dashboard keeps Bubble Tea's signal capture off, so these
+	// work. Signals install before the lock and latch until NewEngine holds
+	// it, exactly like the daemon path, so an early drain request still
+	// drains at the first boundary (controllerSignals). The dashboard keeps Bubble Tea's signal capture off, so these
 	// handlers own the signals and the board exits through its Done poll when
 	// the drained or cancelled run ends.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	installControllerSignals(c, cancel)
+	signals := installControllerSignals(c, cancel)
 	var engineOut bytes.Buffer
 	e, lock, err := NewEngine(c, &engineOut)
 	if err != nil {
 		return emitError(c, err, out, stderr)
 	}
+	signals.own()
 	info := e.controller
 	type result struct {
 		code int
@@ -120,8 +121,10 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 	done := make(chan struct{})
 	go func() {
 		code, err := e.Run(ctx)
+		// Close clears the ownership records and store while the repository
+		// lock is still held, then the lock itself releases.
+		e.Close()
 		lock.Close()
-		e.Store.Close()
 		finish = result{code, err}
 		close(done)
 	}()
@@ -185,7 +188,7 @@ func runDashboardController(c Config, out, stderr io.Writer, runDashboard func(u
 		}
 		switch action.Kind {
 		case "settings":
-			notice, err := submitSettingsFromForm(c, dir, info.Session, os.Stdin)
+			notice, err := submitSettingsFromForm(c, dir, info.Session)
 			if err != nil {
 				controls.Notice = "settings: " + err.Error()
 			} else {
@@ -256,7 +259,7 @@ func submitPlansToActive(c Config, receiptOut, stderr io.Writer) int {
 
 // submitSettingsFromForm runs the full editor against the current profile and
 // submits the changes through the controller request protocol.
-func submitSettingsFromForm(c Config, dir, session string, in *os.File) (string, error) {
+func submitSettingsFromForm(c Config, dir, session string) (string, error) {
 	profile, err := LoadProfile(c.ProfilePath)
 	if err != nil {
 		return "", err
@@ -373,7 +376,7 @@ func runAttach(c Config, out, stderr io.Writer, withControls bool) int {
 			controls.Notice = err.Error()
 			continue
 		}
-		notice, err := submitSettingsFromForm(c, dir, session, os.Stdin)
+		notice, err := submitSettingsFromForm(c, dir, session)
 		if err != nil {
 			controls.Notice = "settings: " + err.Error()
 		} else {
@@ -597,7 +600,7 @@ func workerLog(dir, id string) (string, string, error) {
 	if attempt.Phase == "verifying" {
 		patterns = []string{"checks/*/setup.log", "checks/*/verify.log"}
 	}
-	if attempt.Phase == "done" || attempt.Phase == "blocked" {
+	if attempt.Phase == "done" || attempt.Phase == "blocked" || attempt.Phase == "cancelled" {
 		patterns = append(patterns, "checks/*/setup.log", "checks/*/verify.log")
 	}
 	var newest string

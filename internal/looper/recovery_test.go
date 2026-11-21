@@ -247,7 +247,6 @@ printf '{"structured_output":%s}\n' "$result"
 	e.Config.Once = true
 	e.Config.ReviewEvery = 0
 	e.Config.Limit = 2
-	e.Agent = Agent{e.Config}
 	// Use a check that generates an unignored cache. The first integration must
 	// fail with paths, and the task repair must add the ignore rule.
 	p.Verify = "bash -c 'test -f retained.txt; mkdir -p .cache; echo cache > .cache/generated'"

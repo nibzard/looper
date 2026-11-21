@@ -614,10 +614,6 @@ func validateRequeueFlags(c Config) error {
 	return nil
 }
 
-// configModeNames lists the non-interactive configuration options for error
-// messages.
-const configModeOptionNames = "--set, --unset, --show, --scope, and --if-revision"
-
 // validateConfigModeFlags checks the non-interactive configuration options
 // against the command that received them and against each other. One command
 // addresses one scope with one mode: show and preview are reads, set and
@@ -1558,10 +1554,7 @@ func Parse(args []string) (Config, error) {
 // The schema control file is named after the task file: a trailing .json is
 // replaced by .schema.json, as in the earlier shell controller.
 func (c Config) SchemaPath() string {
-	base := filepath.Base(c.Todo)
-	if strings.HasSuffix(base, ".json") {
-		base = strings.TrimSuffix(base, ".json")
-	}
+	base := strings.TrimSuffix(filepath.Base(c.Todo), ".json")
 	return filepath.Join(filepath.Dir(c.Todo), base+".schema.json")
 }
 

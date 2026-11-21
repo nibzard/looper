@@ -15,8 +15,11 @@ import (
 func viewPath(dir string) string { return filepath.Join(dir, "view.json") }
 
 // snapshot copies the owner's presentation state. The UI never reads mutable
-// engine objects.
-func (e *Engine) snapshot(draining bool) ui.ViewSnapshot {
+// engine objects. The drain flag reads the loop's recorded state: a stop
+// request binds the moment the loop observes it, and the drain exits keep
+// publishing draining views after the request itself is consumed.
+func (e *Engine) snapshot() ui.ViewSnapshot {
+	draining := e.draining
 	done, blocked, cancelled, total := 0, 0, 0, 0
 	for _, t := range e.State.Backlog.Tasks {
 		if t.Marker() {
@@ -156,11 +159,11 @@ func taskView(t Task, b Backlog) ui.TaskView {
 // publishView writes the snapshot atomically and notifies an in-process
 // dashboard through a bounded, nonblocking channel. A slow or closed
 // dashboard coalesces to the latest snapshot and never blocks the engine.
-func (e *Engine) publishView(draining bool) {
+func (e *Engine) publishView() {
 	if e.controller == nil {
 		return
 	}
-	v := e.snapshot(draining)
+	v := e.snapshot()
 	if data, err := json.Marshal(v); err == nil {
 		_ = atomicWrite(viewPath(e.Dir), data, 0600)
 	}

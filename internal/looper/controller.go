@@ -1,11 +1,15 @@
 package looper
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +28,12 @@ type ControllerInfo struct {
 	Started        string     `json:"started"`
 	Build          *BuildInfo `json:"build,omitempty"`
 	BootstrapAgent string     `json:"bootstrap_agent,omitempty"`
+	// Identity is the controller process's start identity (the /proc start
+	// time on Linux, `ps lstart` elsewhere). A reader that finds the same
+	// process ID with a different identity is looking at a reused ID, not at
+	// the controller this record names. Empty on records from older
+	// controllers and on hosts that expose no start identity.
+	Identity string `json:"identity,omitempty"`
 	// Capabilities advertises the contract versions and request types this
 	// controller accepts. The record is optional so metadata from older
 	// controllers keeps parsing; readers apply the compatibility policy in
@@ -53,12 +63,14 @@ func controllerPath(dir string) string { return filepath.Join(dir, "controller.j
 // lock is held; only the current session may remove its own record.
 func publishController(dir, mode, bootstrapAgent string) (*ControllerInfo, error) {
 	build := currentBuild()
+	identity, _ := runIdentityCommand(os.Getpid())
 	info := &ControllerInfo{
 		Version: ControllerVersion, Session: identifier("run"),
 		PID: os.Getpid(), Root: mustWD(), Mode: mode,
 		Started:        time.Now().UTC().Format(time.RFC3339Nano),
 		Build:          &build,
 		BootstrapAgent: bootstrapAgent,
+		Identity:       identity,
 		Capabilities:   newControllerCapabilities(),
 	}
 	if err := writeJSON(controllerPath(dir), info); err != nil {
@@ -108,44 +120,57 @@ func readController(dir string) (*ControllerInfo, error) {
 }
 
 // controllerAlive checks the recorded process against the recorded start
-// time, so a reused process ID does not impersonate a dead controller.
+// identity, so a reused process ID does not impersonate a dead controller.
 func controllerAlive(info *ControllerInfo) bool {
 	if info == nil || info.PID <= 1 {
 		return false
 	}
-	out, err := runIdentityCommand(info.PID)
-	if err != nil || strings.TrimSpace(out) == "" {
+	identity, err := runIdentityCommand(info.PID)
+	if err != nil || strings.TrimSpace(identity) == "" {
 		return false
 	}
-	return true
+	// Records that carry an identity must match the live process. Records
+	// from older controllers keep the existence check.
+	return info.Identity == "" || info.Identity == identity
 }
 
+// runIdentityCommand reports the process's start identity: the /proc start
+// time on Linux, `ps lstart` on the other platforms. The same reading serves
+// controller metadata, stop-request bindings, resource leases, and process
+// observations, so every identity comparison in the tree agrees.
 func runIdentityCommand(pid int) (string, error) {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err == nil {
-		// The field after the comm parenthetical holds the start time.
-		text := string(b)
-		if i := strings.LastIndex(text, ")"); i >= 0 && i+2 <= len(text) {
-			fields := strings.Fields(text[i+2:])
-			if len(fields) > 19 && fields[0] != "Z" && fields[0] != "X" {
-				return fields[19], nil
+	if runtime.GOOS == "linux" {
+		b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err == nil {
+			// The field after the comm parenthetical holds the start time.
+			text := string(b)
+			if i := strings.LastIndex(text, ")"); i >= 0 && i+2 <= len(text) {
+				fields := strings.Fields(text[i+2:])
+				if len(fields) > 19 && fields[0] != "Z" && fields[0] != "X" {
+					return fields[19], nil
+				}
 			}
 		}
+		return "", fmt.Errorf("process %d is not running", pid)
 	}
-	return "", fmt.Errorf("process %d is not running", pid)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	data, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return "", fmt.Errorf("cannot identify process %d", pid)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
-// signalController sends a signal to the recorded process group only when
-// the recorded session still matches and the process is alive.
-func signalController(dir string, sig syscall.Signal) error {
-	info, err := readController(dir)
-	if err != nil {
-		return err
-	}
+// signalController sends a signal to the controller the caller validated.
+// The caller reads controller.json and checks the session it expects; the
+// signal goes to exactly that record's process, so a controller that took
+// over between the caller's read and this call cannot be signaled by mistake.
+func signalController(info *ControllerInfo, sig syscall.Signal) error {
 	if !controllerAlive(info) {
 		return fmt.Errorf("recorded controller session %s is not running", info.Session)
 	}
-	if err = syscall.Kill(info.PID, sig); err != nil {
+	if err := syscall.Kill(info.PID, sig); err != nil {
 		return fmt.Errorf("cannot signal controller session %s: %w", info.Session, err)
 	}
 	return nil
@@ -190,17 +215,23 @@ func writeStopRequest(dir string, req stopRequest) error {
 // readStopRequest returns the published drain request and its file
 // information. A missing request returns nil without an error. Bytes that do
 // not parse, including the legacy "drain" line and unreadable entries such as
-// a directory, count as unscoped requests so old files stay observable.
+// a directory, count as unscoped requests so old files stay observable. The
+// open file handle pins the inode, so a request removed while it is read
+// disappears cleanly instead of turning into a synthetic unscoped request.
 func readStopRequest(dir string) (*stopRequest, os.FileInfo, error) {
-	path := stopRequestPath(dir)
-	info, err := os.Stat(path)
+	f, err := os.Open(stopRequestPath(dir))
 	if os.IsNotExist(err) {
 		return nil, nil, nil
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := os.ReadFile(path)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := io.ReadAll(f)
 	var req stopRequest
 	if err == nil {
 		err = json.Unmarshal(data, &req)
@@ -254,6 +285,15 @@ func (e *Engine) requestTargets(req *stopRequest, info os.FileInfo) bool {
 
 // drainingNow reports whether a published stop request asks this controller
 // to drain. Requests bound to another controller never drain this one.
+// refreshDraining latches the drain flag when a stop request targets this
+// controller. The flag only turns on here; a drain ends the run. Call it only
+// from the loop goroutine, which owns the flag.
+func (e *Engine) refreshDraining() {
+	if e.drainingNow() {
+		e.draining = true
+	}
+}
+
 func (e *Engine) drainingNow() bool {
 	req, info, err := readStopRequest(e.Dir)
 	if err != nil {

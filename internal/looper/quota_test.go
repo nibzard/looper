@@ -793,3 +793,34 @@ func TestQuotaMessagesNameTheDateWhenRetryIsNotToday(t *testing.T) {
 		t.Fatalf("T1 must stay held for the recorded window; status %q", s)
 	}
 }
+
+// A quota resume whose export the external-edit guard refuses leaves the held
+// tasks exactly as they were, so the re-armed pause still finds them at the
+// next boundary instead of stranding half-requeued tasks in memory.
+func TestQuotaRequeueRollsBackOnRefusedExport(t *testing.T) {
+	e := guardEngine(t)
+	task := &e.State.Backlog.Tasks[0]
+	task.Status = "blocked"
+	task.Blockers = []string{"quota window closed"}
+	task.UnblockWhen = quotaUnblockCue + "2026-11-21T12:00:00Z."
+	task.BlockReason = failureBlockReason(blockCodeQuotaWindow, blockRetryYes, "task-1")
+	e.State.Attempts = append(e.State.Attempts, &Attempt{ID: "task-1", Task: *task, Agent: "claude", Phase: "blocked"})
+	e.State.PlanSignature = "plan-sig"
+	e.State.Finished = true
+	if len(e.quotaHeldAttempts("claude")) != 1 {
+		t.Fatal("fixture: the task must be quota-held")
+	}
+	if _, err := e.requeueQuotaHeld("claude"); err == nil {
+		t.Fatal("fixture: the guard must refuse the export")
+	}
+	got := e.State.Backlog.Tasks[0]
+	if got.Status != "blocked" || got.BlockReason == nil || got.UnblockWhen == "" || len(got.Blockers) != 1 {
+		t.Fatalf("the refused resume left a half-requeued task: %+v", got)
+	}
+	if e.State.PlanSignature != "plan-sig" || !e.State.Finished {
+		t.Fatalf("the refused resume left state flags changed: sig=%q finished=%v", e.State.PlanSignature, e.State.Finished)
+	}
+	if len(e.quotaHeldAttempts("claude")) != 1 {
+		t.Fatal("the re-armed pause can no longer find the held work")
+	}
+}

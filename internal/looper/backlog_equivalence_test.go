@@ -354,7 +354,7 @@ func TestRefreshAdoptsEquivalentFormattingWithoutReplanning(t *testing.T) {
 	e.State.Plan = &Plan{Verify: "true", Tasks: []Scope{{TaskID: "T1", Paths: []string{"src/"}}}}
 	e.State.PlanSignature = "live"
 	e.State.ReviewedTip = e.State.Tip
-	tip, published := e.State.Tip, e.State.Published
+	tip, published, beforeTip := e.State.Tip, e.State.Published, e.State.ReviewedTip
 	e.State.Attempts = append(e.State.Attempts, &Attempt{
 		ID: "task-held", Task: *e.State.Backlog.Task("T1"), Phase: "ready", ResultCommit: tip,
 		Directory: filepath.Join(e.Dir, "task-held"), Ref: "refs/looper-tasks/task-held",
@@ -370,7 +370,7 @@ func TestRefreshAdoptsEquivalentFormattingWithoutReplanning(t *testing.T) {
 	if e.State.ExportHash != digestFile(c.Todo) {
 		t.Fatal("the observed bytes must become the accepted export")
 	}
-	if e.State.Tip != tip || e.State.Published != published || e.State.PlanSignature != "live" || e.State.ReviewedTip != e.State.ReviewedTip {
+	if e.State.Tip != tip || e.State.Published != published || e.State.PlanSignature != "live" || e.State.ReviewedTip != beforeTip {
 		t.Fatal("adoption must not move the baseline or replan")
 	}
 	// A real edit keeps the retained-work refusal.

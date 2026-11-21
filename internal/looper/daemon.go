@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -165,22 +165,23 @@ func RunDaemon(configPath string, ready io.Writer) int {
 	c.Detached = true
 	gitTimeout = c.GitTimeout
 	_, dir := projectPaths(c)
-	// Signals install before the lock so an early drain request stays
-	// pending until the loop reaches its first boundary.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	installControllerSignals(c, cancel)
 	logFile, err := os.OpenFile(daemonLogPath(dir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fail(err)
 	}
 	defer logFile.Close()
+	signals := installControllerSignals(c, cancel)
 	e, lock, err := NewEngine(c, logFile)
 	if err != nil {
 		return fail(err)
 	}
 	defer lock.Close()
-	defer e.Store.Close()
+	defer e.Close()
+	// This process holds the repository lock and is the controller now: a
+	// signal latched during startup applies from here (see controllerSignals).
+	signals.own()
 	// Saved run state becomes queryable before readiness is reported (AX-022):
 	// a caller that sees a successful start can query the run at once. A seed
 	// failure — an unreadable or invalid task file, a failing snapshot — is a
@@ -203,41 +204,83 @@ func RunDaemon(configPath string, ready io.Writer) int {
 	return code
 }
 
-// installControllerSignals routes SIGTERM to the drain request used by
-// `looper stop` without cancelling the execution context; SIGINT stays an
-// explicit cancellation with retained work. The two are not interchangeable.
-// The request binds to this process: to the controller session once
-// controller metadata names it, or to the process identity while startup has
-// not published a session yet, so the engine adopts it at its first boundary.
-func installControllerSignals(c Config, cancel context.CancelFunc) {
+// controllerSignals routes SIGTERM to the drain request used by `looper
+// stop` without cancelling the execution context; SIGINT stays an explicit
+// cancellation with retained work. The two are not interchangeable.
+//
+// The handlers install before the repository lock, so no signal in the
+// startup window takes the default action (a kill that leaves the ownership
+// records NewEngine already published). Until own is called, a signal is only
+// latched: a process that never becomes the controller writes no stop file,
+// so it cannot overwrite the request another controller owns. own replays
+// the latched signals, so an early SIGTERM still drains the controller at its
+// first boundary and an early SIGINT cancels it.
+type controllerSignals struct {
+	mu          sync.Mutex
+	dir         string
+	identity    string
+	cancel      context.CancelFunc
+	owned       bool
+	pendingTerm bool
+	pendingInt  bool
+}
+
+func installControllerSignals(c Config, cancel context.CancelFunc) *controllerSignals {
 	_, dir := projectPaths(c)
 	identity, _ := runIdentityCommand(os.Getpid())
+	cs := &controllerSignals{dir: dir, identity: identity, cancel: cancel}
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		for s := range sigs {
-			if s == syscall.SIGTERM {
-				req := stopRequest{PID: os.Getpid(), Identity: identity}
-				if info, err := readController(dir); err == nil && info.PID == os.Getpid() {
-					req.Session = info.Session
-				}
-				_ = writeStopRequest(dir, req)
-				continue
-			}
-			cancel()
+			cs.handle(s)
 		}
 	}()
+	return cs
 }
 
-// daemonTail returns the last lines of the daemon log for diagnostics.
-func daemonTail(dir string, lines int) string {
-	b, err := os.ReadFile(daemonLogPath(dir))
-	if err != nil {
-		return ""
+func (cs *controllerSignals) handle(s os.Signal) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	term := s == syscall.SIGTERM
+	if !cs.owned {
+		if term {
+			cs.pendingTerm = true
+		} else {
+			cs.pendingInt = true
+		}
+		return
 	}
-	content := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(content) > lines {
-		content = content[len(content)-lines:]
+	cs.deliver(term)
+}
+
+// own marks this process as the controller, after NewEngine holds the
+// repository lock, and delivers the signals latched during startup.
+func (cs *controllerSignals) own() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.owned = true
+	if cs.pendingTerm {
+		cs.deliver(true)
 	}
-	return strings.Join(content, "\n")
+	if cs.pendingInt {
+		cs.deliver(false)
+	}
+	cs.pendingTerm, cs.pendingInt = false, false
+}
+
+// deliver applies one signal to the owned controller. The drain request binds
+// to the controller session once controller metadata names this process, or
+// to the process identity otherwise, so the engine adopts it at its first
+// boundary.
+func (cs *controllerSignals) deliver(term bool) {
+	if !term {
+		cs.cancel()
+		return
+	}
+	req := stopRequest{PID: os.Getpid(), Identity: cs.identity}
+	if info, err := readController(cs.dir); err == nil && info.PID == os.Getpid() {
+		req.Session = info.Session
+	}
+	_ = writeStopRequest(cs.dir, req)
 }

@@ -353,6 +353,10 @@ type recoveryEvidence struct {
 	offBranch        []string
 	publicationDiff  []string
 	localEdits       []string
+
+	// readErr holds the first failed listing query. An unreadable listing
+	// must surface as an unknown comparison, never as an empty one.
+	readErr error
 }
 
 // collectRecoveryEvidence performs the bounded reads a preview needs. Every
@@ -390,55 +394,52 @@ func collectRecoveryEvidenceFor(c Config, dir string, snap *StoreSnapshot, s *St
 
 // collectListings gathers the path listings the comparisons report. Each is
 // one read-only git query filtered by the same exclusions the engine's
-// snapshot applies, so the preview compares what the guard would compare.
+// snapshot applies, so the preview compares what the guard would compare. A
+// failed query is recorded: an unreadable listing must surface as an unknown
+// comparison, never as an empty one that reads as a pass.
 func (ev *recoveryEvidence) collectListings() {
 	s, r := ev.s, ev.repo
+	listing := func(args ...string) []string {
+		paths, err := readPaths(r.Root, args...)
+		if err != nil && ev.readErr == nil {
+			ev.readErr = err
+		}
+		return keepFilter(r, paths)
+	}
 	excludeArgs := []string{"--", "."}
 	for _, path := range r.Excluded {
 		excludeArgs = append(excludeArgs, ":(exclude)"+path)
 	}
-	keep := func(paths []string) []string {
-		var kept []string
-		for _, p := range paths {
-			if !r.excluded(p) {
-				kept = append(kept, p)
-			}
-		}
-		return kept
-	}
 	if s.Head != "" && ev.head != "" && ev.head != s.Head {
-		if paths, err := readPaths(r.Root, append([]string{"diff", "--name-only", "-z", s.Head, ev.head}, excludeArgs...)...); err == nil {
-			ev.committedChanges = keep(paths)
-		}
+		ev.committedChanges = listing(append([]string{"diff", "--name-only", "-z", s.Head, ev.head}, excludeArgs...)...)
 	}
 	if ev.head != "" {
-		if paths, err := readPaths(r.Root, append([]string{"diff", "--cached", "--name-only", "-z", ev.head}, excludeArgs...)...); err == nil {
-			ev.staged = keep(paths)
-		}
+		ev.staged = listing(append([]string{"diff", "--cached", "--name-only", "-z", ev.head}, excludeArgs...)...)
 	}
 	if s.Published != "" {
-		if paths, err := readPaths(r.Root, append([]string{"diff", "--name-only", "-z", s.Published}, excludeArgs...)...); err == nil {
-			ev.workingChanges = keep(paths)
-		}
-		if paths, err := readPaths(r.Root, "ls-files", "--others", "--exclude-standard", "-z"); err == nil {
-			ev.untracked = keep(paths)
-		}
+		ev.workingChanges = listing(append([]string{"diff", "--name-only", "-z", s.Published}, excludeArgs...)...)
+		ev.untracked = listing("ls-files", "--others", "--exclude-standard", "-z")
 		// Accepted content the project branch still lacks names the checked
 		// publication (OW-04): the choice below points at it.
 		if ev.head != "" {
-			if paths, err := readPaths(r.Root, append([]string{"diff", "--name-only", "-z", ev.head, s.Published}, excludeArgs...)...); err == nil {
-				ev.offBranch = keep(paths)
-			}
+			ev.offBranch = listing(append([]string{"diff", "--name-only", "-z", ev.head, s.Published}, excludeArgs...)...)
 		}
 	}
 	if p := s.Publication; p != nil {
-		if paths, err := readPaths(r.Root, "diff", "--name-only", "-z", p.Before, p.Tree); err == nil {
-			ev.publicationDiff = paths
-		}
-		if paths, err := readPaths(r.Root, append([]string{"diff", "--name-only", "-z", p.Before}, excludeArgs...)...); err == nil {
-			ev.localEdits = keep(paths)
+		ev.publicationDiff = listing("diff", "--name-only", "-z", p.Before, p.Tree)
+		ev.localEdits = listing(append([]string{"diff", "--name-only", "-z", p.Before}, excludeArgs...)...)
+	}
+}
+
+// keepFilter drops the excluded control paths from one listing.
+func keepFilter(r *Repository, paths []string) []string {
+	var kept []string
+	for _, p := range paths {
+		if !r.excluded(p) {
+			kept = append(kept, p)
 		}
 	}
+	return kept
 }
 
 // buildRecoveryPreview renders the preview within its byte budget.
@@ -655,6 +656,11 @@ func (ev *recoveryEvidence) branchComparison(fit recoveryFit, clamp func(string)
 	out.Unborn = ev.unborn
 	if cmp.unknown != "" {
 		out.Unknown = clamp(cmp.unknown)
+	} else if ev.readErr != nil && out.Unknown == "" {
+		// The verdict stands on the ref reads, but its changed-path evidence
+		// could not be listed: the document names why the listings are empty
+		// instead of presenting a bare comparison.
+		out.Unknown = clamp("the branch listings could not be read: " + ev.readErr.Error())
 	}
 	// The committed-changes listing is the evidence for a head that moved;
 	// the staged listing matters whenever the index holds entries.
@@ -679,6 +685,11 @@ func (ev *recoveryEvidence) workingTreeComparison(fit recoveryFit, clamp func(st
 		out.Unknown = clamp(fmt.Sprintf("the working-tree comparison: %v", ev.repoErr))
 		return out
 	}
+	if ev.readErr != nil {
+		out.State = "unknown"
+		out.Unknown = clamp("the working-tree listings could not be read: " + ev.readErr.Error())
+		return out
+	}
 	if s.Published == "" {
 		out.State = "unknown"
 		out.Unknown = clamp("the working-tree comparison: the saved run records no published tree")
@@ -689,10 +700,18 @@ func (ev *recoveryEvidence) workingTreeComparison(fit recoveryFit, clamp func(st
 	// publication the fold requeues never applies as saved (T046), so the
 	// check keeps the published tree as its basis.
 	tree := s.Published
+	appliesAtResume := false
 	if p := s.Publication; p != nil {
 		outcome, unknown := ev.publicationOutcome()
 		switch outcome {
-		case publicationApplies, publicationApplied:
+		case publicationApplies:
+			tree = p.Tree
+			appliesAtResume = true
+		case publicationApplied:
+			// The publication commit already sits on the project branch, so
+			// the comparison runs against its tree directly, exactly like a
+			// run without a retained publication: the before-basis filtering
+			// belongs to the applies-at-resume case alone.
 			tree = p.Tree
 		case publicationCollision, publicationUnknown:
 			out.State = "unknown"
@@ -707,7 +726,7 @@ func (ev *recoveryEvidence) workingTreeComparison(fit recoveryFit, clamp func(st
 	out.PublishedTree = clampRevision(tree)
 	changes := ev.workingChanges
 	basis := tree
-	if tree != s.Published {
+	if appliesAtResume {
 		// A publication that applies at resume changes the tree by design, so
 		// its own paths are expected differences, never conflicts. The local
 		// edits against the accepted tree are exactly the paths outside the
@@ -733,8 +752,20 @@ func (ev *recoveryEvidence) workingTreeComparison(fit recoveryFit, clamp func(st
 		out.Basis = clamp("the accepted owner commit folds into the published tree at resume; the startup tree check then matches the folded baseline")
 		return out
 	}
+	// Untracked paths the resume's tree already carries byte-for-byte are
+	// published work sitting as unstaged edits, not drift: Looper publishes
+	// accepted work without committing it, so a new file is untracked in the
+	// project branch yet present in the saved tree. Only the remainder is
+	// drift; a path that cannot be hashed stays unverified and counts as
+	// drift, never as a match.
+	drift, err := untrackedDrift(ev.repo.Root, tree, ev.untracked)
+	if err != nil {
+		out.State = "unknown"
+		out.Unknown = clamp("the untracked paths could not be compared with the saved tree: " + err.Error())
+		return out
+	}
 	listing := ev.listing(changes, fit, fmt.Sprintf("git diff --name-only %s", basis))
-	untracked := ev.listing(ev.untracked, fit, "git ls-files --others --exclude-standard")
+	untracked := ev.listing(drift, fit, "git ls-files --others --exclude-standard")
 	if listing.Count == 0 && untracked.Count == 0 {
 		out.State = "matches_published"
 		return out
@@ -745,15 +776,70 @@ func (ev *recoveryEvidence) workingTreeComparison(fit recoveryFit, clamp func(st
 	// On a repository with an empty index, git diff against a tree already
 	// lists untracked paths; the union keeps the count honest.
 	seen := map[string]bool{}
-	for _, p := range append(append([]string{}, changes...), ev.untracked...) {
+	for _, p := range append(append([]string{}, changes...), drift...) {
 		seen[p] = true
 	}
 	out.ChangedTotal = len(seen)
-	out.Basis = clamp("tracked, staged, and untracked non-ignored paths; the startup guard additionally hashes ignored content that is tracked or recorded in the published tree")
-	if tree != s.Published {
+	out.Basis = clamp("tracked, staged, and untracked non-ignored paths, except untracked files the saved tree already carries byte-for-byte (published unstaged edits); the startup guard additionally hashes ignored content that is tracked or recorded in the published tree")
+	if appliesAtResume {
 		out.Basis = clamp("edits outside the retained publication's own paths; the publication applies its verified paths at resume, so those are expected differences, not conflicts")
 	}
 	return out
+}
+
+// untrackedDrift drops the untracked paths the tree carries byte-for-byte.
+// The hash runs without -w, so the comparison writes nothing. The query is
+// read-only from the repository root, where ls-files, ls-tree, and
+// hash-object all agree on root-relative paths.
+func untrackedDrift(cwd, tree string, untracked []string) ([]string, error) {
+	if len(untracked) == 0 || tree == "" {
+		return nil, nil
+	}
+	out, err := gitRead(cwd, "ls-tree", "-r", "-z", tree)
+	if err != nil {
+		return nil, err
+	}
+	treeOIDs := map[string]string{}
+	for _, entry := range strings.Split(out, "\x00") {
+		i := strings.IndexByte(entry, '\t')
+		if i <= 0 {
+			continue
+		}
+		if fields := strings.Fields(entry[:i]); len(fields) == 3 && fields[1] == "blob" {
+			treeOIDs[entry[i+1:]] = fields[2]
+		}
+	}
+	// The stdin-paths protocol is line-based; a path that cannot be
+	// expressed on one line stays unverified.
+	var hashable []string
+	for _, p := range untracked {
+		if !strings.ContainsAny(p, "\n\x00") {
+			hashable = append(hashable, p)
+		}
+	}
+	if len(hashable) == 0 {
+		return untracked, nil
+	}
+	hashes, err := gitCommand(cwd, []byte(strings.Join(hashable, "\n")+"\n"), nil, "hash-object", "--stdin-paths")
+	if err != nil {
+		return nil, err
+	}
+	observed := strings.Split(strings.TrimSpace(string(hashes)), "\n")
+	if len(observed) != len(hashable) {
+		return nil, fmt.Errorf("hash-object returned %d identities for %d paths", len(observed), len(hashable))
+	}
+	oid := map[string]string{}
+	for i, p := range hashable {
+		oid[p] = observed[i]
+	}
+	var drift []string
+	for _, p := range untracked {
+		if o, ok := oid[p]; ok && treeOIDs[p] == o {
+			continue
+		}
+		drift = append(drift, p)
+	}
+	return drift, nil
 }
 
 // Publication outcomes.
@@ -794,6 +880,12 @@ func (ev *recoveryEvidence) publicationOutcome() (outcome, unknown string) {
 		return publicationApplied, ""
 	}
 	if len(filterExcluded(ev.repo, ev.localEdits)) == 0 {
+		if ev.readErr != nil {
+			// The local-edit listing could not be read; an unreadable listing
+			// must not clear the publication's own paths into an applies
+			// verdict the evidence does not support.
+			return publicationUnknown, "the local-edit listings could not be read: " + ev.readErr.Error()
+		}
 		return publicationApplies, ""
 	}
 	return publicationCollision, ""

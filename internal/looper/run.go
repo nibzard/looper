@@ -123,7 +123,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		}
 	}
 	attempted := 0
-	draining := false
+	e.draining = false
 	lastProgress := ""
 	reviewFailures := 0
 	// A head that conflicts while a check runs waits for the chain to move
@@ -145,9 +145,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		if e.err != nil {
 			return 1, e.err
 		}
-		if e.drainingNow() {
-			draining = true
-		}
+		e.refreshDraining()
 		// This boundary check catches an external task-file edit while work
 		// is in flight. The idle refresh imports only when the loop is fully
 		// idle, which retained work prevents, so without the hold the next
@@ -174,7 +172,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				if !e.idleInputWait(err) {
 					return 1, err
 				}
-				if draining {
+				if e.draining {
 					// A stop request outranks the correction wait, exactly as
 					// on the idle input wait where the drain check runs before
 					// the refresh: the hold releases to the drain path instead
@@ -235,9 +233,14 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		if err := e.processControllerRequests(ctx); err != nil {
 			return 1, err
 		}
+		// A stop that arrived while the request pass ran must not reach the
+		// dispatch gate on the stale sample taken at the top of this
+		// iteration. Refresh the flag here; the checks below and the drain
+		// exits on the next boundary apply it.
+		e.refreshDraining()
 		e.pollWorkerActivity()
 		if e.viewDirty {
-			e.publishView(draining)
+			e.publishView()
 			e.viewDirty = false
 		}
 		// Consume all finished workers without waiting for unrelated tasks.
@@ -447,7 +450,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		// due review runs first and the plan is rebuilt before any retained
 		// result is checked or repaired.
 		if !backlogHold && !live && len(pending) > 0 && e.State.Plan == nil {
-			if draining {
+			if e.draining {
 				// The drained work may have released a decided cancellation;
 				// apply it before the exit so its receipt decides here (a
 				// decision the exit would otherwise carry to the next run).
@@ -479,6 +482,9 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 					return 1, e.retainedRecoveryError("review", len(pending), err)
 				}
 				reviewFailures = 0
+				if e.drainingNow() {
+					continue
+				}
 			}
 			if !e.quotaPaused(e.Config.ReviewAgent) {
 				if err := e.plan(ctx); err != nil {
@@ -487,11 +493,31 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 					}
 					return 1, e.retainedRecoveryError("planning", len(pending), err)
 				}
+				if e.drainingNow() {
+					continue
+				}
+			}
+			if e.State.Plan == nil && e.quotaPaused(e.Config.ReviewAgent) {
+				// Retained work keeps this boundary busy while the closed
+				// reviewer window blocks both the review that would accept it
+				// and the planning pass that would rebuild its plan (T125).
+				// Nothing can run until the window reopens, so sleep the poll
+				// interval with the quota message instead of spinning through
+				// the loop at the poll rate.
+				message := e.quotaWaitMessage()
+				if lastProgress != message {
+					e.event("waiting", message)
+					lastProgress = message
+				}
+				if !e.idleWait(ctx, e.Config.Poll) {
+					return 130, ctx.Err()
+				}
+				continue
 			}
 		}
 		busy := live || len(pending) > 0
 		if !busy && !backlogHold {
-			if draining {
+			if e.draining {
 				// Same as the retained drain above: one last drive so a
 				// decided cancellation decides before the controller exits.
 				e.drivePendingCancellations()
@@ -556,6 +582,12 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				if recovered {
 					continue
 				}
+				if e.drainingNow() {
+					// A stop that arrived while the recovery consultation ran
+					// routes back to the drain exits instead of starting a
+					// review or plan from this iteration.
+					continue
+				}
 				data, err := os.ReadFile(e.Config.Todo)
 				if err != nil {
 					return 1, err
@@ -582,6 +614,17 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 					if e.pauseOnQuota(err, e.Config.ReviewAgent) {
 						continue
 					}
+					if ctx.Err() != nil {
+						return 130, ctx.Err()
+					}
+					var guard *retentionError
+					if errors.As(err, &guard) {
+						// A retention guard is an operator decision, not an
+						// agent failure: a retry repeats the same refusal, so
+						// the run ends with the guard's restore demand instead
+						// of burning the review budget three times.
+						return 1, err
+					}
 					reviewFailures++
 					e.event("review-error", err.Error())
 					var agent *AgentError
@@ -598,6 +641,12 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				}
 				reviewFailures = 0
 				ready = e.State.Backlog.Ready()
+				if e.drainingNow() {
+					// A stop that arrived during the review is honored before
+					// the completion exits below, which would otherwise end
+					// the session and reject the request.
+					continue
+				}
 			}
 			if len(ready) == 0 {
 				if e.Config.Once {
@@ -634,6 +683,11 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 					}
 					return 1, err
 				}
+				if e.drainingNow() {
+					// A stop that arrived while planning ran reaches the drain
+					// exits before any new worker is dispatched.
+					continue
+				}
 			}
 		}
 		milestoneRoom := func() bool {
@@ -643,7 +697,7 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 		// attempts, repairs, checks, and publications keep reaching their
 		// boundary above, the import applies at the first free one, and
 		// dispatch resumes against the expanded backlog only after that.
-		if !draining && !backlogHold && !e.importDispatchHold() && !e.quotaPaused(e.Config.Agent) && !e.State.ReviewPending && milestoneRoom() && (e.Config.Limit == 0 || attempted < e.Config.Limit) {
+		if !e.draining && !backlogHold && !e.importDispatchHold() && !e.quotaPaused(e.Config.Agent) && !e.State.ReviewPending && milestoneRoom() && (e.Config.Limit == 0 || attempted < e.Config.Limit) {
 			capacity := e.capacity
 			if len(pending)+len(checks) > e.Config.Checks {
 				capacity = max(1, capacity-1)
@@ -657,7 +711,11 @@ func (e *Engine) Run(parent context.Context) (code int, resultErr error) {
 				}
 				claimed := false
 				for _, a := range e.State.Attempts {
-					if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "resume" {
+					// A cancelled attempt does not claim its task: a task the
+					// operator reopened after cancellation must dispatch again
+					// instead of starving behind its dead attempt (the view's
+					// ready listing already excludes cancelled).
+					if a.Task.ID == t.ID && a.Phase != "done" && a.Phase != "blocked" && a.Phase != "resume" && a.Phase != "cancelled" {
 						claimed = true
 					}
 				}
@@ -1101,7 +1159,7 @@ func (e *Engine) waitForInput(err error) {
 		e.event("waiting", diag)
 	}
 	// Publish before idleWait sleeps, including when the problem changes.
-	e.publishView(false)
+	e.publishView()
 }
 
 // resumeFromInputWait clears the input wait after a refresh accepted the file
@@ -1110,7 +1168,7 @@ func (e *Engine) resumeFromInputWait() {
 	e.inputPending = false
 	e.inputProblem = ""
 	e.event("waiting", "Task file accepted again; resuming.")
-	e.publishView(false)
+	e.publishView()
 }
 
 // idleWait sleeps for the poll interval unless a controller request arrives,

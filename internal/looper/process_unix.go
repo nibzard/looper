@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -192,7 +193,23 @@ func runProcess(ctx context.Context, cwd, logfile string, args []string, input i
 	}
 	launchWrite.Close()
 	read.Close()
-	defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	// The process group must never survive this function, but a group kill
+	// may never run after the leader is reaped either: the kernel can recycle
+	// the process ID during the post-wait observation writes, and a late kill
+	// would signal an unrelated process group. Every exit path kills while
+	// the leader is alive or immediately at the wait; the guarded defer below
+	// covers only a panic between those points.
+	var reaped atomic.Bool
+	defer func() {
+		if !reaped.Load() {
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}()
+	killAndWait := func() {
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		reaped.Store(true)
+	}
 	launched := make(chan error, 1)
 	go func() {
 		var report launchReport
@@ -210,13 +227,11 @@ func runProcess(ctx context.Context, cwd, logfile string, args []string, input i
 	select {
 	case err = <-launched:
 		if err != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			cmd.Wait()
+			killAndWait()
 			return err
 		}
 	case <-ctx.Done():
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		cmd.Wait()
+		killAndWait()
 		return ctx.Err()
 	}
 	identity, _ := runIdentityCommand(cmd.Process.Pid)
@@ -226,8 +241,7 @@ func runProcess(ctx context.Context, cwd, logfile string, args []string, input i
 	if store != nil {
 		processID, err = store.beginProcess(logfile, record)
 		if err != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			cmd.Wait()
+			killAndWait()
 			return fmt.Errorf("record process start: %w", err)
 		}
 	}
@@ -248,7 +262,14 @@ func runProcess(ctx context.Context, cwd, logfile string, args []string, input i
 		}
 	}()
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		// The leader exited; kill the group at once, before the PID can be
+		// reused, so any member the leader spawned dies with the run.
+		reaped.Store(true)
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		done <- err
+	}()
 	select {
 	case err = <-done:
 		return err

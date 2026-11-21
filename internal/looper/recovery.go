@@ -371,6 +371,18 @@ func (e *Engine) recoverRun(ctx context.Context) (bool, error) {
 	} else {
 		d, err = e.consultRunRepair(ctx, evidence)
 		if err != nil {
+			if e.pauseOnQuota(err, e.Config.ReviewAgent) || ctx.Err() != nil {
+				// A closed reviewer window or a cancellation interrupted the
+				// consultation. The recovery decided nothing, so its one
+				// attempt stays unspent: drop the started record, persist the
+				// removal, and return the error. The caller arms the pause or
+				// exits, and the next drained boundary consults again.
+				e.State.Recoveries = append(e.State.Recoveries[:index], e.State.Recoveries[index+1:]...)
+				if saveErr := e.save(); saveErr != nil {
+					return false, saveErr
+				}
+				return false, err
+			}
 			return reject(err.Error())
 		}
 	}
