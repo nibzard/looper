@@ -1,8 +1,8 @@
 class Looper < Formula
   desc "Continuous local development with coding agents"
   homepage "https://github.com/nibzard/looper"
-  url "https://github.com/nibzard/looper/archive/refs/tags/v0.12.0.tar.gz"
-  sha256 "6047fbf57b2a1005fbca18997623dee02d1a73566c071e7b64948f702f056f0c"
+  url "https://github.com/nibzard/looper/archive/refs/tags/v0.12.1.tar.gz"
+  sha256 "0ea100836b2eb827b3811c57616269b51ffbecd633e7df76a2ebb19bb74330d4"
   head "https://github.com/nibzard/looper.git", branch: "main"
   license "MIT"
 
